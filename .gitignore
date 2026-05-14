@@ -1,0 +1,38 @@
+## Игнорировать папки bin и obj во всех проектах
+**/[Bb]in/
+**/[Oo]bj/
+**/ffmpeg.exe
+
+## Игнорировать папку .vs (настройки Visual Studio)
+.vs/
+
+## Дополнительные настройки для .NET/C#
+# Файлы пользовательских настроек
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Файлы пакетов NuGet
+packages/
+*.nupkg
+NuGet.exe
+
+# Резервные и временные файлы
+*.[Cc]ache
+*.ilk
+*.msi
+*.msix
+*.msm
+*.msp
+
+# Файлы Visual Studio
+*.swp
+*~._*
+*.db
+*.opendb
+*.VC.db
+
+# Rider
+*.idea/
+*.sln.iml
