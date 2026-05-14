@@ -1,0 +1,409 @@
+import os
+import re
+import json
+import csv
+import requests
+from urllib.parse import urljoin, quote
+from bs4 import BeautifulSoup
+
+
+# Конфигурация
+BASE_URL = "https://world81.spcs.bio"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Cache-Control": "max-age=0"
+}
+
+
+def get_link_id(session) -> str:
+    """Получаем свежий Link_id с главной страницы поиска"""
+    try:
+        # Заходим на главную страницу поиска
+        response = session.get(f"{BASE_URL}/music-online/search/index/", timeout=30)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Ищем Link_id в форме
+        link_input = soup.select_one('input[name="Link_id"]')
+        if link_input:
+            return link_input.get('value', '')
+        
+        # Если нет в форме, ищем в ссылках на странице
+        links = soup.find_all('a', href=True)
+        for link in links:
+            if 'Link_id=' in link['href']:
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(link['href'])
+                params = parse_qs(parsed.query)
+                if 'Link_id' in params:
+                    return params['Link_id'][0]
+    except:
+        pass
+    
+    return ''
+
+
+def search_tracks(query: str, page: int = 1, check_links: bool = False) -> dict:
+    """Поиск треков на world81.spcs.bio"""
+    result = {
+        "tracks": [], 
+        "success": False, 
+        "error": "", 
+        "query": query,
+        "total_pages": 1,
+        "current_page": page,
+        "total_tracks": 0,
+        "link_id": ""
+    }
+    
+    try:
+        session = requests.Session()
+        session.headers.update(HEADERS)
+        
+        # Получаем главную страницу для кук и Link_id
+        session.get(BASE_URL, timeout=30)
+        
+        # Получаем свежий Link_id
+        link_id = get_link_id(session)
+        result["link_id"] = link_id
+        
+        if not link_id:
+            # Если не нашли, пробуем стандартный или из твоей ссылки
+            link_id = "892860"
+        
+        # Параметры поиска (как в твоей ссылке)
+        params = {
+            "Link_id": link_id,
+            "T": "28",
+            "sq": query,
+            "P": page
+        }
+        
+        response = session.get(
+            f"{BASE_URL}/music-online/search/index/", 
+            params=params, 
+            timeout=30
+        )
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Ищем количество треков
+        cnt_elem = soup.select_one(".cnt")
+        if cnt_elem:
+            result["total_tracks"] = int(cnt_elem.text.strip())
+        
+        # Ищем информацию о пагинации
+        pgn = soup.select_one(".pgn")
+        if pgn:
+            result["total_pages"] = int(pgn.get("data-total", "1"))
+            result["current_page"] = int(pgn.get("data-page", "1"))
+        
+        # Ищем ВСЕ блоки треков на странице
+        track_blocks = soup.select("div.light_border_bottom.__adv_list_track")
+        
+        for block in track_blocks:
+            try:
+                # Ищем плеер внутри блока
+                player = block.select_one("div.player_item")
+                
+                # Извлекаем данные из data-атрибутов плеера если есть
+                if player:
+                    artist = player.get("data-artist", "").strip()
+                    title = player.get("data-title", "").strip()
+                    duration = player.get("data-duration", "Неизвестно")
+                    track_id = player.get("data-nid", "")
+                    cover_url = player.get("data-cover", "")
+                    download_url = player.get("data-src", "")
+                else:
+                    artist = ""
+                    title = ""
+                    duration = "Неизвестно"
+                    track_id = ""
+                    cover_url = ""
+                    download_url = ""
+                
+                # Если нет исполнителя/названия из плеера, берем из текста
+                if not artist or not title:
+                    # Ищем по ссылке с названием
+                    title_link = block.select_one("a.arrow_link span")
+                    if title_link and not title:
+                        title = title_link.text.strip()
+                    
+                    # Ищем исполнителя
+                    text_content = block.get_text(separator=" ", strip=True)
+                    if ":" in text_content and not artist:
+                        parts = text_content.split(":", 1)
+                        potential_artist = parts[0].strip()
+                        potential_artist = ' '.join(potential_artist.split())
+                        if potential_artist and potential_artist != title:
+                            artist = potential_artist
+                
+                # Если нет ссылки на скачивание, ищем кнопку
+                if not download_url:
+                    download_btn = block.select_one("a.__adv_download")
+                    if download_btn:
+                        download_url = download_btn.get("href", "")
+                        if download_url and not download_url.startswith('http'):
+                            download_url = urljoin(BASE_URL, download_url)
+                
+                # Пропускаем треки без ссылки на скачивание
+                if not download_url:
+                    continue
+                
+                # Проверяем доступность ссылки если нужно
+                if check_links and download_url:
+                    if not is_url_accessible(download_url, session):
+                        continue
+                
+                # Кортеж: (id, artist, title, duration, download_url, cover_url)
+                track = (
+                    track_id,
+                    artist if artist else "Неизвестен",
+                    title if title else "Без названия",
+                    duration,
+                    download_url,
+                    cover_url if cover_url else ""
+                )
+                
+                result["tracks"].append(track)
+                
+            except Exception as e:
+                continue
+        
+        result["success"] = True
+        session.close()
+        
+    except requests.RequestException as e:
+        result["error"] = f"Ошибка запроса: {e}"
+    except Exception as e:
+        result["error"] = f"Неизвестная ошибка: {e}"
+        
+    return result
+
+
+def search_all_pages(query: str, max_pages: int = None) -> list:
+    """Поиск по всем страницам"""
+    all_tracks = []
+    page = 1
+    
+    print(f"🔍 Поиск по всем страницам...")
+    
+    while True:
+        print(f"📄 Загрузка страницы {page}...", end=" ")
+        result = search_tracks(query, page)
+        
+        if not result["success"]:
+            print(f"❌ Ошибка: {result['error']}")
+            break
+        
+        tracks_count = len(result["tracks"])
+        all_tracks.extend(result["tracks"])
+        print(f"✅ Найдено {tracks_count} треков (всего: {len(all_tracks)})")
+        
+        if max_pages and page >= max_pages:
+            break
+        
+        if page >= result["total_pages"]:
+            break
+        
+        page += 1
+    
+    return all_tracks
+
+
+def is_url_accessible(url: str, session: requests.Session = None) -> bool:
+    """Проверка доступности URL"""
+    try:
+        if session:
+            response = session.head(url, allow_redirects=True, timeout=10)
+        else:
+            response = requests.head(url, headers=HEADERS, allow_redirects=True, timeout=10)
+        return response.status_code != 404 and response.ok
+    except:
+        return False
+
+
+def download_file(url: str, filename: str, download_dir: str = "downloads") -> bool:
+    """Скачивание файла"""
+    try:
+        os.makedirs(download_dir, exist_ok=True)
+        filepath = os.path.join(download_dir, sanitize_filename(filename))
+        
+        print(f"📥 Скачивание: {filename}")
+        
+        response = requests.get(url, headers=HEADERS, stream=True, timeout=60)
+        response.raise_for_status()
+        
+        total_size = int(response.headers.get('content-length', 0))
+        downloaded = 0
+        
+        with open(filepath, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total_size > 0:
+                        percent = (downloaded / total_size) * 100
+                        print(f"\rПрогресс: {percent:.1f}%", end='', flush=True)
+        
+        if total_size > 0:
+            print()
+        print(f"✅ Скачано: {filepath}")
+        return True
+        
+    except Exception as e:
+        print(f"\n❌ Ошибка при скачивании: {e}")
+        return False
+
+
+def sanitize_filename(filename: str) -> str:
+    """Очистка имени файла от недопустимых символов"""
+    filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+    filename = filename.rstrip('. ')
+    return filename[:200] if len(filename) > 200 else filename
+
+
+def save_results(tracks: list, file_path: str, format: str = "txt"):
+    """Сохранение результатов в разных форматах"""
+    if format == "txt":
+        content = '\n\n'.join(f"{t[1]} - {t[2]} ({t[3]})\nСсылка: {t[4]}" for t in tracks)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+            
+    elif format == "links":
+        content = '\n'.join(f"{t[1]} - {t[2]}: {t[4]}" for t in tracks)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+            
+    elif format == "csv":
+        with open(file_path, 'w', encoding='utf-8', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["ID", "Исполнитель", "Название", "Длительность", "Ссылка", "Обложка"])
+            writer.writerows(tracks)
+            
+    elif format == "json":
+        tracks_data = [{
+            "id": t[0], "artist": t[1], "title": t[2],
+            "duration": t[3], "download_url": t[4], "cover_url": t[5]
+        } for t in tracks]
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(tracks_data, f, ensure_ascii=False, indent=2)
+
+
+def main():
+    print("=" * 80)
+    print("              ЗАГРУЗЧИК МУЗЫКИ С world81.spcs.bio")
+    print("=" * 80)
+    
+    # Проверяем соединение
+    try:
+        test_response = requests.get(BASE_URL, headers=HEADERS, timeout=10)
+        if test_response.ok:
+            print("✅ Соединение установлено\n")
+        else:
+            print(f"⚠️ Статус соединения: {test_response.status_code}\n")
+    except Exception as e:
+        print(f"❌ Не удалось подключиться к сайту: {e}")
+        return
+    
+    query = input("Введите название песни для поиска: ").strip()
+    if not query:
+        print("Поисковый запрос не может быть пустым!")
+        return
+    
+    # Спрашиваем, искать ли по всем страницам
+    all_pages = input("\nИскать по всем страницам? (y/n, по умолчанию n): ").strip().lower() == 'y'
+    
+    if all_pages:
+        max_pages_input = input("Максимальное количество страниц (Enter для всех): ").strip()
+        max_pages = int(max_pages_input) if max_pages_input.isdigit() else None
+        tracks = search_all_pages(query, max_pages)
+    else:
+        print(f"\n🔍 Поиск треков по запросу: '{query}'...")
+        print("=" * 80)
+        result = search_tracks(query)
+        
+        if not result["success"]:
+            print(f"\n❌ Ошибка: {result['error']}")
+            return
+        
+        if not result["tracks"]:
+            print("\n❌ Ничего не найдено.")
+            return
+        
+        tracks = result["tracks"]
+        print(f"\n📊 Всего треков: {result['total_tracks']}")
+        print(f"📄 Страница {result['current_page']} из {result['total_pages']}")
+    
+    if not tracks:
+        print("❌ Ничего не найдено.")
+        return
+    
+    # Вывод результатов
+    print(f"\n✅ Найдено треков: {len(tracks)}\n")
+    print("=" * 80)
+    
+    for i, track in enumerate(tracks, 1):
+        print(f"{i}. {track[1]} - {track[2]}")
+        print(f"   ⏱️  Длительность: {track[3]}")
+        print("-" * 80)
+    
+    # Меню выбора
+    while True:
+        try:
+            print(f"\nДоступно треков: 1-{len(tracks)}")
+            choice = input("Введите номер трека для скачивания или 'q' для выхода: ").strip()
+            
+            if choice.lower() == 'q':
+                print("👋 Выход.")
+                return
+            
+            index = int(choice) - 1
+            if 0 <= index < len(tracks):
+                track = tracks[index]
+                
+                # Определяем расширение
+                ext = ".mp3"
+                url_lower = track[4].lower()
+                if ".m4a" in url_lower:
+                    ext = ".m4a"
+                elif ".ogg" in url_lower:
+                    ext = ".ogg"
+                elif ".wav" in url_lower:
+                    ext = ".wav"
+                
+                filename = sanitize_filename(f"{track[1]} - {track[2]}{ext}")
+                
+                print(f"\n📥 Скачивание: {track[1]} - {track[2]}")
+                if download_file(track[4], filename):
+                    print(f"\n✅ Трек сохранен в папке downloads/")
+                else:
+                    print("\n❌ Не удалось скачать трек.")
+                    print(f"   Ссылка для скачивания: {track[4]}")
+                
+                again = input("\nСкачать еще трек? (y/n): ").strip().lower()
+                if again != 'y':
+                    print("👋 Выход.")
+                    return
+                    
+                # Показываем список снова
+                print("\n" + "=" * 80)
+                for i, t in enumerate(tracks, 1):
+                    marker = "✅" if i == index + 1 else "  "
+                    print(f"{marker} {i}. {t[1]} - {t[2]}")
+            else:
+                print(f"❌ Введите число от 1 до {len(tracks)}")
+                
+        except ValueError:
+            print("❌ Введите корректное число или 'q'")
+        except KeyboardInterrupt:
+            print("\n\n👋 Отменено.")
+            return
+
+
+if __name__ == "__main__":
+    main()
