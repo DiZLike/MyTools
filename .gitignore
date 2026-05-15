@@ -1,6 +1,6 @@
-## Игнорировать папки bin и obj во всех проектах
 **/[Bb]in/
 **/[Oo]bj/
+**/[Dd]ownloads/
 **/ffmpeg.exe
 **/ffprobe.exe
 
