@@ -4,6 +4,8 @@
 **/ffmpeg.exe
 **/ffprobe.exe
 
+*.7z
+
 ## Игнорировать папку .vs (настройки Visual Studio)
 .vs/
 
