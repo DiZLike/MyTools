@@ -6,613 +6,274 @@ import re
 from pathlib import Path
 import time
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # ============ НАСТРОЙКИ ============
-AUDIO_FOLDER = r"Z:\\web\\media\\music"
-BITRATE = 64
+AUDIO_FOLDER = "Z:/!Evgeny/src/py/downloads"
+BITRATE = 40
 FRAME_SIZE = 60
 COMPLEXITY = 10
+MAX_WORKERS = os.cpu_count() or 4
 # ====================================
 
-# Пути к инструментам
 SCRIPT_DIR = Path(__file__).parent
 TOOLS_DIR = SCRIPT_DIR / "tools"
 OPUSENC = TOOLS_DIR / "opusenc.exe"
 FFMPEG = TOOLS_DIR / "ffmpeg.exe"
-
-# Локальная папка для временных файлов
+FFPROBE = TOOLS_DIR / "ffprobe.exe"
 TEMP_DIR = Path(tempfile.gettempdir()) / "mp3_to_opus_temp"
 
-# Глобальный список для хранения успешно конвертированных пар файлов
+# Глобальные переменные для прогресса
+progress_lock = threading.Lock()
+stats = {"success": 0, "failed": 0, "skipped": 0, "total_bytes_orig": 0, "total_bytes_opus": 0, "completed": 0}
+start_time = 0
+total_files = 0
 converted_pairs = []
 
-def check_tools():
-    """Проверяем наличие необходимых инструментов"""
-    if not OPUSENC.exists():
-        print(f"Ошибка: opusenc не найден по пути {OPUSENC}")
-        print("Скачайте opus-tools с https://opus-codec.org/downloads/")
-        return False
-    
-    if not FFMPEG.exists():
-        print(f"Ошибка: ffmpeg не найден по пути {FFMPEG}")
-        print("Скачайте ffmpeg с https://ffmpeg.org/download.html")
-        return False
-    
-    return True
-
-def setup_temp_dir():
-    """Создаем временную папку если её нет"""
-    TEMP_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"Временная папка: {TEMP_DIR}")
-
-def cleanup_temp_dir():
-    """Очищаем временную папку"""
-    if TEMP_DIR.exists():
-        try:
-            for file in TEMP_DIR.glob("*"):
-                file.unlink()
-            TEMP_DIR.rmdir()
-            print("Временная папка очищена")
-        except Exception as e:
-            print(f"Предупреждение: не удалось очистить временную папку: {e}")
-
-def validate_opus_file(opus_path):
-    """Проверяем валидность Opus файла"""
-    try:
-        # Проверяем, что файл существует и не пустой
-        if not opus_path.exists() or opus_path.stat().st_size == 0:
-            return False
-        
-        # Проверяем с помощью ffprobe, что это действительно Opus файл
-        cmd = [
-            str(FFMPEG).replace('ffmpeg.exe', 'ffprobe.exe'),
-            "-v", "error",
-            "-show_entries", "stream=codec_name",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            str(opus_path)
-        ]
-        
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=False
-        )
-        
-        stdout, stderr = process.communicate()
-        
-        if process.returncode == 0 and stdout:
-            # Проверяем, что кодек opus
-            output = stdout.decode('utf-8', errors='ignore').lower()
-            if 'opus' in output:
-                return True
-        
-        return False
-    except:
-        return False
-
-def compare_audio_quality(mp3_path, opus_path):
-    """Сравниваем длительность и основные параметры файлов"""
-    try:
-        ffprobe = str(FFMPEG).replace('ffmpeg.exe', 'ffprobe.exe')
-        
-        # Получаем длительность MP3
-        cmd_mp3 = [
-            ffprobe,
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            str(mp3_path)
-        ]
-        
-        process_mp3 = subprocess.Popen(
-            cmd_mp3,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=False
-        )
-        stdout_mp3, _ = process_mp3.communicate()
-        
-        if process_mp3.returncode != 0 or not stdout_mp3:
-            return None
-            
-        duration_mp3 = float(stdout_mp3.decode('utf-8', errors='ignore').strip())
-        
-        # Получаем длительность Opus
-        cmd_opus = [
-            ffprobe,
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            str(opus_path)
-        ]
-        
-        process_opus = subprocess.Popen(
-            cmd_opus,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=False
-        )
-        stdout_opus, _ = process_opus.communicate()
-        
-        if process_opus.returncode != 0 or not stdout_opus:
-            return None
-            
-        duration_opus = float(stdout_opus.decode('utf-8', errors='ignore').strip())
-        
-        # Сравниваем длительность (допускаем погрешность в 1 секунду)
-        duration_diff = abs(duration_mp3 - duration_opus)
-        
-        return {
-            'duration_match': duration_diff <= 1.0,
-            'mp3_duration': duration_mp3,
-            'opus_duration': duration_opus,
-            'difference': duration_diff
-        }
-    except:
-        return None
-
-def get_audio_duration(mp3_path):
-    """Получаем длительность аудио в секундах через ffprobe"""
-    try:
-        cmd = [
-            str(FFMPEG).replace('ffmpeg.exe', 'ffprobe.exe'),
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            str(mp3_path)
-        ]
-        
-        # Используем Popen для контроля кодировки
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=False
-        )
-        
-        stdout, stderr = process.communicate()
-        
-        if process.returncode == 0 and stdout:
-            return float(stdout.decode('utf-8', errors='ignore').strip())
-        return None
-    except:
-        return None
-
-def extract_metadata(mp3_path):
-    """Извлекаем метаданные из MP3 файла"""
-    try:
-        cmd = [
-            str(FFMPEG).replace('ffmpeg.exe', 'ffprobe.exe'),
-            "-v", "quiet",
-            "-print_format", "json",
-            "-show_entries", "format_tags",
-            str(mp3_path)
-        ]
-        
-        # Используем Popen с явной обработкой кодировки
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=False
-        )
-        
-        stdout, stderr = process.communicate()
-        
-        if process.returncode != 0:
-            return {}
-        
-        # Декодируем с игнорированием ошибок
-        output = stdout.decode('utf-8', errors='ignore')
-        data = json.loads(output)
-        
-        tags = data.get('format', {}).get('tags', {})
-        metadata = {
-            'title': tags.get('title', ''),
-            'artist': tags.get('artist', ''),
-            'album': tags.get('album', ''),
-            'date': tags.get('date', ''),
-            'track': tags.get('track', ''),
-            'genre': tags.get('genre', ''),
-            'comment': tags.get('comment', ''),
-        }
-        
-        # Удаляем пустые значения
-        metadata = {k: v for k, v in metadata.items() if v}
-        
-        return metadata
-    except Exception as e:
-        print(f"  -> Предупреждение: не удалось извлечь метаданные: {e}")
-        return {}
-
-def apply_metadata_to_opus(opus_path, metadata):
-    """Применяем метаданные к Opus файлу"""
-    if not metadata:
-        return True
-    
-    temp_opus = None
-    try:
-        # Создаем временный файл с метаданными
-        temp_opus = opus_path.with_suffix('.temp.opus')
-        
-        # Собираем аргументы для ffmpeg
-        cmd = [str(FFMPEG), "-i", str(opus_path)]
-        
-        # Добавляем метаданные
-        for key, value in metadata.items():
-            cmd.extend(["-metadata", f"{key}={value}"])
-        
-        # Копируем без перекодирования
-        cmd.extend(["-c", "copy", "-y", str(temp_opus)])
-        
-        # Используем Popen вместо run для лучшего контроля над выводом
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=False  # Получаем байты вместо строк
-        )
-        
-        stdout, stderr = process.communicate()
-        
-        if process.returncode != 0:
-            # Декодируем только если нужно показать ошибку
-            error_msg = stderr.decode('utf-8', errors='ignore') if stderr else "Неизвестная ошибка"
-            print(f"  -> Предупреждение: ffmpeg завершился с ошибкой: {error_msg[:200]}")
-            return False
-        
-        # Заменяем оригинальный файл
-        if temp_opus.exists() and temp_opus.stat().st_size > 0:
-            opus_path.unlink()
-            temp_opus.rename(opus_path)
-            return True
-        else:
-            print(f"  -> Предупреждение: временный файл не создан или пуст")
-            return False
-            
-    except Exception as e:
-        print(f"  -> Предупреждение: не удалось применить метаданные: {e}")
-        return False
-    finally:
-        # Удаляем временный файл если он остался
-        if temp_opus and temp_opus.exists():
-            try:
-                temp_opus.unlink()
-            except:
-                pass
-
 def format_time(seconds):
-    """Форматируем время в читаемый вид"""
-    if seconds is None:
-        return "??:??"
+    if seconds is None: return "??:??"
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
-    if h > 0:
-        return f"{h}:{m:02d}:{s:02d}"
-    return f"{m}:{s:02d}"
+    return f"{h}:{m:02d}:{s:02d}" if h > 0 else f"{m}:{s:02d}"
 
 def format_size(size_bytes):
-    """Форматируем размер в читаемый вид"""
     for unit in ['B', 'KB', 'MB', 'GB']:
-        if size_bytes < 1024.0:
-            return f"{size_bytes:.1f} {unit}"
-        size_bytes /= 1024.0
+        if size_bytes < 1024: return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024
     return f"{size_bytes:.1f} TB"
 
-def convert_mp3_to_wav(mp3_path, wav_path, total_duration):
-    """Конвертируем MP3 в WAV через ffmpeg с прогрессом"""
-    cmd = [
-        str(FFMPEG),
-        "-i", str(mp3_path),
-        "-acodec", "pcm_s16le",
-        "-ar", "48000",
-        "-ac", "2",
-        "-y",
-        "-progress", "pipe:1",  # Вывод прогресса в stdout
-        "-nostats",  # Не выводить статистику
-        str(wav_path)
-    ]
-    
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding='utf-8',
-            errors='ignore'
-        )
-        
-        # Читаем прогресс
-        last_time = 0
-        for line in process.stdout:
-            if "out_time_ms=" in line:
-                try:
-                    time_ms = int(line.split("=")[1])
-                    time_sec = time_ms / 1000000  # Конвертируем микросекунды в секунды
-                    
-                    if total_duration and total_duration > 0:
-                        progress = min(100, (time_sec / total_duration) * 100)
-                        # Обновляем прогресс не чаще 2 раз в секунду
-                        if time_sec - last_time >= 0.5 or progress >= 100:
-                            print(f"\r  -> MP3 -> WAV: {progress:.0f}% [{format_time(time_sec)} / {format_time(total_duration)}]", end="", flush=True)
-                            last_time = time_sec
-                except:
-                    pass
-        
-        process.wait()
-        
-        if process.returncode == 0:
-            print(f"\r  -> MP3 -> WAV: 100% ✓")
-            return True
-        else:
-            stderr = process.stderr.read()
-            print(f"\r  -> ОШИБКА ffmpeg: {stderr}")
+def check_tools():
+    for tool, path in [("opusenc", OPUSENC), ("ffmpeg", FFMPEG), ("ffprobe", FFPROBE)]:
+        if not path.exists():
+            print(f"Ошибка: {tool} не найден по пути {path}")
             return False
-            
-    except Exception as e:
-        print(f"\r  -> Ошибка при конвертации MP3 в WAV: {e}")
-        return False
+    return True
 
-def convert_wav_to_opus(wav_path, opus_path):
-    """Конвертируем WAV в Opus через opusenc с прогрессом"""
-    cmd = [
-        str(OPUSENC),
-        "--bitrate", str(BITRATE),
-        "--framesize", str(FRAME_SIZE),
-        "--comp", str(COMPLEXITY),
-        "--music",
-        str(wav_path),
-        str(opus_path)
-    ]
-    
+def get_duration(path):
     try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding='utf-8',
-            errors='ignore'
-        )
-        
-        # opusenc выводит прогресс в формате "Encoding ... %"
-        for line in process.stdout:
-            # Ищем процент выполнения
-            match = re.search(r'(\d+(?:\.\d+)?)\s*%', line)
-            if match:
-                percent = float(match.group(1))
-                print(f"\r  -> WAV -> Opus: {percent:.0f}%", end="", flush=True)
-        
-        process.wait()
-        
-        if process.returncode == 0:
-            print(f"\r  -> WAV -> Opus: 100%  ✓")
-            return True
-        else:
-            print(f"\r  -> ОШИБКА opusenc")
-            return False
-            
-    except Exception as e:
-        print(f"\r  -> Ошибка при конвертации WAV в Opus: {e}")
-        return False
+        p = subprocess.run([str(FFPROBE), "-v", "error", "-show_entries", "format=duration",
+                            "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+                          capture_output=True, text=True, timeout=30)
+        return float(p.stdout.strip()) if p.returncode == 0 and p.stdout.strip() else None
+    except: return None
 
-def delete_original_files(pairs_to_delete):
-    """Удаляем оригинальные MP3 файлы"""
-    if not pairs_to_delete:
-        return
+def extract_metadata(mp3_path):
+    try:
+        p = subprocess.run([str(FFPROBE), "-v", "quiet", "-print_format", "json", "-show_entries", "format_tags", str(mp3_path)],
+                          capture_output=True, text=True, timeout=30)
+        if p.returncode != 0: return {}
+        tags = json.loads(p.stdout).get('format', {}).get('tags', {})
+        keys = ['title', 'artist', 'album', 'date', 'track', 'genre', 'comment']
+        return {k: tags[k] for k in keys if tags.get(k)}
+    except: return {}
+
+def convert_mp3_to_opus(mp3_path, opus_path):
+    """Прямая конвертация MP3 -> Opus (два шага: MP3->WAV->Opus)"""
+    wav_temp = TEMP_DIR / f"{mp3_path.stem}_{threading.get_ident()}.wav"
+    try:
+        # MP3 -> WAV
+        p = subprocess.run([str(FFMPEG), "-i", str(mp3_path), "-acodec", "pcm_s16le",
+                           "-ar", "48000", "-ac", "2", "-y", "-nostats", str(wav_temp)],
+                          capture_output=True, text=True, timeout=300)
+        if p.returncode != 0 or not wav_temp.exists() or wav_temp.stat().st_size == 0:
+            return False
+        
+        # WAV -> Opus
+        p = subprocess.run([str(OPUSENC), "--bitrate", str(BITRATE), "--framesize", str(FRAME_SIZE),
+                           "--comp", str(COMPLEXITY), "--music", str(wav_temp), str(opus_path)],
+                          capture_output=True, text=True, timeout=300)
+        return p.returncode == 0 and opus_path.exists() and opus_path.stat().st_size > 0
+    except: return False
+    finally:
+        if wav_temp.exists():
+            try: wav_temp.unlink()
+            except: pass
+
+def validate_opus(path):
+    try:
+        p = subprocess.run([str(FFPROBE), "-v", "error", "-show_entries", "stream=codec_name",
+                           "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+                          capture_output=True, text=True, timeout=30)
+        return p.returncode == 0 and 'opus' in p.stdout.lower()
+    except: return False
+
+def apply_metadata(opus_path, metadata):
+    if not metadata: return True
+    temp_path = opus_path.with_suffix('.temp.opus')
+    try:
+        cmd = [str(FFMPEG), "-i", str(opus_path)]
+        for k, v in metadata.items():
+            cmd.extend(["-metadata", f"{k}={v}"])
+        cmd.extend(["-c", "copy", "-y", str(temp_path)])
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if p.returncode == 0 and temp_path.exists() and temp_path.stat().st_size > 0:
+            opus_path.unlink()
+            temp_path.rename(opus_path)
+            return True
+        return False
+    except: return False
+    finally:
+        if temp_path and temp_path.exists():
+            try: temp_path.unlink()
+            except: pass
+
+def print_progress():
+    """Вывод двухстрочного прогресс-бара"""
+    with progress_lock:
+        elapsed = time.time() - start_time
+        completed = stats['completed']
+        percent = (completed / total_files * 100) if total_files > 0 else 0
+        files_per_min = completed / (elapsed / 60) if elapsed > 0 else 0
+        mb_per_sec = (stats['total_bytes_opus'] / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+        total_orig = stats['total_bytes_orig']
+        total_opus = stats['total_bytes_opus']
+        saved = total_orig - total_opus
+        saved_pct = (saved / total_orig * 100) if total_orig > 0 else 0
+        
+        if files_per_min > 0:
+            remaining = (total_files - completed) / files_per_min * 60
+            eta = format_time(remaining)
+        else:
+            eta = "..."
+        
+        bar_len = 30
+        filled = int(bar_len * completed / total_files) if total_files > 0 else 0
+        bar = '█' * filled + '░' * (bar_len - filled)
+        
+        line1 = (f"📊 [{bar}] {percent:.1f}% | "
+                 f"Файлов: {completed}/{total_files} | "
+                 f"✅ {stats['success']} | ⏭️ {stats['skipped']} | ❌ {stats['failed']}")
+        
+        line2 = (f"💾 Было: {format_size(total_orig)} | Стало: {format_size(total_opus)} | "
+                 f"Экономия: {saved_pct:.1f}% ({format_size(saved)}) | "
+                 f"⚡ {files_per_min:.1f} файл/мин | 📀 {mb_per_sec:.1f} MB/s | "
+                 f"⏱️ {format_time(elapsed)} | 🕐 {eta}")
+        
+        print(f"\r\033[K{line1}\n\033[K{line2}", end='', flush=True)
+        print(f"\r\033[1A", end='', flush=True)
+
+def process_file(mp3_file):
+    """Обработка одного MP3 файла"""
+    opus_file = mp3_file.with_suffix(".opus")
     
-    total_size = 0
-    deleted_count = 0
+    # Проверяем существование Opus
+    if opus_file.exists():
+        with progress_lock:
+            stats['completed'] += 1
+            stats['skipped'] += 1
+        return ('skipped', None, None, None)
     
-    print("\n" + "=" * 60)
-    print("УДАЛЕНИЕ ОРИГИНАЛЬНЫХ ФАЙЛОВ")
-    print("=" * 60)
+    # Извлекаем метаданные
+    metadata = extract_metadata(mp3_file)
     
-    for mp3_path, opus_path in pairs_to_delete:
+    # Конвертируем
+    if not convert_mp3_to_opus(mp3_file, opus_file):
+        with progress_lock:
+            stats['completed'] += 1
+            stats['failed'] += 1
+        return ('failed', None, None, None)
+    
+    # Проверяем валидность
+    if not validate_opus(opus_file):
+        if opus_file.exists():
+            opus_file.unlink()
+        with progress_lock:
+            stats['completed'] += 1
+            stats['failed'] += 1
+        return ('failed', None, None, None)
+    
+    # Применяем метаданные
+    if metadata:
+        apply_metadata(opus_file, metadata)
+    
+    # Размеры
+    mp3_size = mp3_file.stat().st_size
+    opus_size = opus_file.stat().st_size
+    
+    with progress_lock:
+        stats['completed'] += 1
+        stats['success'] += 1
+        stats['total_bytes_orig'] += mp3_size
+        stats['total_bytes_opus'] += opus_size
+    
+    return ('success', mp3_file, opus_file, mp3_size, opus_size)
+
+def delete_originals(pairs):
+    if not pairs: return
+    total = 0
+    for mp3_path, _ in pairs:
         try:
             if mp3_path.exists():
-                file_size = mp3_path.stat().st_size
-                total_size += file_size
-                
-                print(f"Удаление: {mp3_path.name} ({format_size(file_size)})")
+                total += mp3_path.stat().st_size
                 mp3_path.unlink()
-                deleted_count += 1
-            else:
-                print(f"Файл не найден: {mp3_path.name}")
-        except Exception as e:
-            print(f"Ошибка при удалении {mp3_path.name}: {e}")
-    
-    print(f"\nУдалено файлов: {deleted_count}")
-    print(f"Освобождено места: {format_size(total_size)}")
+        except: pass
+    print(f"\nУдалено: {format_size(total)}")
 
 def process_folder():
-    """Рекурсивно обрабатываем папку с аудио"""
-    global converted_pairs
-    converted_pairs = []
+    global start_time, total_files, converted_pairs, stats
     
     audio_folder = Path(AUDIO_FOLDER)
-    
     if not audio_folder.exists():
         print(f"Ошибка: Папка {audio_folder} не существует!")
         return
     
-    # Собираем все MP3 файлы
     mp3_files = list(audio_folder.rglob("*.mp3"))
-    
     if not mp3_files:
         print(f"MP3 файлы не найдены в {audio_folder}")
         return
     
-    print(f"Найдено {len(mp3_files)} MP3 файлов")
-    print(f"Настройки: битрейт={BITRATE}kbps, размер кадра={FRAME_SIZE}ms, сложность={COMPLEXITY}")
-    print("-" * 50)
-    
-    successful = 0
-    failed = 0
-    skipped = 0
+    total_files = len(mp3_files)
+    stats = {"success": 0, "failed": 0, "skipped": 0, "total_bytes_orig": 0, "total_bytes_opus": 0, "completed": 0}
+    converted_pairs = []
     start_time = time.time()
     
-    for i, mp3_file in enumerate(mp3_files, 1):
-        opus_file = mp3_file.with_suffix(".opus")
-        
-        # Проверяем, существует ли уже Opus файл
-        if opus_file.exists():
-            print(f"[{i}/{len(mp3_files)}] Пропущен (уже существует): {mp3_file.name}")
-            skipped += 1
-            continue
-        
-        print(f"\n[{i}/{len(mp3_files)}] Обработка: {mp3_file.relative_to(audio_folder)}")
-        
-        # Извлекаем метаданные ДО конвертации
-        print("  -> Извлечение метаданных...")
-        metadata = extract_metadata(mp3_file)
-        if metadata:
-            print(f"  -> Найдены теги: {', '.join(metadata.keys())}")
-        
-        # Получаем длительность аудио
-        duration = get_audio_duration(mp3_file)
-        
-        # Создаем временный WAV файл в локальной папке
-        wav_temp = TEMP_DIR / f"{mp3_file.stem}.temp.wav"
-        
-        try:
-            # Шаг 1: MP3 -> WAV
-            if not convert_mp3_to_wav(mp3_file, wav_temp, duration):
-                print(f"  -> ОШИБКА при создании WAV!")
-                failed += 1
-                continue
-            
-            # Шаг 2: WAV -> Opus
-            if not convert_wav_to_opus(wav_temp, opus_file):
-                print(f"  -> ОШИБКА при создании Opus!")
-                failed += 1
-                continue
-            
-            # Шаг 3: Проверяем валидность Opus файла
-            print("  -> Проверка Opus файла...")
-            if not validate_opus_file(opus_file):
-                print(f"  -> ОШИБКА: Opus файл невалиден!")
-                # Удаляем невалидный Opus файл
-                if opus_file.exists():
-                    opus_file.unlink()
-                failed += 1
-                continue
-            
-            # Шаг 4: Сравниваем качество
-            print("  -> Сравнение качества...")
-            quality_check = compare_audio_quality(mp3_file, opus_file)
-            
-            if quality_check:
-                if quality_check['duration_match']:
-                    print(f"  -> ✓ Длительность совпадает (разница: {quality_check['difference']:.2f}с)")
-                else:
-                    print(f"  -> ⚠ Длительность различается на {quality_check['difference']:.2f}с")
-            
-            # Шаг 5: Применяем метаданные к Opus файлу
-            if metadata:
-                print("  -> Применение метаданных к Opus...")
-                if not apply_metadata_to_opus(opus_file, metadata):
-                    print(f"  -> Предупреждение: не удалось применить метаданные")
-            
-            # Получаем размеры файлов для статистики
-            mp3_size = mp3_file.stat().st_size / (1024 * 1024)  # МБ
-            opus_size = opus_file.stat().st_size / (1024 * 1024)  # МБ
-            compression = (1 - opus_size / mp3_size) * 100
-            
-            print(f"  -> ✓ Успешно! {mp3_size:.1f}MB -> {opus_size:.1f}MB (экономия {compression:.0f}%)")
-            
-            # Добавляем в список успешных конвертаций
-            converted_pairs.append((mp3_file, opus_file))
-            successful += 1
-            
-        finally:
-            # Удаляем временный WAV файл локально
-            if wav_temp.exists():
-                wav_temp.unlink()
+    print(f"Найдено {total_files} MP3 файлов")
+    print(f"Битрейт: {BITRATE}kbps, Кадр: {FRAME_SIZE}ms, Сложность: {COMPLEXITY}")
+    print(f"Потоков: {MAX_WORKERS}")
+    print()
     
-    elapsed_time = time.time() - start_time
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {executor.submit(process_file, f): f for f in mp3_files}
+        
+        # Периодически обновляем прогресс
+        done_count = 0
+        for future in as_completed(futures):
+            result = future.result()
+            if result[0] == 'success':
+                converted_pairs.append((result[1], result[2]))
+            done_count += 1
+            if done_count % 10 == 0 or done_count == total_files:
+                print_progress()
     
-    print("\n" + "=" * 50)
-    print(f"ГОТОВО!")
-    print(f"Успешно: {successful}")
-    print(f"Ошибок: {failed}")
-    print(f"Пропущено: {skipped}")
-    print(f"Время выполнения: {format_time(elapsed_time)}")
-    print("=" * 50)
+    print("\n")
+    print_progress()
+    print("\n\n" + "=" * 60)
+    print(f"ГОТОВО! Успешно: {stats['success']}, Ошибок: {stats['failed']}, Пропущено: {stats['skipped']}")
+    print(f"Экономия: {format_size(stats['total_bytes_orig'] - stats['total_bytes_opus'])} ({(1 - stats['total_bytes_opus']/stats['total_bytes_orig'])*100:.1f}%)" if stats['total_bytes_orig'] > 0 else "")
+    print("=" * 60)
     
-    # Предлагаем удалить оригиналы, если были успешные конвертации
     if converted_pairs:
-        offer_delete_originals()
-
-def offer_delete_originals():
-    """Предлагаем удалить оригинальные MP3 файлы"""
-    print("\n" + "=" * 60)
-    print("ПРОВЕРКА КАЧЕСТВА КОНВЕРТАЦИИ")
-    print("=" * 60)
-    
-    total_original_size = 0
-    total_opus_size = 0
-    
-    print(f"\nУспешно конвертировано файлов: {len(converted_pairs)}")
-    print("\nДетальная информация:")
-    print("-" * 60)
-    
-    for i, (mp3_path, opus_path) in enumerate(converted_pairs, 1):
-        mp3_size = mp3_path.stat().st_size
-        opus_size = opus_path.stat().st_size
-        total_original_size += mp3_size
-        total_opus_size += opus_size
-        
-        # Проверяем качество ещё раз для информации
-        quality = compare_audio_quality(mp3_path, opus_path)
-        duration_status = "✓" if quality and quality['duration_match'] else "⚠"
-        
-        print(f"{i}. {mp3_path.name}")
-        print(f"   MP3:  {format_size(mp3_size)}")
-        print(f"   Opus: {format_size(opus_size)}")
-        print(f"   Экономия: {(1 - opus_size/mp3_size)*100:.1f}%")
-        if quality:
-            print(f"   Длительность: {duration_status} (MP3: {format_time(quality['mp3_duration'])}, Opus: {format_time(quality['opus_duration'])})")
-        print()
-    
-    print("-" * 60)
-    print(f"Общий размер оригиналов: {format_size(total_original_size)}")
-    print(f"Общий размер Opus: {format_size(total_opus_size)}")
-    print(f"Общая экономия: {format_size(total_original_size - total_opus_size)} ({(1 - total_opus_size/total_original_size)*100:.1f}%)")
-    
-    print("\n" + "=" * 60)
-    print("Хотите удалить оригинальные MP3 файлы?")
-    print("ВНИМАНИЕ: Это действие необратимо!")
-    print("=" * 60)
-    
-    while True:
-        choice = input("\nУдалить оригиналы? (y/n): ").lower().strip()
-        
-        if choice in ['y', 'yes', 'д', 'да']:
-            # Дополнительное подтверждение
-            confirm = input(f"Вы уверены? Будет удалено {len(converted_pairs)} файлов (y/n): ").lower().strip()
-            if confirm in ['y', 'yes', 'д', 'да']:
-                delete_original_files(converted_pairs)
-                print("\n✓ Оригинальные файлы удалены!")
-            else:
-                print("\nУдаление отменено.")
-            break
-        elif choice in ['n', 'no', 'н', 'нет']:
-            print("\nОригинальные файлы сохранены.")
-            break
-        else:
-            print("Пожалуйста, введите 'y' (да) или 'n' (нет)")
+        print(f"\nУспешно конвертировано: {len(converted_pairs)} файлов")
+        choice = input("\nУдалить оригинальные MP3? (y/n): ").lower().strip()
+        if choice in ['y', 'yes']:
+            delete_originals(converted_pairs)
 
 if __name__ == "__main__":
     if not check_tools():
         sys.exit(1)
     
-    setup_temp_dir()
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"Временная папка: {TEMP_DIR}")
     
     try:
         process_folder()
     finally:
-        cleanup_temp_dir()
+        # Очистка временной папки
+        if TEMP_DIR.exists():
+            try:
+                for f in TEMP_DIR.glob("*"): f.unlink()
+                TEMP_DIR.rmdir()
+            except: pass
+    
     input("\nНажмите Enter для выхода...")
