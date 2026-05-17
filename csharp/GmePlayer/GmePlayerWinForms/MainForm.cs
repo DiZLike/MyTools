@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Windows.Forms;
 using gmesharp;
 
@@ -9,6 +9,7 @@ namespace GmePlayerWinForms
         private NAudioPlayer? _player;
         private System.Windows.Forms.Timer _updateTimer;
         private bool _isDragging = false;
+        private FlowLayoutPanel? _voicesPanel;
 
         public MainForm()
         {
@@ -111,6 +112,7 @@ namespace GmePlayerWinForms
                     firstTrackInfo.PlayLength : 300000;
 
                 UpdateTrackInfo();
+                UpdateVoices();
                 UpdateUIState();
                 Text = $"GME Player - {Path.GetFileName(filePath)}";
 
@@ -136,6 +138,58 @@ namespace GmePlayerWinForms
                   $"Author: {info.Author}\r\n" +
                   $"Copyright: {info.Copyright}"
                 : "No track information available";
+        }
+
+        private void UpdateVoices()
+        {
+            if (_player == null) return;
+
+            // Очищаем старую панель голосов
+            _voicesPanel?.Controls.Clear();
+
+            int voiceCount = _player.VoiceCount;
+            if (voiceCount <= 0) return;
+
+            // Создаём панель голосов если её нет
+            if (_voicesPanel == null)
+            {
+                _voicesPanel = new FlowLayoutPanel
+                {
+                    Location = new System.Drawing.Point(12, 250),
+                    Size = new System.Drawing.Size(400, 100),
+                    AutoScroll = true,
+                    BorderStyle = BorderStyle.FixedSingle,
+                    BackColor = System.Drawing.Color.WhiteSmoke
+                };
+                this.Controls.Add(_voicesPanel);
+                _voicesPanel.BringToFront();
+            }
+
+            // Добавляем чекбоксы для каждого голоса
+            for (int i = 0; i < voiceCount; i++)
+            {
+                var chk = new CheckBox
+                {
+                    Text = _player.GetVoiceName(i),
+                    Checked = true,
+                    AutoSize = true,
+                    Margin = new Padding(5),
+                    Tag = i
+                };
+                chk.CheckedChanged += VoiceCheckBox_CheckedChanged;
+                _voicesPanel.Controls.Add(chk);
+            }
+        }
+
+        private void VoiceCheckBox_CheckedChanged(object? sender, EventArgs e)
+        {
+            if (_player == null || sender is not CheckBox chk) return;
+
+            int voiceIndex = (int)(chk.Tag ?? -1);
+            if (voiceIndex >= 0)
+            {
+                _player.MuteVoice(voiceIndex, !chk.Checked);
+            }
         }
 
         private void UpdateUIState()
@@ -165,6 +219,15 @@ namespace GmePlayerWinForms
 
             listTracks.SelectedIndex = trackIndex;
             UpdateTrackInfo();
+            UpdateVoices();
+            
+            // Обновляем Maximum для trackPosition в зависимости от длины трека
+            var info = _player?.GetTrackInfo(trackIndex);
+            if (info != null && info.PlayLength > 0)
+            {
+                trackPosition.Maximum = info.PlayLength;
+            }
+            
             UpdateUIState();
         }
 
@@ -280,6 +343,16 @@ namespace GmePlayerWinForms
         private void trackPosition_MouseUp(object? sender, MouseEventArgs e)
         {
             _isDragging = false;
+            // Здесь можно добавить перемотку через SetPosition если она будет реализована
+        }
+
+        private void trackPosition_Scroll(object? sender, EventArgs e)
+        {
+            if (_isDragging && _player != null)
+            {
+                // При изменении позиции во время перетягивания обновляем время
+                UpdateTimeLabel();
+            }
         }
     }
 }
