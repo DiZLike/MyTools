@@ -1,0 +1,342 @@
+================================================================================
+Файл: C:\Users\diz91\source\repos\GmePlayer\GmeSharp\GmeNative.cs
+----------------------------------------
+﻿using System;
+using System.Runtime.InteropServices;
+
+namespace gmesharp
+{
+    internal static class NativeMethods
+    {
+        public const string DllName = "libgme";
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct gme_equalizer_t
+        {
+            public double treble, bass;
+            public double d2, d3, d4, d5, d6, d7, d8, d9;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct gme_info_t
+        {
+            public int length, intro_length, loop_length, play_length, fade_length;
+            public int i5, i6, i7, i8, i9, i10, i11, i12, i13, i14, i15;
+            public IntPtr system, game, song, author, copyright, comment, dumper;
+            public IntPtr s7, s8, s9, s10, s11, s12, s13, s14, s15;
+        }
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr gme_open_file(
+            [MarshalAs(UnmanagedType.LPStr)] string path, out IntPtr emu, int sampleRate);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr gme_open_data(IntPtr data, long size, out IntPtr emu, int sampleRate);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int gme_track_count(IntPtr emu);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr gme_start_track(IntPtr emu, int index);
+
+        /// <summary>
+        /// gme_play - count = количество mono-сэмплов (не стерео-пар!)
+        /// </summary>
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr gme_play(IntPtr emu, int count, IntPtr output);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void gme_delete(IntPtr emu);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void gme_set_fade(IntPtr emu, int startMsec);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void gme_set_fade_msecs(IntPtr emu, int startMsec, int lengthMsecs);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int gme_track_ended(IntPtr emu);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int gme_tell(IntPtr emu);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr gme_seek(IntPtr emu, int msec);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr gme_warning(IntPtr emu);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr gme_track_info(IntPtr emu, out IntPtr info, int track);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void gme_free_info(IntPtr info);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void gme_set_stereo_depth(IntPtr emu, double depth);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void gme_ignore_silence(IntPtr emu, int ignore);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void gme_set_tempo(IntPtr emu, double tempo);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern int gme_voice_count(IntPtr emu);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr gme_voice_name(IntPtr emu, int i);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void gme_mute_voice(IntPtr emu, int index, int mute);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void gme_mute_voices(IntPtr emu, int mutingMask);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void gme_disable_echo(IntPtr emu, int disable);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void gme_set_equalizer(IntPtr emu, ref gme_equalizer_t eq);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void gme_enable_accuracy(IntPtr emu, int enabled);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr gme_type(IntPtr emu);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr gme_load_m3u(IntPtr emu, [MarshalAs(UnmanagedType.LPStr)] string path);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr gme_identify_extension([MarshalAs(UnmanagedType.LPStr)] string pathOrExtension);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern IntPtr gme_type_list();
+    }
+}
+----------------------------------------
+
+Файл: C:\Users\diz91\source\repos\GmePlayer\GmeSharp\GmePlayer.cs
+----------------------------------------
+﻿using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+namespace gmesharp
+{
+    public sealed class GmeEmuHandle : SafeHandleZeroOrMinusOneIsInvalid
+    {
+        public GmeEmuHandle() : base(true) { }
+        public GmeEmuHandle(IntPtr h, bool owns) : base(owns) { SetHandle(h); }
+        protected override bool ReleaseHandle()
+        {
+            NativeMethods.gme_delete(handle);
+            return true;
+        }
+    }
+
+    public struct GmeEqualizer
+    {
+        public double Treble, Bass;
+        public double D2, D3, D4, D5, D6, D7, D8, D9;
+    }
+
+    public class GmeTrackInfo
+    {
+        public int Length, IntroLength, LoopLength, PlayLength, FadeLength;
+        public string System, Game, Song, Author, Copyright, Comment, Dumper;
+
+        public override string ToString()
+        {
+            return $"Track: {Song} - {Author} (Game: {Game}, System: {System})";
+        }
+    }
+
+    public class GmeException : Exception
+    {
+        public GmeException(string msg) : base(msg) { }
+    }
+
+    public class GmePlayer : IDisposable
+    {
+        private GmeEmuHandle _emuHandle;
+        private volatile bool _disposed;
+
+        public int SampleRate { get; }
+
+        public GmePlayer(string filePath, int sampleRate = 44100)
+        {
+            IntPtr err = NativeMethods.gme_open_file(filePath, out IntPtr emu, sampleRate);
+            if (err != IntPtr.Zero) throw new GmeException(Marshal.PtrToStringAnsi(err) ?? "Failed to open");
+            if (emu == IntPtr.Zero) throw new GmeException("Null emu");
+            _emuHandle = new GmeEmuHandle(emu, true);
+            SampleRate = sampleRate;
+            TryM3u(filePath);
+        }
+
+        private void TryM3u(string path)
+        {
+            try
+            {
+                string m3u = System.IO.Path.ChangeExtension(path, ".m3u");
+                if (System.IO.File.Exists(m3u))
+                    NativeMethods.gme_load_m3u(_emuHandle.DangerousGetHandle(), m3u);
+            }
+            catch { }
+        }
+
+        public int TrackCount => NativeMethods.gme_track_count(GetHandle());
+        public bool TrackEnded => NativeMethods.gme_track_ended(GetHandle()) != 0;
+        public int PositionMs => NativeMethods.gme_tell(GetHandle());
+        public int VoiceCount => NativeMethods.gme_voice_count(GetHandle());
+
+        public string EmulatorType
+        {
+            get
+            {
+                IntPtr p = NativeMethods.gme_type(GetHandle());
+                return p != IntPtr.Zero ? Marshal.PtrToStringAnsi(p) : null;
+            }
+        }
+
+        public string Warning
+        {
+            get
+            {
+                IntPtr p = NativeMethods.gme_warning(GetHandle());
+                return p != IntPtr.Zero ? Marshal.PtrToStringAnsi(p) : null;
+            }
+        }
+
+        private IntPtr GetHandle()
+        {
+            if (_disposed || _emuHandle == null || _emuHandle.IsClosed || _emuHandle.IsInvalid)
+                throw new ObjectDisposedException("GmePlayer");
+            return _emuHandle.DangerousGetHandle();
+        }
+
+        public void StartTrack(int index)
+        {
+            IntPtr err = NativeMethods.gme_start_track(GetHandle(), index);
+            if (err != IntPtr.Zero) throw new GmeException(Marshal.PtrToStringAnsi(err) ?? "Start error");
+        }
+
+        /// <summary>
+        /// Прямой вызов gme_play БЕЗ блокировок (для аудиоколлбэка)
+        /// </summary>
+        public unsafe bool PlayDirect(short* buffer, int count)
+        {
+            if (_disposed || _emuHandle == null || _emuHandle.IsClosed || _emuHandle.IsInvalid)
+                return false;
+
+            IntPtr emuHandle = _emuHandle.DangerousGetHandle();
+            IntPtr err = NativeMethods.gme_play(emuHandle, count, (IntPtr)buffer);
+            return err == IntPtr.Zero;
+        }
+
+        public string PlayIntoNativeBuffer(IntPtr nativeBuffer, int count)
+        {
+            if (_disposed || _emuHandle == null || _emuHandle.IsClosed || _emuHandle.IsInvalid)
+                return "disposed";
+
+            IntPtr emuHandle = _emuHandle.DangerousGetHandle();
+            IntPtr error = NativeMethods.gme_play(emuHandle, count, nativeBuffer);
+            return error != IntPtr.Zero ? Marshal.PtrToStringAnsi(error) : null;
+        }
+
+        public GmeTrackInfo GetTrackInfo(int index)
+        {
+            IntPtr err = NativeMethods.gme_track_info(GetHandle(), out IntPtr infoPtr, index);
+            if (err != IntPtr.Zero) throw new GmeException(Marshal.PtrToStringAnsi(err) ?? "Info error");
+            if (infoPtr == IntPtr.Zero) return null;
+            try
+            {
+                var n = Marshal.PtrToStructure<NativeMethods.gme_info_t>(infoPtr);
+                return new GmeTrackInfo
+                {
+                    Length = n.length,
+                    IntroLength = n.intro_length,
+                    LoopLength = n.loop_length,
+                    PlayLength = n.play_length,
+                    FadeLength = n.fade_length,
+                    System = Str(n.system),
+                    Game = Str(n.game),
+                    Song = Str(n.song),
+                    Author = Str(n.author),
+                    Copyright = Str(n.copyright),
+                    Comment = Str(n.comment),
+                    Dumper = Str(n.dumper)
+                };
+            }
+            finally { NativeMethods.gme_free_info(infoPtr); }
+        }
+
+        private static string Str(IntPtr p) => p != IntPtr.Zero ? Marshal.PtrToStringAnsi(p) : null;
+
+        public void Seek(int msec)
+        {
+            NativeMethods.gme_seek(GetHandle(), Math.Max(0, msec));
+        }
+
+        public void SetFade(int start, int len = 8000)
+        {
+            if (start < 0)
+                NativeMethods.gme_set_fade(GetHandle(), -1);
+            else
+                NativeMethods.gme_set_fade_msecs(GetHandle(), start, len);
+        }
+
+        public void SetTempo(double t) => NativeMethods.gme_set_tempo(GetHandle(), t);
+        public void SetStereoDepth(double d) => NativeMethods.gme_set_stereo_depth(GetHandle(), d);
+        public void SetAccuracy(bool a) => NativeMethods.gme_enable_accuracy(GetHandle(), a ? 1 : 0);
+        public void SetEchoDisabled(bool d) => NativeMethods.gme_disable_echo(GetHandle(), d ? 1 : 0);
+        public void SetIgnoreSilence(bool s) => NativeMethods.gme_ignore_silence(GetHandle(), s ? 1 : 0);
+
+        public string GetVoiceName(int i)
+        {
+            IntPtr p = NativeMethods.gme_voice_name(GetHandle(), i);
+            return p != IntPtr.Zero ? Marshal.PtrToStringAnsi(p) : null;
+        }
+
+        public void MuteVoice(int i, bool mute) => NativeMethods.gme_mute_voice(GetHandle(), i, mute ? 1 : 0);
+        public void MuteVoices(int mask) => NativeMethods.gme_mute_voices(GetHandle(), mask);
+
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                _disposed = true;
+                _emuHandle?.Dispose();
+                _emuHandle = null;
+            }
+            GC.SuppressFinalize(this);
+        }
+    }
+}
+----------------------------------------
+
+Файл: C:\Users\diz91\source\repos\GmePlayer\GmeSharp\GmeSharp.csproj
+----------------------------------------
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Update="libgme.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="zlib1.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>
+----------------------------------------
+
+================================================================================

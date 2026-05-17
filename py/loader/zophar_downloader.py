@@ -9,6 +9,9 @@ from datetime import datetime
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from aiohttp_socks import ProxyConnector
+from dotenv import load_dotenv
+
+load_dotenv()
 
 BASE_URL = "https://www.zophar.net"
 HEADERS = {
@@ -18,23 +21,24 @@ MAX_CONCURRENT_GAMES = 5
 MAX_CONCURRENT_DOWNLOADS = 10
 DOWNLOAD_DIR = "downloads"
 PROGRESS_UPDATE_INTERVAL = 2
-PROXY_URL = "socks5://evgeny:9c7V12n9886020@n.dlike.ru:1080"
+PROXY_URL = os.getenv("PROXY_URL")
 ERROR_LOG_FILE = "errors.log"
+DOWNLOAD_TIMEOUT = 600
+CHUNK_SIZE = 1024 * 1024
+
+DOWNLOAD_MP3 = None
 
 def log_error(message):
-    """Запись ошибки в лог-файл"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(ERROR_LOG_FILE, 'a', encoding='utf-8') as f:
         f.write(f"[{timestamp}] {message}\n")
 
 def sanitize_filename(filename: str) -> str:
-    """Очистка имени файла"""
     filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
     filename = filename.strip().rstrip('.')
     return filename[:200] if len(filename) > 200 else filename
 
 def format_size(size_bytes):
-    """Форматирование размера в читаемый вид"""
     for unit in ['B', 'KB', 'MB', 'GB']:
         if size_bytes < 1024:
             return f"{size_bytes:.1f} {unit}"
@@ -42,7 +46,6 @@ def format_size(size_bytes):
     return f"{size_bytes:.1f} TB"
 
 def format_time(seconds):
-    """Форматирование времени"""
     if seconds < 60:
         return f"{seconds:.0f}с"
     elif seconds < 3600:
@@ -52,8 +55,40 @@ def format_time(seconds):
         minutes = int((seconds % 3600) / 60)
         return f"{hours}ч {minutes}м"
 
+def ask_download_mp3():
+    global DOWNLOAD_MP3
+    
+    if DOWNLOAD_MP3 is not None:
+        return DOWNLOAD_MP3
+    
+    print("\n" + "=" * 80)
+    print("⚙️  НАСТРОЙКА СКАЧИВАНИЯ")
+    print("=" * 80)
+    print("\nХотите скачивать MP3 файлы (музыкальные треки и звуковые эффекты)?")
+    print("  1. Да, скачивать всё")
+    print("  2. Только обложки и архивы")
+    print("  3. Только info.json (без файлов)")
+    
+    while True:
+        choice = input("\n👉 Ваш выбор (1/2/3): ").strip()
+        if choice == '1':
+            DOWNLOAD_MP3 = True
+            print("✅ Будут скачаны все файлы, включая MP3")
+            break
+        elif choice == '2':
+            DOWNLOAD_MP3 = False
+            print("✅ MP3 файлы скачиваться не будут (только метаданные)")
+            break
+        elif choice == '3':
+            DOWNLOAD_MP3 = 'json_only'
+            print("✅ Будет сохранён только info.json")
+            break
+        else:
+            print("❌ Пожалуйста, выберите 1, 2 или 3")
+    
+    return DOWNLOAD_MP3
+
 def is_game_downloaded(platform_slug, game_slug):
-    """Проверяет, скачана ли игра полностью"""
     game_dir = os.path.join(DOWNLOAD_DIR, platform_slug, game_slug)
     info_path = os.path.join(game_dir, "info.json")
     
@@ -63,6 +98,11 @@ def is_game_downloaded(platform_slug, game_slug):
     try:
         with open(info_path, 'r', encoding='utf-8') as f:
             metadata = json.load(f)
+        
+        mp3_downloaded = metadata.get("mp3_downloaded", False)
+        
+        if not mp3_downloaded:
+            return True
         
         tracks = metadata.get("tracks", [])
         sfx = metadata.get("sfx", [])
@@ -87,7 +127,6 @@ def is_game_downloaded(platform_slug, game_slug):
         return False
 
 async def fetch(session, url, timeout=30):
-    """GET запрос"""
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
             response.raise_for_status()
@@ -96,18 +135,32 @@ async def fetch(session, url, timeout=30):
         return None
 
 async def download_file(session, url, filepath, max_retries=3):
-    """Скачивание файла с повторными попытками"""
     for attempt in range(max_retries):
         try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as response:
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            
+            timeout = aiohttp.ClientTimeout(total=DOWNLOAD_TIMEOUT, sock_read=60)
+            async with session.get(url, timeout=timeout) as response:
                 response.raise_for_status()
-                async with aiofiles.open(filepath, 'wb') as f:
-                    async for chunk in response.content.iter_chunked(8192):
+                
+                temp_filepath = filepath + '.tmp'
+                async with aiofiles.open(temp_filepath, 'wb') as f:
+                    async for chunk in response.content.iter_chunked(CHUNK_SIZE):
                         await f.write(chunk)
+                
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+                os.rename(temp_filepath, filepath)
             return True, None
         except Exception as e:
+            if os.path.exists(filepath + '.tmp'):
+                try:
+                    os.remove(filepath + '.tmp')
+                except:
+                    pass
+            
             if attempt < max_retries - 1:
-                await asyncio.sleep(2 ** attempt)  # Экспоненциальная задержка
+                await asyncio.sleep(2 ** attempt)
             else:
                 error_msg = f"Файл: {os.path.basename(filepath)} | URL: {url} | Ошибка: {str(e)}"
                 return False, error_msg
@@ -115,7 +168,6 @@ async def download_file(session, url, filepath, max_retries=3):
     return False, f"Не удалось скачать {url} после {max_retries} попыток"
 
 class ProgressTracker:
-    """Отслеживание общего прогресса"""
     def __init__(self, total_games):
         self.total_games = total_games
         self.completed = 0
@@ -128,7 +180,6 @@ class ProgressTracker:
         self.lock = asyncio.Lock()
     
     async def add_bytes(self, bytes_count):
-        """Добавляет байты во время скачивания"""
         async with self.lock:
             self.total_bytes += bytes_count
     
@@ -191,18 +242,14 @@ class ProgressTracker:
             print("\n")
 
 async def progress_updater(progress, stop_event):
-    """Фоновое обновление прогресса"""
     while not stop_event.is_set():
         await asyncio.sleep(PROGRESS_UPDATE_INTERVAL)
         if not stop_event.is_set():
             await progress.print_progress()
 
 async def parse_game_page(session, game_url, platform_slug, download_semaphore, game_num, progress):
-    """Парсинг страницы игры и скачивание всего"""
-    
     game_slug = game_url.rstrip('/').split('/')[-1]
     
-    # Проверяем, скачана ли уже игра (по slug из URL)
     if is_game_downloaded(platform_slug, game_slug):
         await progress.add_result('skipped')
         return
@@ -279,52 +326,61 @@ async def parse_game_page(session, game_url, platform_slug, download_semaphore, 
     game_dir = os.path.join(DOWNLOAD_DIR, platform_slug, game_slug)
     os.makedirs(game_dir, exist_ok=True)
     
-    # Собираем список файлов для скачивания с информацией о типе
+    mp3_mode = DOWNLOAD_MP3
+    
+    metadata["mp3_downloaded"] = (mp3_mode == True)
+    metadata["download_mode"] = "full" if mp3_mode == True else ("metadata_only" if mp3_mode == False else "json_only")
+    metadata["download_date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
     files_to_download = []
     
-    if cover_url:
-        ext = os.path.splitext(cover_url.split('?')[0])[1] or '.jpg'
-        cover_path = os.path.join(game_dir, f"cover{ext}")
-        if not os.path.exists(cover_path):
-            files_to_download.append({
-                "url": cover_url,
-                "path": cover_path,
-                "display_name": f"Обложка (cover{ext})"
-            })
-    
-    for archive_key, archive_url in archives.items():
-        archive_path = os.path.join(game_dir, f"{game_slug}_original.zip")
-        if not os.path.exists(archive_path):
-            files_to_download.append({
-                "url": archive_url,
-                "path": archive_path,
-                "display_name": "Архив (original.zip)"
-            })
-    
-    for track in tracks:
-        num = track.get('number', '')
-        prefix = f"{num:02d} - " if num else ""
-        filename = sanitize_filename(f"{prefix}{track['name']}.mp3")
-        filepath = os.path.join(game_dir, filename)
-        if not os.path.exists(filepath):
-            files_to_download.append({
-                "url": track["url"],
-                "path": filepath,
-                "display_name": f"Трек {num}: {track['name']}" if num else f"Трек: {track['name']}"
-            })
-    
-    if sfx:
-        sfx_dir = os.path.join(game_dir, "sfx")
-        os.makedirs(sfx_dir, exist_ok=True)
-        for i, track in enumerate(sfx):
-            filename = sanitize_filename(f"{track['name']}.mp3")
-            filepath = os.path.join(sfx_dir, filename)
-            if not os.path.exists(filepath):
+    if mp3_mode == 'json_only':
+        files_to_download = []
+    else:
+        if cover_url:
+            ext = os.path.splitext(cover_url.split('?')[0])[1] or '.jpg'
+            cover_path = os.path.join(game_dir, f"cover{ext}")
+            if not os.path.exists(cover_path):
                 files_to_download.append({
-                    "url": track["url"],
-                    "path": filepath,
-                    "display_name": f"SFX {i+1}: {track['name']}"
+                    "url": cover_url,
+                    "path": cover_path,
+                    "display_name": f"Обложка (cover{ext})"
                 })
+        
+        for archive_key, archive_url in archives.items():
+            archive_path = os.path.join(game_dir, f"{game_slug}.zip")
+            if not os.path.exists(archive_path):
+                files_to_download.append({
+                    "url": archive_url,
+                    "path": archive_path,
+                    "display_name": "Архив"
+                })
+        
+        if mp3_mode == True:
+            for track in tracks:
+                num = track.get('number', '')
+                prefix = f"{num:02d} - " if num else ""
+                filename = sanitize_filename(f"{prefix}{track['name']}.mp3")
+                filepath = os.path.join(game_dir, filename)
+                if not os.path.exists(filepath):
+                    files_to_download.append({
+                        "url": track["url"],
+                        "path": filepath,
+                        "display_name": f"Трек {num}: {track['name']}" if num else f"Трек: {track['name']}"
+                    })
+            
+            if sfx:
+                sfx_dir = os.path.join(game_dir, "sfx")
+                os.makedirs(sfx_dir, exist_ok=True)
+                for i, track in enumerate(sfx):
+                    filename = sanitize_filename(f"{track['name']}.mp3")
+                    filepath = os.path.join(sfx_dir, filename)
+                    if not os.path.exists(filepath):
+                        files_to_download.append({
+                            "url": track["url"],
+                            "path": filepath,
+                            "display_name": f"SFX {i+1}: {track['name']}"
+                        })
     
     total_files = len(files_to_download)
     failed_downloads = []
@@ -357,7 +413,6 @@ async def parse_game_page(session, game_url, platform_slug, download_semaphore, 
     else:
         success_count = 0
     
-    # Сохраняем metadata независимо от результата (чтобы знать, что скачивали)
     info_path = os.path.join(game_dir, "info.json")
     async with aiofiles.open(info_path, 'w', encoding='utf-8') as f:
         await f.write(json.dumps(metadata, indent=2, ensure_ascii=False))
@@ -365,7 +420,6 @@ async def parse_game_page(session, game_url, platform_slug, download_semaphore, 
     if total_files == 0 or len(failed_downloads) == 0:
         await progress.add_result('success', total_tracks)
     else:
-        # Детальное логирование ошибок
         error_details = "\n".join([
             f"   • {fd['display_name']}\n     URL: {fd['url']}\n     Причина: {fd['error']}"
             for fd in failed_downloads
@@ -378,7 +432,6 @@ async def parse_game_page(session, game_url, platform_slug, download_semaphore, 
         await progress.add_result('error')
 
 async def get_total_pages(session, platform_url):
-    """Определяет количество страниц для платформы"""
     html = await fetch(session, platform_url)
     if not html:
         return 1
@@ -398,7 +451,6 @@ async def get_total_pages(session, platform_url):
     return max_page
 
 async def get_game_links_from_page(session, platform_url, page_num):
-    """Собирает ссылки на игры с конкретной страницы"""
     url = f"{platform_url}?page={page_num}" if page_num > 1 else platform_url
     
     html = await fetch(session, url)
@@ -423,14 +475,13 @@ async def get_game_links_from_page(session, platform_url, page_num):
     return game_links
 
 async def download_platform(platform_url, platform_name=None):
-    """Скачивание всех игр платформы"""
-    
     platform_slug = platform_url.rstrip('/').split('/')[-1]
     
     print("=" * 80)
     print(f"🎮 ПЛАТФОРМА: {platform_name or platform_slug}")
     print(f"   URL: {platform_url}")
     print(f"   Прокси: {PROXY_URL}")
+    print(f"   Режим скачивания: {'Полный (с MP3)' if DOWNLOAD_MP3 == True else ('Обложки и архивы' if DOWNLOAD_MP3 == False else 'Только JSON')}")
     print("=" * 80)
     
     connector = ProxyConnector.from_url(PROXY_URL)
@@ -487,7 +538,7 @@ async def download_platform(platform_url, platform_name=None):
         print("=" * 80)
 
 async def main():
-    """Главная функция"""
+    ask_download_mp3()
     
     platforms = {
         "1": {"name": "Nintendo NES (NSF)", "url": "https://www.zophar.net/music/nintendo-nes-nsf"},
@@ -523,7 +574,7 @@ async def main():
         "31": {"name": "ZX Spectrum", "url": "https://www.zophar.net/music/spectrum"},
     }
     
-    print("=" * 80)
+    print("\n" + "=" * 80)
     print("         ЗАГРУЗЧИК МУЗЫКИ С ZOPHAR (ПО ПЛАТФОРМАМ)")
     print("=" * 80)
     

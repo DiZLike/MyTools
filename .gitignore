@@ -5,6 +5,7 @@
 **/ffprobe.exe
 
 *.7z
+*.env
 
 ## Игнорировать папку .vs (настройки Visual Studio)
 .vs/
