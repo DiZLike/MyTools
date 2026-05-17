@@ -7,7 +7,7 @@ namespace GmePlayerWinForms
     public class NAudioPlayer : IDisposable
     {
         private readonly GmePlayer _gmePlayer;
-        private WaveOut? _outputDevice; // Обычный WaveOut, не Event!
+        private WaveOut? _outputDevice;
         private BufferedWaveProvider? _bufferedProvider;
         private System.Threading.Timer? _fillTimer;
         private volatile bool _playing;
@@ -16,6 +16,7 @@ namespace GmePlayerWinForms
         private float _volume = 1.0f;
         private readonly object _lock = new object();
         private short[] _readBuffer;
+        private const int BufferSizeMs = 20; // Маленькие порции данных
 
         public event Action<int>? TrackChanged;
         public event Action<bool>? PlaybackChanged;
@@ -40,8 +41,8 @@ namespace GmePlayerWinForms
         public NAudioPlayer(GmePlayer player)
         {
             _gmePlayer = player ?? throw new ArgumentNullException(nameof(player));
-            // 10мс буфер как в SDL2 (стерео = * 2)
-            _readBuffer = new short[SampleRate / 100 * 2];
+            // Буфер на одну итерацию таймера (20мс)
+            _readBuffer = new short[(SampleRate / 1000) * BufferSizeMs * 2]; // стерео
         }
 
         public void PlayTrack(int track)
@@ -71,11 +72,11 @@ namespace GmePlayerWinForms
                 var format = new WaveFormat(SampleRate, 16, 2);
                 _bufferedProvider = new BufferedWaveProvider(format)
                 {
-                    BufferDuration = TimeSpan.FromMilliseconds(500),
+                    BufferDuration = TimeSpan.FromMilliseconds(200),
                     DiscardOnBufferOverflow = false
                 };
 
-                // Используем ОБЫЧНЫЙ WaveOut (не WaveOutEvent!)
+                // Используем ОБЫЧНЫЙ WaveOut
                 _outputDevice = new WaveOut();
                 _outputDevice.Volume = _volume;
                 _outputDevice.PlaybackStopped += OnPlaybackStopped;
@@ -85,9 +86,9 @@ namespace GmePlayerWinForms
                 _playing = true;
                 PlaybackChanged?.Invoke(true);
 
-                // Запускаем таймер заполнения буфера с повышенной частотой
+                // Таймер заполнения буфера
                 _fillTimer = new System.Threading.Timer(
-                    FillBuffer, null, 0, 10); // Каждые 10мс вместо 20мс
+                    FillBuffer, null, 0, BufferSizeMs);
             }
         }
 
@@ -110,26 +111,19 @@ namespace GmePlayerWinForms
                         return;
                     }
 
-                    // Проверяем сколько места в буфере
-                    int bufferedBytes = _bufferedProvider.BufferLength - _bufferedProvider.BufferedBytes;
+                    // Читаем одну порцию данных
+                    int samplesToRead = _readBuffer.Length;
 
-                    // ИСПРАВЛЕНИЕ: заполняем весь доступный буфер, если он не полный
-                    if (bufferedBytes >= _readBuffer.Length * sizeof(short))
+                    unsafe
                     {
-                        // ВСЕ short'ы из буфера (включая оба канала стерео)
-                        int samplesToRead = _readBuffer.Length;
-
-                        unsafe
+                        fixed (short* ptr = _readBuffer)
                         {
-                            fixed (short* ptr = _readBuffer)
+                            bool ok = _gmePlayer.PlayDirect(ptr, samplesToRead);
+                            if (ok)
                             {
-                                bool ok = _gmePlayer.PlayDirect(ptr, samplesToRead);
-                                if (ok)
-                                {
-                                    byte[] bytes = new byte[_readBuffer.Length * sizeof(short)];
-                                    Buffer.BlockCopy(_readBuffer, 0, bytes, 0, bytes.Length);
-                                    _bufferedProvider.AddSamples(bytes, 0, bytes.Length);
-                                }
+                                byte[] bytes = new byte[_readBuffer.Length * sizeof(short)];
+                                Buffer.BlockCopy(_readBuffer, 0, bytes, 0, bytes.Length);
+                                _bufferedProvider.AddSamples(bytes, 0, bytes.Length);
                             }
                         }
                     }
@@ -171,7 +165,7 @@ namespace GmePlayerWinForms
                 if (!_playing && _outputDevice != null && !_disposed)
                 {
                     _outputDevice.Play();
-                    _fillTimer?.Change(0, 10);
+                    _fillTimer?.Change(0, BufferSizeMs);
                     _playing = true;
                     PlaybackChanged?.Invoke(true);
                 }
