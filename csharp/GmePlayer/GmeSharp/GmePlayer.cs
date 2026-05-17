@@ -15,7 +15,6 @@ namespace gmesharp
             return true;
         }
     }
-
     public struct GmeEqualizer
     {
         public double Treble, Bass;
@@ -74,13 +73,9 @@ namespace gmesharp
             if (p == IntPtr.Zero) return null;
             return Marshal.PtrToStringUTF8(p);
         }
-
         public int TrackCount => NativeMethods.gme_track_count(GetHandle());
-
         public bool TrackEnded => NativeMethods.gme_track_ended(GetHandle()) != 0;
-
         public int PositionMs => NativeMethods.gme_tell(GetHandle());
-
         public int VoiceCount => NativeMethods.gme_voice_count(GetHandle());
 
         public string EmulatorType
@@ -110,10 +105,6 @@ namespace gmesharp
             if (err != IntPtr.Zero)
                 throw new GmeException(PtrToStringUtf8(err) ?? "Start error");
         }
-
-        /// <summary>
-        /// Прямой вызов gme_play БЕЗ блокировок (для аудиоколлбэка)
-        /// </summary>
         public unsafe bool PlayDirect(short* buffer, int count)
         {
             if (_disposed || _emuHandle == null || _emuHandle.IsClosed || _emuHandle.IsInvalid)
@@ -123,7 +114,6 @@ namespace gmesharp
             IntPtr err = NativeMethods.gme_play(emuHandle, count, (IntPtr)buffer);
             return err == IntPtr.Zero;
         }
-
         public string PlayIntoNativeBuffer(IntPtr nativeBuffer, int count)
         {
             if (_disposed || _emuHandle == null || _emuHandle.IsClosed || _emuHandle.IsInvalid)
@@ -133,7 +123,6 @@ namespace gmesharp
             IntPtr error = NativeMethods.gme_play(emuHandle, count, nativeBuffer);
             return error != IntPtr.Zero ? PtrToStringUtf8(error) : null;
         }
-
         public GmeTrackInfo GetTrackInfo(int index)
         {
             IntPtr err = NativeMethods.gme_track_info(GetHandle(), out IntPtr infoPtr, index);

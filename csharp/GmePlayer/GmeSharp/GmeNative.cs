@@ -59,7 +59,7 @@ namespace gmesharp
         public static extern IntPtr gme_start_track(IntPtr emu, int index);
 
         /// <summary>
-        /// gme_play - count = количество mono-сэмплов (не стерео-пар!)
+        /// gme_play - count = количество mono-сэмплов
         /// </summary>
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern IntPtr gme_play(IntPtr emu, int count, IntPtr output);

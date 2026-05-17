@@ -4,19 +4,12 @@ using System.Threading.Tasks;
 
 namespace gmesharp
 {
-    /// <summary>
-    /// Состояние плеера
-    /// </summary>
     public enum PlayerState
     {
         Stopped,
         Playing,
         Paused
     }
-
-    /// <summary>
-    /// Аргументы события смены трека
-    /// </summary>
     public class TrackChangedEventArgs : EventArgs
     {
         public int TrackIndex { get; }
@@ -28,10 +21,6 @@ namespace gmesharp
             TrackInfo = info;
         }
     }
-
-    /// <summary>
-    /// Полнофункциональный аудиоплеер на основе GME
-    /// </summary>
     public class GmeAudioPlayer : IDisposable
     {
         private readonly GmePlayer _player;
@@ -45,13 +34,10 @@ namespace gmesharp
         private CancellationTokenSource _playbackCts;
         private Task _playbackTask;
 
-        // События
         public event EventHandler<TrackChangedEventArgs> TrackChanged;
         public event EventHandler<PlayerState> StateChanged;
         public event EventHandler<string> PlaybackError;
         public event EventHandler TrackEnded;
-
-        // Свойства
         public PlayerState State
         {
             get => _state;
@@ -86,28 +72,16 @@ namespace gmesharp
         public int VoiceCount => _player.VoiceCount;
         public string EmulatorType => _player.EmulatorType;
         public string Warning => _player.Warning;
-
-        /// <summary>
-        /// Автоматически переключать на следующий трек после окончания текущего
-        /// </summary>
         public bool AutoAdvance
         {
             get => _autoAdvance;
             set => _autoAdvance = value;
         }
-
-        /// <summary>
-        /// Зацикливать текущий трек
-        /// </summary>
         public bool LoopTrack
         {
             get => _loopTrack;
             set => _loopTrack = value;
         }
-
-        /// <summary>
-        /// Громкость (0.0 - 1.0)
-        /// </summary>
         public float Volume { get; set; } = 1.0f;
 
         public GmeAudioPlayer(string filePath, int sampleRate = 44100, int bufferSizeMs = 100)
@@ -115,10 +89,6 @@ namespace gmesharp
             _player = new GmePlayer(filePath, sampleRate);
             _bufferSizeMs = bufferSizeMs;
         }
-
-        /// <summary>
-        /// Начать воспроизведение трека
-        /// </summary>
         public void Play(int trackIndex = 0)
         {
             lock (_lock)
@@ -137,10 +107,6 @@ namespace gmesharp
                 _playbackTask = Task.Run(() => PlaybackLoop(_playbackCts.Token));
             }
         }
-
-        /// <summary>
-        /// Приостановить воспроизведение
-        /// </summary>
         public void Pause()
         {
             lock (_lock)
@@ -149,10 +115,6 @@ namespace gmesharp
                     State = PlayerState.Paused;
             }
         }
-
-        /// <summary>
-        /// Возобновить воспроизведение после паузы
-        /// </summary>
         public void Resume()
         {
             lock (_lock)
@@ -161,10 +123,6 @@ namespace gmesharp
                     State = PlayerState.Playing;
             }
         }
-
-        /// <summary>
-        /// Остановить воспроизведение
-        /// </summary>
         public void Stop()
         {
             lock (_lock)
@@ -182,10 +140,6 @@ namespace gmesharp
             _playbackCts = null;
             _playbackTask = null;
         }
-
-        /// <summary>
-        /// Переключить на следующий трек
-        /// </summary>
         public void NextTrack()
         {
             lock (_lock)
@@ -213,10 +167,6 @@ namespace gmesharp
                 }
             }
         }
-
-        /// <summary>
-        /// Переключить на предыдущий трек
-        /// </summary>
         public void PreviousTrack()
         {
             lock (_lock)
@@ -239,74 +189,38 @@ namespace gmesharp
                 }
             }
         }
-
-        /// <summary>
-        /// Получить информацию о треке
-        /// </summary>
         public GmeTrackInfo GetTrackInfo(int index)
         {
             return _player.GetTrackInfo(index);
         }
-
-        /// <summary>
-        /// Получить название голоса
-        /// </summary>
         public string GetVoiceName(int index)
         {
             return _player.GetVoiceName(index);
         }
-
-        /// <summary>
-        /// Заглушить/включить голос
-        /// </summary>
         public void MuteVoice(int index, bool mute)
         {
             _player.MuteVoice(index, mute);
         }
-
-        /// <summary>
-        /// Заглушить голоса по маске
-        /// </summary>
         public void MuteVoices(int mask)
         {
             _player.MuteVoices(mask);
         }
-
-        /// <summary>
-        /// Установить темп
-        /// </summary>
         public void SetTempo(double tempo)
         {
             _player.SetTempo(tempo);
         }
-
-        /// <summary>
-        /// Установить стерео-глубину
-        /// </summary>
         public void SetStereoDepth(double depth)
         {
             _player.SetStereoDepth(depth);
         }
-
-        /// <summary>
-        /// Включить/выключить повышенную точность
-        /// </summary>
         public void SetAccuracy(bool enabled)
         {
             _player.SetAccuracy(enabled);
         }
-
-        /// <summary>
-        /// Включить/выключить эхо
-        /// </summary>
         public void SetEchoDisabled(bool disabled)
         {
             _player.SetEchoDisabled(disabled);
         }
-
-        /// <summary>
-        /// Сгенерировать аудио в буфер
-        /// </summary>
         public int GenerateAudio(short[] buffer, int offset, int sampleCount)
         {
             if (State != PlayerState.Playing)
@@ -328,7 +242,6 @@ namespace gmesharp
                 }
             }
 
-            // Применяем громкость
             if (Volume < 1.0f)
             {
                 for (int i = 0; i < sampleCount * 2; i++)
@@ -339,10 +252,6 @@ namespace gmesharp
 
             return sampleCount;
         }
-
-        /// <summary>
-        /// Получить размер буфера в сэмплах
-        /// </summary>
         public int GetBufferSizeInSamples()
         {
             return SampleRate * _bufferSizeMs / 1000;
@@ -390,7 +299,6 @@ namespace gmesharp
                 PlaybackError?.Invoke(this, ex.Message);
             }
         }
-
         public void Dispose()
         {
             Stop();
