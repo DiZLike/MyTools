@@ -10,6 +10,7 @@ namespace GmePlayerWinForms
         private System.Windows.Forms.Timer _updateTimer;
         private bool _isDragging = false;
         private FlowLayoutPanel? _voicesPanel;
+        private int[] _voiceMuteState; // 0 = audible, 1 = muted
 
         public MainForm()
         {
@@ -90,6 +91,7 @@ namespace GmePlayerWinForms
             {
                 _player?.Dispose();
                 _player = null;
+                _voiceMuteState = null;
 
                 var gmePlayer = new GmePlayer(filePath, 44100);
                 _player = new NAudioPlayer(gmePlayer);
@@ -110,6 +112,11 @@ namespace GmePlayerWinForms
                 var firstTrackInfo = _player.GetTrackInfo(0);
                 trackPosition.Maximum = firstTrackInfo?.PlayLength > 0 ?
                     firstTrackInfo.PlayLength : 300000;
+
+                // Инициализируем массив состояния голосов (все включены по умолчанию)
+                _voiceMuteState = new int[_player.VoiceCount];
+                for (int i = 0; i < _voiceMuteState.Length; i++)
+                    _voiceMuteState[i] = 0; // 0 = not muted
 
                 UpdateTrackInfo();
                 UpdateVoices();
@@ -142,13 +149,21 @@ namespace GmePlayerWinForms
 
         private void UpdateVoices()
         {
-            if (_player == null) return;
+            if (_player == null || _voiceMuteState == null) return;
 
             // Очищаем старую панель голосов
             _voicesPanel?.Controls.Clear();
 
             int voiceCount = _player.VoiceCount;
             if (voiceCount <= 0) return;
+
+            // Переинициализируем массив состояния голосов если изменилось их количество
+            if (_voiceMuteState.Length != voiceCount)
+            {
+                _voiceMuteState = new int[voiceCount];
+                for (int i = 0; i < voiceCount; i++)
+                    _voiceMuteState[i] = 0; // 0 = not muted
+            }
 
             // Создаём панель голосов если её нет
             if (_voicesPanel == null)
@@ -165,13 +180,13 @@ namespace GmePlayerWinForms
                 _voicesPanel.BringToFront();
             }
 
-            // Добавляем чекбоксы для каждого голоса
+            // Добавляем чекбоксы для каждого голоса с учётом сохранённого состояния
             for (int i = 0; i < voiceCount; i++)
             {
                 var chk = new CheckBox
                 {
                     Text = _player.GetVoiceName(i),
-                    Checked = true,
+                    Checked = _voiceMuteState[i] == 0, // Checked = not muted
                     AutoSize = true,
                     Margin = new Padding(5),
                     Tag = i
@@ -183,11 +198,13 @@ namespace GmePlayerWinForms
 
         private void VoiceCheckBox_CheckedChanged(object? sender, EventArgs e)
         {
-            if (_player == null || sender is not CheckBox chk) return;
+            if (_player == null || _voiceMuteState == null || sender is not CheckBox chk) return;
 
             int voiceIndex = (int)(chk.Tag ?? -1);
-            if (voiceIndex >= 0)
+            if (voiceIndex >= 0 && voiceIndex < _voiceMuteState.Length)
             {
+                // Сохраняем состояние: 0 = not muted, 1 = muted
+                _voiceMuteState[voiceIndex] = chk.Checked ? 0 : 1;
                 _player.MuteVoice(voiceIndex, !chk.Checked);
             }
         }
@@ -219,6 +236,7 @@ namespace GmePlayerWinForms
 
             listTracks.SelectedIndex = trackIndex;
             UpdateTrackInfo();
+            // Обновляем голоса но СОХРАНЯЕМ их состояние
             UpdateVoices();
             
             // Обновляем Maximum для trackPosition в зависимости от длины трека
@@ -252,6 +270,15 @@ namespace GmePlayerWinForms
 
             if (_player == null) return;
 
+            // Проверка: если все голоса отключены, не переключаемся (игнорируем событие)
+            if (_voiceMuteState != null && AreAllVoicesMuted())
+            {
+                // Просто останавливаемся без переключения
+                _player.Stop();
+                UpdateUIState();
+                return;
+            }
+
             if (chkLoop.Checked)
             {
                 _player.PlayTrack(_player.CurrentTrack);
@@ -265,6 +292,19 @@ namespace GmePlayerWinForms
                 _player.Stop();
                 UpdateUIState();
             }
+        }
+
+        private bool AreAllVoicesMuted()
+        {
+            if (_voiceMuteState == null || _voiceMuteState.Length == 0)
+                return false;
+
+            foreach (int state in _voiceMuteState)
+            {
+                if (state == 0) // Если хотя бы один голос включен
+                    return false;
+            }
+            return true; // Все голоса отключены
         }
 
         private void btnOpen_Click(object? sender, EventArgs e)
@@ -343,14 +383,12 @@ namespace GmePlayerWinForms
         private void trackPosition_MouseUp(object? sender, MouseEventArgs e)
         {
             _isDragging = false;
-            // Здесь можно добавить перемотку через SetPosition если она будет реализована
         }
 
         private void trackPosition_Scroll(object? sender, EventArgs e)
         {
             if (_isDragging && _player != null)
             {
-                // При изменении позиции во время перетягивания обновляем время
                 UpdateTimeLabel();
             }
         }
