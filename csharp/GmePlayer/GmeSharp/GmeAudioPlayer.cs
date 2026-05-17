@@ -107,6 +107,31 @@ namespace gmesharp
                 _playbackTask = Task.Run(() => PlaybackLoop(_playbackCts.Token));
             }
         }
+        public unsafe bool PlayDirectStereo(short* buffer, int sampleCount)
+        {
+            if (State != PlayerState.Playing)
+            {
+                for (int i = 0; i < sampleCount * 2; i++)
+                    buffer[i] = 0;
+                return false;
+            }
+
+            bool ok = _player.PlayDirect(buffer, sampleCount);
+
+            if (ok && Volume < 1.0f)
+            {
+                for (int i = 0; i < sampleCount * 2; i++)
+                    buffer[i] = (short)(buffer[i] * Volume);
+            }
+
+            return ok;
+        }
+
+        // Добавьте метод Seek если его нет
+        public void Seek(int msec)
+        {
+            _player.Seek(msec);
+        }
         public void Pause()
         {
             lock (_lock)

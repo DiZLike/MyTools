@@ -3,6 +3,7 @@
     <Platform Name="Any CPU" />
     <Platform Name="x64" />
   </Configurations>
+  <Project Path="GmePlayerWinForms/GmePlayerWinForms.csproj" Id="2edf925e-8a86-4d80-b0bf-1694c4f44204" />
   <Project Path="GmeSharp/GmeSharp.csproj" />
   <Project Path="TestPlay/TestPlay.csproj" />
 </Solution>

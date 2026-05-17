@@ -184,6 +184,35 @@ namespace gmesharp
         public void MuteVoice(int i, bool mute) => NativeMethods.gme_mute_voice(GetHandle(), i, mute ? 1 : 0);
 
         public void MuteVoices(int mask) => NativeMethods.gme_mute_voices(GetHandle(), mask);
+        // В класс GmePlayer добавьте метод:
+        public int ReadSamples(short[] buffer, int offset, int count)
+        {
+            if (_disposed || _emuHandle == null || _emuHandle.IsClosed || _emuHandle.IsInvalid)
+                return -1;
+
+            try
+            {
+                unsafe
+                {
+                    fixed (short* ptr = &buffer[offset])
+                    {
+                        IntPtr err = NativeMethods.gme_play(
+                            _emuHandle.DangerousGetHandle(),
+                            count / 2, // gme_play принимает количество mono сэмплов
+                            (IntPtr)ptr);
+
+                        if (err != IntPtr.Zero)
+                            return -1;
+                    }
+                }
+
+                return count;
+            }
+            catch
+            {
+                return -1;
+            }
+        }
 
         public void Dispose()
         {
