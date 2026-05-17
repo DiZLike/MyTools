@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using NAudio.Wave;
 using gmesharp;
 
@@ -40,7 +40,8 @@ namespace GmePlayerWinForms
         public NAudioPlayer(GmePlayer player)
         {
             _gmePlayer = player ?? throw new ArgumentNullException(nameof(player));
-            _readBuffer = new short[SampleRate / 50 * 2]; // 20мс буфер как в SDL2
+            // 10мс буфер как в SDL2 (стерео = * 2)
+            _readBuffer = new short[SampleRate / 100 * 2];
         }
 
         public void PlayTrack(int track)
@@ -70,7 +71,7 @@ namespace GmePlayerWinForms
                 var format = new WaveFormat(SampleRate, 16, 2);
                 _bufferedProvider = new BufferedWaveProvider(format)
                 {
-                    BufferDuration = TimeSpan.FromMilliseconds(200),
+                    BufferDuration = TimeSpan.FromMilliseconds(500),
                     DiscardOnBufferOverflow = false
                 };
 
@@ -84,9 +85,9 @@ namespace GmePlayerWinForms
                 _playing = true;
                 PlaybackChanged?.Invoke(true);
 
-                // Запускаем таймер заполнения буфера
+                // Запускаем таймер заполнения буфера с повышенной частотой
                 _fillTimer = new System.Threading.Timer(
-                    FillBuffer, null, 0, 20); // Каждые 20мс
+                    FillBuffer, null, 0, 10); // Каждые 10мс вместо 20мс
             }
         }
 
@@ -112,10 +113,11 @@ namespace GmePlayerWinForms
                     // Проверяем сколько места в буфере
                     int bufferedBytes = _bufferedProvider.BufferLength - _bufferedProvider.BufferedBytes;
 
-                    // Заполняем если есть место
-                    if (bufferedBytes > _readBuffer.Length * 2)
+                    // ИСПРАВЛЕНИЕ: заполняем весь доступный буфер, если он не полный
+                    if (bufferedBytes >= _readBuffer.Length * sizeof(short))
                     {
-                        int samplesToRead = _readBuffer.Length / 2; // Моно сэмплы
+                        // ВСЕ short'ы из буфера (включая оба канала стерео)
+                        int samplesToRead = _readBuffer.Length;
 
                         unsafe
                         {
@@ -169,7 +171,7 @@ namespace GmePlayerWinForms
                 if (!_playing && _outputDevice != null && !_disposed)
                 {
                     _outputDevice.Play();
-                    _fillTimer?.Change(0, 20);
+                    _fillTimer?.Change(0, 10);
                     _playing = true;
                     PlaybackChanged?.Invoke(true);
                 }
