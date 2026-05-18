@@ -8,6 +8,8 @@ import time
 import random
 import re
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
 # === НАСТРОЙКИ ===
 BASE_URL = "https://icon-icons.com"
@@ -17,6 +19,7 @@ PACKS_INDEX_FILE = "packs_index.json"
 FAILED_FILE = "failed.txt"
 DELAY_MIN = 0.1
 DELAY_MAX = 0.3
+MAX_WORKERS = 8  # Количество параллельных потоков
 
 SIZE_ORDER = ["64", "48", "72", "96", "128", "256", "512", "32"]
 BROWSER = "chrome120"
@@ -30,12 +33,15 @@ HEADERS = {
     "Referer": "https://icon-icons.com/",
 }
 
+# Глобальная блокировка для потокобезопасных операций
+print_lock = Lock()
 
 # === УТИЛИТЫ ===
 
 def log(msg):
     timestamp = time.strftime("%H:%M:%S")
-    print(f"[{timestamp}] {msg}", flush=True)
+    with print_lock:
+        print(f"[{timestamp}] {msg}", flush=True)
 
 def load_json(filepath):
     if os.path.exists(filepath):
@@ -254,6 +260,59 @@ def parse_download_links(html):
     return best_png, best_ico
 
 
+# === ПАРАЛЛЕЛЬНАЯ ОБРАБОТКА ИКОНОК ===
+
+def download_icon(icon_data):
+    """Скачивает одну иконку (PNG + ICO) в отдельном потоке"""
+    icon_url = icon_data['icon_url']
+    icon_name = icon_data['icon_name']
+    png_file = icon_data['png_file']
+    ico_file = icon_data['ico_file']
+    icon_idx = icon_data['icon_idx']
+    total_icons = icon_data['total_icons']
+    
+    # Проверяем, не скачана ли уже иконка
+    if is_downloaded(png_file) and is_downloaded(ico_file):
+        log(f"  ✓ [{icon_idx}/{total_icons}] {icon_name} (уже есть)")
+        return True
+    
+    # Получаем страницу иконки
+    icon_html = safe_get(icon_url)
+    if not icon_html:
+        log(f"  ✗ [{icon_idx}/{total_icons}] {icon_name} - страница не загрузилась")
+        log_failed(f"Страница: {icon_url}")
+        return False
+    
+    # Парсим ссылки на скачивание
+    png_url, ico_url = parse_download_links(icon_html)
+    
+    success = True
+    
+    # Скачиваем PNG
+    if png_url and not is_downloaded(png_file):
+        if download_file(png_url, png_file, icon_url):
+            log(f"  ✓ [{icon_idx}/{total_icons}] {icon_name}.png")
+        else:
+            log(f"  ✗ [{icon_idx}/{total_icons}] {icon_name}.png - ошибка скачивания")
+            log_failed(f"PNG: {icon_url}")
+            success = False
+    elif not png_url:
+        log(f"  ⚠ [{icon_idx}/{total_icons}] {icon_name} - нет PNG")
+    
+    # Скачиваем ICO
+    if ico_url and not is_downloaded(ico_file):
+        if download_file(ico_url, ico_file, icon_url):
+            log(f"  ✓ [{icon_idx}/{total_icons}] {icon_name}.ico")
+        else:
+            log(f"  ✗ [{icon_idx}/{total_icons}] {icon_name}.ico - ошибка скачивания")
+            log_failed(f"ICO: {icon_url}")
+            success = False
+    elif not ico_url:
+        log(f"  ⚠ [{icon_idx}/{total_icons}] {icon_name} - нет ICO")
+    
+    return success
+
+
 # === ОБРАБОТКА ПАКА ===
 
 def process_pack(pack, pack_num, total_processed, packs_index):
@@ -284,17 +343,15 @@ def process_pack(pack, pack_num, total_processed, packs_index):
     # Папка пака
     pack_dirname = safe_filename(pack_title)
     pack_dir = os.path.join(DOWNLOAD_DIR, pack_dirname)
-    pack_rel_path = f"{DOWNLOAD_DIR}/{pack_dirname}"  # относительный путь
+    pack_rel_path = f"{DOWNLOAD_DIR}/{pack_dirname}"
     
-    # Метаданные — сохраняем в папку пака
+    # Метаданные
     meta_file = os.path.join(pack_dir, "meta.json")
-    
     if not os.path.exists(meta_file):
         meta = parse_pack_meta(html, pack_url)
         meta["title"] = pack_title
         save_json(meta, meta_file)
         
-        # Добавляем в индекс
         packs_index.append({
             "title": pack_title,
             "path": pack_rel_path
@@ -305,7 +362,7 @@ def process_pack(pack, pack_num, total_processed, packs_index):
     else:
         log(f"  Мета уже есть")
     
-    # Иконки
+    # Получаем список иконок
     icons = parse_icons_from_pack(html)
     if not icons:
         progress[pack_url]["status"] = "empty"
@@ -318,53 +375,65 @@ def process_pack(pack, pack_num, total_processed, packs_index):
     os.makedirs(png_dir, exist_ok=True)
     os.makedirs(ico_dir, exist_ok=True)
     
-    log(f"  Иконок: {len(icons)}")
+    log(f"  Иконок: {len(icons)} (загрузка в {MAX_WORKERS} потоков)")
     
-    downloaded = progress[pack_url].get("icons_downloaded", 0)
-    
+    # Подготавливаем данные для параллельной загрузки
+    icon_tasks = []
     for icon_idx, icon_url in enumerate(icons, 1):
         icon_name = icon_url.rstrip("/").split("/")[-2]
         png_file = os.path.join(png_dir, f"{safe_filename(icon_name)}.png")
         ico_file = os.path.join(ico_dir, f"{safe_filename(icon_name)}.ico")
         
-        if is_downloaded(png_file) and is_downloaded(ico_file):
-            downloaded += 1
-            continue
-        
-        bar = progress_bar(icon_idx, len(icons))
-        log(f"  {bar} | {icon_name}")
-        
-        icon_html = safe_get(icon_url)
-        if icon_html:
-            png_url, ico_url = parse_download_links(icon_html)
-            
-            if png_url and not is_downloaded(png_file):
-                ok = download_file(png_url, png_file, icon_url)
-                if not ok:
-                    log_failed(f"PNG: {icon_url}")
-            
-            if ico_url and not is_downloaded(ico_file):
-                ok = download_file(ico_url, ico_file, icon_url)
-                if not ok:
-                    log_failed(f"ICO: {icon_url}")
-        else:
-            log(f"    ✗ Страница иконки не загрузилась")
-            log_failed(f"Страница: {icon_url}")
-        
-        downloaded += 1
-        progress[pack_url]["icons_downloaded"] = downloaded
-        save_json(progress, PROGRESS_FILE)
+        icon_tasks.append({
+            'icon_url': icon_url,
+            'icon_name': icon_name,
+            'png_file': png_file,
+            'ico_file': ico_file,
+            'icon_idx': icon_idx,
+            'total_icons': len(icons)
+        })
     
+    # Параллельная загрузка иконок
+    downloaded = 0
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        # Запускаем задачи пачками для контроля прогресса
+        futures = []
+        for task in icon_tasks:
+            future = executor.submit(download_icon, task)
+            futures.append(future)
+        
+        # Отслеживаем выполнение
+        for future in as_completed(futures):
+            try:
+                if future.result():
+                    downloaded += 1
+            except Exception as e:
+                log(f"  Ошибка в потоке: {e}")
+                log_failed(f"Thread error: {e}")
+            
+            # Обновляем прогресс
+            progress[pack_url]["icons_downloaded"] = downloaded
+            save_json(progress, PROGRESS_FILE)
+            
+            # Показываем общий прогресс
+            if downloaded % 5 == 0 or downloaded == len(icons):
+                bar = progress_bar(downloaded, len(icons))
+                log(f"  ПРОГРЕСС ПАКА: {bar}")
+    
+    # Финальное обновление
     progress[pack_url]["status"] = "done"
     progress[pack_url]["icons_total"] = len(icons)
+    progress[pack_url]["icons_downloaded"] = downloaded
     save_json(progress, PROGRESS_FILE)
-    log(f"  ГОТОВО: {downloaded} иконок")
+    
+    log(f"  ГОТОВО: {downloaded}/{len(icons)} иконок")
 
 
 # === ГЛАВНАЯ ===
 
 def main():
-    log("=== ЗАПУСК ПАРСЕРА ===")
+    log("=== ЗАПУСК ПАРСЕРА (МНОГОПОТОЧНЫЙ РЕЖИМ) ===")
+    log(f"Количество потоков: {MAX_WORKERS}")
     
     total_pages = get_total_pages()
     log(f"Всего страниц паков: {total_pages}")
