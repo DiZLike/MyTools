@@ -72,7 +72,7 @@ namespace GmePlayerWinForms
                 var format = new WaveFormat(SampleRate, 16, 2);
                 _bufferedProvider = new BufferedWaveProvider(format)
                 {
-                    BufferDuration = TimeSpan.FromMilliseconds(200),
+                    BufferDuration = TimeSpan.FromMilliseconds(1000),
                     DiscardOnBufferOverflow = false
                 };
 

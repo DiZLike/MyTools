@@ -18,16 +18,4 @@
     <ProjectReference Include="..\GmeSharp\GmeSharp.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Reference Include="Bass.Net">
-      <HintPath>Bass.Net.dll</HintPath>
-    </Reference>
-  </ItemGroup>
-
-  <ItemGroup>
-    <None Update="bass.dll">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
-  </ItemGroup>
-
 </Project>

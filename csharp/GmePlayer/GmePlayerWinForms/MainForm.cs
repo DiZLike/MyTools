@@ -171,10 +171,11 @@ namespace GmePlayerWinForms
                 _voicesPanel = new FlowLayoutPanel
                 {
                     Location = new System.Drawing.Point(12, 250),
-                    Size = new System.Drawing.Size(400, 100),
+                    Size = new System.Drawing.Size(400, 110),
                     AutoScroll = true,
                     BorderStyle = BorderStyle.FixedSingle,
-                    BackColor = System.Drawing.Color.WhiteSmoke
+                    BackColor = Color.FromArgb(55, 55, 60),
+                    ForeColor = Color.FromArgb(200, 200, 200)
                 };
                 this.Controls.Add(_voicesPanel);
                 _voicesPanel.BringToFront();
@@ -189,7 +190,9 @@ namespace GmePlayerWinForms
                     Checked = _voiceMuteState[i] == 0, // Checked = not muted
                     AutoSize = true,
                     Margin = new Padding(5),
-                    Tag = i
+                    Tag = i,
+                    ForeColor = Color.FromArgb(200, 200, 200),
+                    BackColor = Color.FromArgb(55, 55, 60)
                 };
                 chk.CheckedChanged += VoiceCheckBox_CheckedChanged;
                 _voicesPanel.Controls.Add(chk);
