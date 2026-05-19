@@ -66,7 +66,7 @@ def ask_download_mp3():
     print("=" * 80)
     print("\nХотите скачивать MP3 файлы (музыкальные треки и звуковые эффекты)?")
     print("  1. Да, скачивать всё")
-    print("  2. Только обложки и архивы")
+    print("  2. Только обложки и архивы (если архива нет - скачать все MP3)")
     print("  3. Только info.json (без файлов)")
     
     while True:
@@ -77,7 +77,7 @@ def ask_download_mp3():
             break
         elif choice == '2':
             DOWNLOAD_MP3 = False
-            print("✅ MP3 файлы скачиваться не будут (только метаданные)")
+            print("✅ Приоритет архивов. Если архива нет - будут скачаны MP3")
             break
         elif choice == '3':
             DOWNLOAD_MP3 = 'json_only'
@@ -89,6 +89,7 @@ def ask_download_mp3():
     return DOWNLOAD_MP3
 
 def is_game_downloaded(platform_slug, game_slug):
+    """Проверяет, полностью ли скачана игра с учетом режима скачивания"""
     game_dir = os.path.join(DOWNLOAD_DIR, platform_slug, game_slug)
     info_path = os.path.join(game_dir, "info.json")
     
@@ -99,32 +100,74 @@ def is_game_downloaded(platform_slug, game_slug):
         with open(info_path, 'r', encoding='utf-8') as f:
             metadata = json.load(f)
         
-        mp3_downloaded = metadata.get("mp3_downloaded", False)
+        download_mode = metadata.get("download_mode", "unknown")
+        current_mode = "full" if DOWNLOAD_MP3 == True else ("metadata_only" if DOWNLOAD_MP3 == False else "json_only")
         
-        if not mp3_downloaded:
-            return True
-        
-        tracks = metadata.get("tracks", [])
-        sfx = metadata.get("sfx", [])
-        
-        if not tracks and not sfx:
+        # Если режим изменился - нужно перескачать
+        if download_mode != current_mode:
             return False
         
-        for track in tracks:
-            num = track.get('number', '')
-            prefix = f"{num:02d} - " if num else ""
-            filename = sanitize_filename(f"{prefix}{track['name']}.mp3")
-            if not os.path.exists(os.path.join(game_dir, filename)):
-                return False
+        # Для JSON-only всегда достаточно наличия info.json
+        if DOWNLOAD_MP3 == 'json_only':
+            return True
         
-        for track in sfx:
-            filename = sanitize_filename(f"{track['name']}.mp3")
-            if not os.path.exists(os.path.join(game_dir, "sfx", filename)):
-                return False
+        # Проверяем архив
+        archives = metadata.get("archives", {})
+        archive_downloaded = False
+        if archives:
+            archive_path = os.path.join(game_dir, f"{game_slug}.zip")
+            archive_downloaded = os.path.exists(archive_path)
         
-        return True
+        # Проверяем обложку
+        cover_url = metadata.get("cover_url")
+        cover_downloaded = True
+        if cover_url:
+            ext = os.path.splitext(cover_url.split('?')[0])[1] or '.jpg'
+            cover_path = os.path.join(game_dir, f"cover{ext}")
+            cover_downloaded = os.path.exists(cover_path)
+        
+        # В режиме "только архивы"
+        if DOWNLOAD_MP3 == False:
+            # Если есть архив и он скачан - ок
+            if archives and archive_downloaded:
+                return cover_downloaded
+            # Если архива нет - проверяем MP3
+            else:
+                return check_all_mp3_downloaded(metadata, game_dir)
+        
+        # В полном режиме проверяем всё
+        if DOWNLOAD_MP3 == True:
+            if archives and not archive_downloaded:
+                return False
+            if not cover_downloaded:
+                return False
+            return check_all_mp3_downloaded(metadata, game_dir)
+        
+        return False
     except:
         return False
+
+def check_all_mp3_downloaded(metadata, game_dir):
+    """Проверяет, все ли MP3 файлы скачаны"""
+    tracks = metadata.get("tracks", [])
+    sfx = metadata.get("sfx", [])
+    
+    if not tracks and not sfx:
+        return True
+    
+    for track in tracks:
+        num = track.get('number', '')
+        prefix = f"{num:02d} - " if num else ""
+        filename = sanitize_filename(f"{prefix}{track['name']}.mp3")
+        if not os.path.exists(os.path.join(game_dir, filename)):
+            return False
+    
+    for track in sfx:
+        filename = sanitize_filename(f"{track['name']}.mp3")
+        if not os.path.exists(os.path.join(game_dir, "sfx", filename)):
+            return False
+    
+    return True
 
 async def fetch(session, url, timeout=30):
     try:
@@ -328,15 +371,28 @@ async def parse_game_page(session, game_url, platform_slug, download_semaphore, 
     
     mp3_mode = DOWNLOAD_MP3
     
-    metadata["mp3_downloaded"] = (mp3_mode == True)
-    metadata["download_mode"] = "full" if mp3_mode == True else ("metadata_only" if mp3_mode == False else "json_only")
+    # Определяем режим скачивания
+    if mp3_mode == 'json_only':
+        download_mode = "json_only"
+    elif mp3_mode == True:
+        download_mode = "full"
+    else:
+        download_mode = "metadata_only"
+    
+    metadata["download_mode"] = download_mode
     metadata["download_date"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    files_to_download = []
+    # Сохраняем предварительный JSON
+    info_path = os.path.join(game_dir, "info.json")
+    async with aiofiles.open(info_path, 'w', encoding='utf-8') as f:
+        await f.write(json.dumps(metadata, indent=2, ensure_ascii=False))
     
-    if mp3_mode == 'json_only':
-        files_to_download = []
-    else:
+    # Определяем, что скачивать
+    files_to_download = []
+    mp3_downloaded = False
+    
+    if mp3_mode != 'json_only':
+        # Всегда пытаемся скачать обложку
         if cover_url:
             ext = os.path.splitext(cover_url.split('?')[0])[1] or '.jpg'
             cover_path = os.path.join(game_dir, f"cover{ext}")
@@ -344,19 +400,42 @@ async def parse_game_page(session, game_url, platform_slug, download_semaphore, 
                 files_to_download.append({
                     "url": cover_url,
                     "path": cover_path,
-                    "display_name": f"Обложка (cover{ext})"
+                    "display_name": f"Обложка (cover{ext})",
+                    "type": "cover"
                 })
         
-        for archive_key, archive_url in archives.items():
-            archive_path = os.path.join(game_dir, f"{game_slug}.zip")
-            if not os.path.exists(archive_path):
-                files_to_download.append({
-                    "url": archive_url,
-                    "path": archive_path,
-                    "display_name": "Архив"
-                })
+        # Проверяем наличие архива
+        has_archive = bool(archives)
+        archive_exists = False
         
+        if has_archive:
+            for archive_key, archive_url in archives.items():
+                archive_path = os.path.join(game_dir, f"{game_slug}.zip")
+                if os.path.exists(archive_path):
+                    archive_exists = True
+                else:
+                    files_to_download.append({
+                        "url": archive_url,
+                        "path": archive_path,
+                        "display_name": "Архив",
+                        "type": "archive"
+                    })
+        
+        # Определяем, нужно ли скачивать MP3
+        need_mp3 = False
         if mp3_mode == True:
+            # В полном режиме всегда качаем MP3
+            need_mp3 = True
+        elif mp3_mode == False and not has_archive:
+            # В режиме "только архивы", если архива нет - качаем MP3
+            need_mp3 = True
+            metadata["mp3_fallback"] = True
+            metadata["mp3_fallback_reason"] = "Архив отсутствует на странице"
+            log_error(f"Архив отсутствует для {game_title} - скачиваем MP3 вместо архива")
+        
+        if need_mp3:
+            mp3_downloaded = True
+            # Добавляем треки
             for track in tracks:
                 num = track.get('number', '')
                 prefix = f"{num:02d} - " if num else ""
@@ -366,9 +445,11 @@ async def parse_game_page(session, game_url, platform_slug, download_semaphore, 
                     files_to_download.append({
                         "url": track["url"],
                         "path": filepath,
-                        "display_name": f"Трек {num}: {track['name']}" if num else f"Трек: {track['name']}"
+                        "display_name": f"Трек {num}: {track['name']}" if num else f"Трек: {track['name']}",
+                        "type": "mp3"
                     })
             
+            # Добавляем SFX
             if sfx:
                 sfx_dir = os.path.join(game_dir, "sfx")
                 os.makedirs(sfx_dir, exist_ok=True)
@@ -379,9 +460,11 @@ async def parse_game_page(session, game_url, platform_slug, download_semaphore, 
                         files_to_download.append({
                             "url": track["url"],
                             "path": filepath,
-                            "display_name": f"SFX {i+1}: {track['name']}"
+                            "display_name": f"SFX {i+1}: {track['name']}",
+                            "type": "mp3"
                         })
     
+    # Скачиваем файлы
     total_files = len(files_to_download)
     failed_downloads = []
     
@@ -408,17 +491,27 @@ async def parse_game_page(session, game_url, platform_slug, download_semaphore, 
                     "path": file_info["path"],
                     "error": error_msg
                 })
-        
-        success_count = sum(1 for success, _ in results if success)
-    else:
-        success_count = 0
     
-    info_path = os.path.join(game_dir, "info.json")
+    # Обновляем статус MP3 в зависимости от успешности скачивания
+    if mp3_downloaded:
+        mp3_success = all(
+            file_info["type"] != "mp3" or 
+            not any(fd["path"] == file_info["path"] for fd in failed_downloads)
+            for file_info in files_to_download
+        )
+        metadata["mp3_downloaded"] = mp3_success
+    else:
+        metadata["mp3_downloaded"] = False
+    
+    # Проверяем общий успех
+    download_success = len(failed_downloads) == 0
+    
+    # Перезаписываем JSON с финальным статусом
     async with aiofiles.open(info_path, 'w', encoding='utf-8') as f:
         await f.write(json.dumps(metadata, indent=2, ensure_ascii=False))
     
-    if total_files == 0 or len(failed_downloads) == 0:
-        await progress.add_result('success', total_tracks)
+    if total_files == 0 or download_success:
+        await progress.add_result('success', total_tracks if mp3_downloaded else 0)
     else:
         error_details = "\n".join([
             f"   • {fd['display_name']}\n     URL: {fd['url']}\n     Причина: {fd['error']}"
@@ -426,7 +519,7 @@ async def parse_game_page(session, game_url, platform_slug, download_semaphore, 
         ])
         
         log_error(
-            f"Скачано частично: {game_title} ({success_count}/{total_files} файлов)\n"
+            f"Скачано частично: {game_title} ({total_files - len(failed_downloads)}/{total_files} файлов)\n"
             f"Не скачаны:\n{error_details}"
         )
         await progress.add_result('error')
@@ -481,7 +574,13 @@ async def download_platform(platform_url, platform_name=None):
     print(f"🎮 ПЛАТФОРМА: {platform_name or platform_slug}")
     print(f"   URL: {platform_url}")
     print(f"   Прокси: {PROXY_URL}")
-    print(f"   Режим скачивания: {'Полный (с MP3)' if DOWNLOAD_MP3 == True else ('Обложки и архивы' if DOWNLOAD_MP3 == False else 'Только JSON')}")
+    
+    mode_desc = {
+        True: "Полный (с MP3)",
+        False: "Обложки и архивы (если архива нет - MP3)",
+        'json_only': "Только JSON"
+    }
+    print(f"   Режим скачивания: {mode_desc.get(DOWNLOAD_MP3, 'Неизвестно')}")
     print("=" * 80)
     
     connector = ProxyConnector.from_url(PROXY_URL)
