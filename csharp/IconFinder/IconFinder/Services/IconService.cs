@@ -70,7 +70,7 @@ namespace IconFinder.Services
             return path.Replace('\\', '/');
         }
 
-        public List<IconInfo> Search(string query, int limit = 500)
+        public List<IconInfo> Search(string query, int limit = 5000)
         {
             var results = new List<IconInfo>();
             var words = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);

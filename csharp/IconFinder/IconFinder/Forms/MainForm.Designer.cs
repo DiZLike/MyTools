@@ -21,6 +21,7 @@ namespace IconFinder.Forms
 
         private void InitializeComponent()
         {
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(MainForm));
             txtSearch = new TextBox();
             lblSearchIcon = new Label();
             pnlResults = new FlowLayoutPanel();
@@ -101,6 +102,7 @@ namespace IconFinder.Forms
             Controls.Add(pnlResults);
             Controls.Add(lblStatus);
             Controls.Add(btnShowMore);
+            Icon = (Icon)resources.GetObject("$this.Icon");
             MinimumSize = new Size(800, 600);
             Name = "MainForm";
             Padding = new Padding(20);
