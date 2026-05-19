@@ -15,197 +15,265 @@
 
         private void InitializeComponent()
         {
-            this.btnOpen = new System.Windows.Forms.Button();
-            this.btnPlay = new System.Windows.Forms.Button();
-            this.btnPause = new System.Windows.Forms.Button();
-            this.btnStop = new System.Windows.Forms.Button();
-            this.btnNext = new System.Windows.Forms.Button();
-            this.btnPrev = new System.Windows.Forms.Button();
-            this.trackPosition = new System.Windows.Forms.TrackBar();
-            this.trackVolume = new System.Windows.Forms.TrackBar();
-            this.lblTime = new System.Windows.Forms.Label();
-            this.lblTrackInfo = new System.Windows.Forms.Label();
-            this.lblStatus = new System.Windows.Forms.Label();
-            this.listTracks = new System.Windows.Forms.ListBox();
-            this.chkLoop = new System.Windows.Forms.CheckBox();
-            this.lblVolume = new System.Windows.Forms.Label();
-            ((System.ComponentModel.ISupportInitialize)(this.trackPosition)).BeginInit();
-            ((System.ComponentModel.ISupportInitialize)(this.trackVolume)).BeginInit();
-            this.SuspendLayout();
+            btnOpen = new Button();
+            btnPlay = new Button();
+            btnPause = new Button();
+            btnStop = new Button();
+            btnNext = new Button();
+            btnPrev = new Button();
+            trackPosition = new TrackBar();
+            trackVolume = new TrackBar();
+            lblTime = new Label();
+            lblTrackInfo = new Label();
+            lblStatus = new Label();
+            listTracks = new ListBox();
+            chkLoop = new CheckBox();
+            lblVolume = new Label();
+            ((System.ComponentModel.ISupportInitialize)trackPosition).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)trackVolume).BeginInit();
+            SuspendLayout();
+
             // 
             // btnOpen
             // 
-            this.btnOpen.Location = new System.Drawing.Point(12, 12);
-            this.btnOpen.Name = "btnOpen";
-            this.btnOpen.Size = new System.Drawing.Size(80, 30);
-            this.btnOpen.TabIndex = 0;
-            this.btnOpen.Text = "📂 Open";
-            this.btnOpen.UseVisualStyleBackColor = true;
-            this.btnOpen.Click += new System.EventHandler(this.btnOpen_Click);
+            btnOpen.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 80);
+            btnOpen.FlatAppearance.MouseDownBackColor = Color.FromArgb(60, 60, 60);
+            btnOpen.FlatAppearance.MouseOverBackColor = Color.FromArgb(70, 70, 70);
+            btnOpen.FlatStyle = FlatStyle.Flat;
+            btnOpen.Font = new Font("Segoe UI", 10F, FontStyle.Regular);
+            btnOpen.ForeColor = Color.FromArgb(200, 200, 200);
+            btnOpen.Location = new Point(12, 15);
+            btnOpen.Name = "btnOpen";
+            btnOpen.Size = new Size(90, 34);
+            btnOpen.TabIndex = 0;
+            btnOpen.Text = "📂 Open";
+            btnOpen.UseVisualStyleBackColor = false;
+            btnOpen.BackColor = Color.FromArgb(50, 50, 50);
+            btnOpen.Click += btnOpen_Click;
+
             // 
             // btnPlay
             // 
-            this.btnPlay.Font = new System.Drawing.Font("Segoe UI", 12F, System.Drawing.FontStyle.Bold);
-            this.btnPlay.Location = new System.Drawing.Point(98, 12);
-            this.btnPlay.Name = "btnPlay";
-            this.btnPlay.Size = new System.Drawing.Size(50, 30);
-            this.btnPlay.TabIndex = 1;
-            this.btnPlay.Text = "▶";
-            this.btnPlay.UseVisualStyleBackColor = true;
-            this.btnPlay.Click += new System.EventHandler(this.btnPlay_Click);
+            btnPlay.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 80);
+            btnPlay.FlatAppearance.MouseDownBackColor = Color.FromArgb(60, 60, 60);
+            btnPlay.FlatAppearance.MouseOverBackColor = Color.FromArgb(70, 70, 70);
+            btnPlay.FlatStyle = FlatStyle.Flat;
+            btnPlay.Font = new Font("Segoe UI", 12F, FontStyle.Bold);
+            btnPlay.ForeColor = Color.FromArgb(100, 200, 100);
+            btnPlay.Location = new Point(108, 15);
+            btnPlay.Name = "btnPlay";
+            btnPlay.Size = new Size(50, 34);
+            btnPlay.TabIndex = 1;
+            btnPlay.Text = "▶";
+            btnPlay.UseVisualStyleBackColor = false;
+            btnPlay.BackColor = Color.FromArgb(50, 50, 50);
+            btnPlay.Click += btnPlay_Click;
+
             // 
             // btnPause
             // 
-            this.btnPause.Font = new System.Drawing.Font("Segoe UI", 12F, System.Drawing.FontStyle.Bold);
-            this.btnPause.Location = new System.Drawing.Point(154, 12);
-            this.btnPause.Name = "btnPause";
-            this.btnPause.Size = new System.Drawing.Size(50, 30);
-            this.btnPause.TabIndex = 2;
-            this.btnPause.Text = "⏸";
-            this.btnPause.UseVisualStyleBackColor = true;
-            this.btnPause.Click += new System.EventHandler(this.btnPause_Click);
+            btnPause.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 80);
+            btnPause.FlatAppearance.MouseDownBackColor = Color.FromArgb(60, 60, 60);
+            btnPause.FlatAppearance.MouseOverBackColor = Color.FromArgb(70, 70, 70);
+            btnPause.FlatStyle = FlatStyle.Flat;
+            btnPause.Font = new Font("Segoe UI", 12F, FontStyle.Bold);
+            btnPause.ForeColor = Color.FromArgb(255, 200, 100);
+            btnPause.Location = new Point(164, 15);
+            btnPause.Name = "btnPause";
+            btnPause.Size = new Size(50, 34);
+            btnPause.TabIndex = 2;
+            btnPause.Text = "⏸";
+            btnPause.UseVisualStyleBackColor = false;
+            btnPause.BackColor = Color.FromArgb(50, 50, 50);
+            btnPause.Click += btnPause_Click;
+
             // 
             // btnStop
             // 
-            this.btnStop.Font = new System.Drawing.Font("Segoe UI", 12F, System.Drawing.FontStyle.Bold);
-            this.btnStop.Location = new System.Drawing.Point(210, 12);
-            this.btnStop.Name = "btnStop";
-            this.btnStop.Size = new System.Drawing.Size(50, 30);
-            this.btnStop.TabIndex = 3;
-            this.btnStop.Text = "⏹";
-            this.btnStop.UseVisualStyleBackColor = true;
-            this.btnStop.Click += new System.EventHandler(this.btnStop_Click);
+            btnStop.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 80);
+            btnStop.FlatAppearance.MouseDownBackColor = Color.FromArgb(60, 60, 60);
+            btnStop.FlatAppearance.MouseOverBackColor = Color.FromArgb(70, 70, 70);
+            btnStop.FlatStyle = FlatStyle.Flat;
+            btnStop.Font = new Font("Segoe UI", 12F, FontStyle.Bold);
+            btnStop.ForeColor = Color.FromArgb(255, 120, 120);
+            btnStop.Location = new Point(220, 15);
+            btnStop.Name = "btnStop";
+            btnStop.Size = new Size(50, 34);
+            btnStop.TabIndex = 3;
+            btnStop.Text = "⏹";
+            btnStop.UseVisualStyleBackColor = false;
+            btnStop.BackColor = Color.FromArgb(50, 50, 50);
+            btnStop.Click += btnStop_Click;
+
             // 
             // btnNext
             // 
-            this.btnNext.Font = new System.Drawing.Font("Segoe UI", 12F, System.Drawing.FontStyle.Bold);
-            this.btnNext.Location = new System.Drawing.Point(266, 12);
-            this.btnNext.Name = "btnNext";
-            this.btnNext.Size = new System.Drawing.Size(50, 30);
-            this.btnNext.TabIndex = 4;
-            this.btnNext.Text = "⏭";
-            this.btnNext.UseVisualStyleBackColor = true;
-            this.btnNext.Click += new System.EventHandler(this.btnNext_Click);
+            btnNext.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 80);
+            btnNext.FlatAppearance.MouseDownBackColor = Color.FromArgb(60, 60, 60);
+            btnNext.FlatAppearance.MouseOverBackColor = Color.FromArgb(70, 70, 70);
+            btnNext.FlatStyle = FlatStyle.Flat;
+            btnNext.Font = new Font("Segoe UI", 12F, FontStyle.Bold);
+            btnNext.ForeColor = Color.FromArgb(200, 200, 200);
+            btnNext.Location = new Point(332, 15);
+            btnNext.Name = "btnNext";
+            btnNext.Size = new Size(50, 34);
+            btnNext.TabIndex = 4;
+            btnNext.Text = "⏭";
+            btnNext.UseVisualStyleBackColor = false;
+            btnNext.BackColor = Color.FromArgb(50, 50, 50);
+            btnNext.Click += btnNext_Click;
+
             // 
             // btnPrev
             // 
-            this.btnPrev.Font = new System.Drawing.Font("Segoe UI", 12F, System.Drawing.FontStyle.Bold);
-            this.btnPrev.Location = new System.Drawing.Point(322, 12);
-            this.btnPrev.Name = "btnPrev";
-            this.btnPrev.Size = new System.Drawing.Size(50, 30);
-            this.btnPrev.TabIndex = 5;
-            this.btnPrev.Text = "⏮";
-            this.btnPrev.UseVisualStyleBackColor = true;
-            this.btnPrev.Click += new System.EventHandler(this.btnPrev_Click);
+            btnPrev.FlatAppearance.BorderColor = Color.FromArgb(80, 80, 80);
+            btnPrev.FlatAppearance.MouseDownBackColor = Color.FromArgb(60, 60, 60);
+            btnPrev.FlatAppearance.MouseOverBackColor = Color.FromArgb(70, 70, 70);
+            btnPrev.FlatStyle = FlatStyle.Flat;
+            btnPrev.Font = new Font("Segoe UI", 12F, FontStyle.Bold);
+            btnPrev.ForeColor = Color.FromArgb(200, 200, 200);
+            btnPrev.Location = new Point(276, 15);
+            btnPrev.Name = "btnPrev";
+            btnPrev.Size = new Size(50, 34);
+            btnPrev.TabIndex = 5;
+            btnPrev.Text = "⏮";
+            btnPrev.UseVisualStyleBackColor = false;
+            btnPrev.BackColor = Color.FromArgb(50, 50, 50);
+            btnPrev.Click += btnPrev_Click;
+
             // 
             // trackPosition
             // 
-            this.trackPosition.Location = new System.Drawing.Point(12, 55);
-            this.trackPosition.Maximum = 300000;
-            this.trackPosition.Name = "trackPosition";
-            this.trackPosition.Size = new System.Drawing.Size(550, 45);
-            this.trackPosition.TabIndex = 6;
-            this.trackPosition.TickFrequency = 60000;
-            this.trackPosition.MouseDown += new System.Windows.Forms.MouseEventHandler(this.trackPosition_MouseDown);
-            this.trackPosition.MouseUp += new System.Windows.Forms.MouseEventHandler(this.trackPosition_MouseUp);
+            trackPosition.BackColor = Color.FromArgb(45, 45, 48);
+            trackPosition.Location = new Point(12, 60);
+            trackPosition.Maximum = 300000;
+            trackPosition.Name = "trackPosition";
+            trackPosition.Size = new Size(550, 45);
+            trackPosition.TabIndex = 6;
+            trackPosition.TickFrequency = 60000;
+            trackPosition.MouseDown += trackPosition_MouseDown;
+            trackPosition.MouseUp += trackPosition_MouseUp;
+
             // 
             // trackVolume
             // 
-            this.trackVolume.Location = new System.Drawing.Point(568, 55);
-            this.trackVolume.Maximum = 100;
-            this.trackVolume.Name = "trackVolume";
-            this.trackVolume.Size = new System.Drawing.Size(104, 45);
-            this.trackVolume.TabIndex = 7;
-            this.trackVolume.TickFrequency = 25;
-            this.trackVolume.Value = 80;
-            this.trackVolume.Scroll += new System.EventHandler(this.trackVolume_Scroll);
+            trackVolume.BackColor = Color.FromArgb(45, 45, 48);
+            trackVolume.Location = new Point(568, 60);
+            trackVolume.Maximum = 100;
+            trackVolume.Name = "trackVolume";
+            trackVolume.Size = new Size(104, 45);
+            trackVolume.TabIndex = 7;
+            trackVolume.TickFrequency = 25;
+            trackVolume.Value = 80;
+            trackVolume.Scroll += trackVolume_Scroll;
+
             // 
             // lblTime
             // 
-            this.lblTime.AutoSize = true;
-            this.lblTime.Location = new System.Drawing.Point(12, 85);
-            this.lblTime.Name = "lblTime";
-            this.lblTime.Size = new System.Drawing.Size(59, 15);
-            this.lblTime.TabIndex = 8;
-            this.lblTime.Text = "00:00 / 00:00";
+            lblTime.AutoSize = true;
+            lblTime.Font = new Font("Segoe UI", 9F, FontStyle.Regular);
+            lblTime.ForeColor = Color.FromArgb(180, 180, 180);
+            lblTime.Location = new Point(12, 95);
+            lblTime.Name = "lblTime";
+            lblTime.Size = new Size(72, 15);
+            lblTime.TabIndex = 8;
+            lblTime.Text = "00:00 / 00:00";
+
             // 
             // lblTrackInfo
             // 
-            this.lblTrackInfo.BackColor = System.Drawing.Color.WhiteSmoke;
-            this.lblTrackInfo.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
-            this.lblTrackInfo.Location = new System.Drawing.Point(12, 110);
-            this.lblTrackInfo.Name = "lblTrackInfo";
-            this.lblTrackInfo.Padding = new System.Windows.Forms.Padding(5);
-            this.lblTrackInfo.Size = new System.Drawing.Size(400, 100);
-            this.lblTrackInfo.TabIndex = 9;
-            this.lblTrackInfo.Text = "No file loaded";
+            lblTrackInfo.BackColor = Color.FromArgb(55, 55, 60);
+            lblTrackInfo.BorderStyle = BorderStyle.FixedSingle;
+            lblTrackInfo.ForeColor = Color.FromArgb(200, 200, 200);
+            lblTrackInfo.Location = new Point(12, 120);
+            lblTrackInfo.Name = "lblTrackInfo";
+            lblTrackInfo.Padding = new Padding(8);
+            lblTrackInfo.Size = new Size(400, 120);
+            lblTrackInfo.TabIndex = 9;
+            lblTrackInfo.Text = "No file loaded";
+
             // 
             // lblStatus
             // 
-            this.lblStatus.AutoSize = true;
-            this.lblStatus.Location = new System.Drawing.Point(12, 370);
-            this.lblStatus.Name = "lblStatus";
-            this.lblStatus.Size = new System.Drawing.Size(81, 15);
-            this.lblStatus.TabIndex = 10;
-            this.lblStatus.Text = "Ready to play";
+            lblStatus.AutoSize = true;
+            lblStatus.Font = new Font("Segoe UI", 9F, FontStyle.Regular);
+            lblStatus.ForeColor = Color.FromArgb(150, 150, 150);
+            lblStatus.Location = new Point(12, 405);
+            lblStatus.Name = "lblStatus";
+            lblStatus.Size = new Size(78, 15);
+            lblStatus.TabIndex = 10;
+            lblStatus.Text = "Ready to play";
+
             // 
             // listTracks
             // 
-            this.listTracks.FormattingEnabled = true;
-            this.listTracks.ItemHeight = 15;
-            this.listTracks.Location = new System.Drawing.Point(420, 110);
-            this.listTracks.Name = "listTracks";
-            this.listTracks.Size = new System.Drawing.Size(252, 229);
-            this.listTracks.TabIndex = 11;
-            this.listTracks.SelectedIndexChanged += new System.EventHandler(this.listTracks_SelectedIndexChanged);
+            listTracks.BackColor = Color.FromArgb(55, 55, 60);
+            listTracks.BorderStyle = BorderStyle.FixedSingle;
+            listTracks.Font = new Font("Segoe UI", 9F, FontStyle.Regular);
+            listTracks.ForeColor = Color.FromArgb(200, 200, 200);
+            listTracks.Location = new Point(422, 120);
+            listTracks.Name = "listTracks";
+            listTracks.Size = new Size(260, 250);
+            listTracks.TabIndex = 11;
+            listTracks.SelectedIndexChanged += listTracks_SelectedIndexChanged;
+
             // 
             // chkLoop
             // 
-            this.chkLoop.AutoSize = true;
-            this.chkLoop.Location = new System.Drawing.Point(12, 225);
-            this.chkLoop.Name = "chkLoop";
-            this.chkLoop.Size = new System.Drawing.Size(85, 19);
-            this.chkLoop.TabIndex = 12;
-            this.chkLoop.Text = "Loop Track";
-            this.chkLoop.UseVisualStyleBackColor = true;
+            chkLoop.AutoSize = true;
+            chkLoop.Font = new Font("Segoe UI", 9F, FontStyle.Regular);
+            chkLoop.ForeColor = Color.FromArgb(200, 200, 200);
+            chkLoop.Location = new Point(12, 370);
+            chkLoop.Name = "chkLoop";
+            chkLoop.Size = new Size(84, 19);
+            chkLoop.TabIndex = 12;
+            chkLoop.Text = "Loop Track";
+            chkLoop.UseVisualStyleBackColor = true;
+            chkLoop.BackColor = Color.FromArgb(45, 45, 48);
+
             // 
             // lblVolume
             // 
-            this.lblVolume.AutoSize = true;
-            this.lblVolume.Location = new System.Drawing.Point(678, 55);
-            this.lblVolume.Name = "lblVolume";
-            this.lblVolume.Size = new System.Drawing.Size(27, 15);
-            this.lblVolume.TabIndex = 14;
-            this.lblVolume.Text = "80%";
+            lblVolume.AutoSize = true;
+            lblVolume.Font = new Font("Segoe UI", 9F, FontStyle.Regular);
+            lblVolume.ForeColor = Color.FromArgb(180, 180, 180);
+            lblVolume.Location = new Point(678, 65);
+            lblVolume.Name = "lblVolume";
+            lblVolume.Size = new Size(29, 15);
+            lblVolume.TabIndex = 14;
+            lblVolume.Text = "80%";
+
             // 
             // MainForm
             // 
-            this.AutoScaleDimensions = new System.Drawing.SizeF(7F, 15F);
-            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(684, 396);
-            this.Controls.Add(this.lblVolume);
-            this.Controls.Add(this.chkLoop);
-            this.Controls.Add(this.listTracks);
-            this.Controls.Add(this.lblStatus);
-            this.Controls.Add(this.lblTrackInfo);
-            this.Controls.Add(this.lblTime);
-            this.Controls.Add(this.trackVolume);
-            this.Controls.Add(this.trackPosition);
-            this.Controls.Add(this.btnPrev);
-            this.Controls.Add(this.btnNext);
-            this.Controls.Add(this.btnStop);
-            this.Controls.Add(this.btnPause);
-            this.Controls.Add(this.btnPlay);
-            this.Controls.Add(this.btnOpen);
-            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedSingle;
-            this.MaximizeBox = false;
-            this.Name = "MainForm";
-            this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
-            this.Text = "GME Player";
-            ((System.ComponentModel.ISupportInitialize)(this.trackPosition)).EndInit();
-            ((System.ComponentModel.ISupportInitialize)(this.trackVolume)).EndInit();
-            this.ResumeLayout(false);
-            this.PerformLayout();
+            AutoScaleDimensions = new SizeF(7F, 15F);
+            AutoScaleMode = AutoScaleMode.Font;
+            BackColor = Color.FromArgb(45, 45, 48);
+            ClientSize = new Size(700, 440);
+            Controls.Add(lblVolume);
+            Controls.Add(chkLoop);
+            Controls.Add(listTracks);
+            Controls.Add(lblStatus);
+            Controls.Add(lblTrackInfo);
+            Controls.Add(lblTime);
+            Controls.Add(trackVolume);
+            Controls.Add(trackPosition);
+            Controls.Add(btnPrev);
+            Controls.Add(btnNext);
+            Controls.Add(btnStop);
+            Controls.Add(btnPause);
+            Controls.Add(btnPlay);
+            Controls.Add(btnOpen);
+            ForeColor = Color.FromArgb(200, 200, 200);
+            FormBorderStyle = FormBorderStyle.FixedSingle;
+            MaximizeBox = false;
+            Name = "MainForm";
+            StartPosition = FormStartPosition.CenterScreen;
+            Text = "GME Player";
+            ((System.ComponentModel.ISupportInitialize)trackPosition).EndInit();
+            ((System.ComponentModel.ISupportInitialize)trackVolume).EndInit();
+            ResumeLayout(false);
+            PerformLayout();
         }
 
         private System.Windows.Forms.Button btnOpen;
