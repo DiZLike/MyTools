@@ -3,6 +3,8 @@
 **/[Dd]ownloads/
 **/ffmpeg.exe
 **/ffprobe.exe
+**/icons.db
+**/icons.dat
 
 *.7z
 *.env
