@@ -5,6 +5,7 @@
 **/ffprobe.exe
 **/icons.db
 **/icons.dat
+**/python.zip
 
 *.7z
 *.env

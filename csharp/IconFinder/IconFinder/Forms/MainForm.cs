@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
+using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using IconFinder.Controls;
 using IconFinder.Services;
@@ -10,7 +14,10 @@ namespace IconFinder.Forms
 {
     public partial class MainForm : Form
     {
+        private const bool EnableTranslationServer = true;
+
         private IconService _iconService;
+        private LibreTranslateService _ltService;
         private List<IconInfo> _currentResults;
         private int _displayedCount = 0;
         private const int PageSize = 30;
@@ -22,18 +29,118 @@ namespace IconFinder.Forms
         {
             InitializeComponent();
             Logger.Log("MainForm started");
+
+            // Загружаем словарь (всегда, быстро)
+            var dictPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Data", "ru-en.dict");
+            Translator.LoadDictionary(dictPath);
+
             InitializeSearch();
             LoadRandomIcons();
+
+            // Всё остальное — после показа формы
+            this.Shown += MainForm_Shown;
+        }
+
+        private async void MainForm_Shown(object sender, EventArgs e)
+        {
+            // Распаковка Python (если нужно)
+            if (EnableTranslationServer)
+                ExtractPythonIfNeeded();
+
+            // Запуск сервера перевода (если включен)
+            if (EnableTranslationServer)
+                await StartTranslateServer();
+        }
+
+        private void ExtractPythonIfNeeded()
+        {
+            var pythonDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Data", "Python");
+            var pythonZip = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Data", "python.zip");
+
+            if (Directory.Exists(pythonDir) && Directory.GetFiles(pythonDir).Length > 0)
+                return;
+
+            if (!File.Exists(pythonZip))
+            {
+                Logger.Log("Python archive not found");
+                return;
+            }
+
+            var result = MessageBox.Show(
+                "Для работы перевода необходимо распаковать файлы Python (≈500 МБ).\n" +
+                "Это займёт 1-2 минуты и выполняется только один раз.\n\n" +
+                "Продолжить?",
+                "Первая настройка",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Information);
+
+            if (result != DialogResult.Yes)
+                return;
+
+            lblStatus.Text = "Распаковка Python...";
+
+            Task.Run(() =>
+            {
+                try
+                {
+                    Directory.CreateDirectory(pythonDir);
+
+                    var tempDir = Path.Combine(Path.GetTempPath(), "IconFinder_Python_Extract");
+                    if (Directory.Exists(tempDir))
+                        Directory.Delete(tempDir, true);
+                    Directory.CreateDirectory(tempDir);
+
+                    var tempZip = Path.Combine(tempDir, "python.zip");
+                    File.Copy(pythonZip, tempZip, overwrite: true);
+
+                    using (var archive = ZipFile.OpenRead(tempZip))
+                    {
+                        foreach (var entry in archive.Entries)
+                        {
+                            var destPath = Path.GetFullPath(Path.Combine(pythonDir, entry.FullName));
+                            if (!destPath.StartsWith(pythonDir, StringComparison.Ordinal))
+                                continue;
+
+                            if (string.IsNullOrEmpty(entry.Name))
+                                Directory.CreateDirectory(destPath);
+                            else
+                            {
+                                Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+                                entry.ExtractToFile(destPath, overwrite: true);
+                            }
+                        }
+                    }
+
+                    try { Directory.Delete(tempDir, true); } catch { }
+                    File.Delete(pythonZip);
+                    Logger.Log("Python extracted");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Log($"Extract error: {ex.Message}");
+                }
+            });
+        }
+
+        private async Task StartTranslateServer()
+        {
+            _ltService = new LibreTranslateService(AppDomain.CurrentDomain.BaseDirectory);
+            Translator.SetTranslateService(_ltService);
+
+            lblStatus.Text = "Запуск сервера перевода...";
+
+            var started = await _ltService.StartAsync();
+
+            lblStatus.Text = started
+                ? $"Загружено иконок: {_iconService?.TotalCount ?? 0:N0} | Перевод: ✓"
+                : $"Загружено иконок: {_iconService?.TotalCount ?? 0:N0} | Перевод: словарь";
         }
 
         private void InitializeSearch()
         {
             try
             {
-                _iconService = new IconService(
-                    @"Data\icons.db",
-                    @"Data\icons.dat"
-                );
+                _iconService = new IconService(@"Data\icons.db", @"Data\icons.dat");
                 lblStatus.Text = $"Загружено иконок: {_iconService.TotalCount:N0}";
                 Logger.Log($"Initialized: {_iconService.TotalCount} icons");
             }
@@ -41,7 +148,8 @@ namespace IconFinder.Forms
             {
                 Logger.Log($"Init ERROR: {ex.Message}");
                 lblStatus.Text = $"Ошибка: {ex.Message}";
-                MessageBox.Show($"Ошибка загрузки данных: {ex.Message}", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"Ошибка загрузки данных: {ex.Message}", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
 
             _searchTimer = new Timer { Interval = 300 };
@@ -50,21 +158,16 @@ namespace IconFinder.Forms
             txtSearch.TextChanged += TxtSearch_TextChanged;
             btnShowMore.Click += BtnShowMore_Click;
 
-            // Скролл: фокус + колесико
             pnlResults.MouseEnter += (s, e) => pnlResults.Focus();
             pnlResults.MouseWheel += PnlResults_MouseWheel;
             pnlResults.Scroll += (s, e) => CheckScrollBottom();
         }
 
-        private void PnlResults_MouseWheel(object sender, MouseEventArgs e)
-        {
-            CheckScrollBottom();
-        }
+        private void PnlResults_MouseWheel(object sender, MouseEventArgs e) => CheckScrollBottom();
 
         private void CheckScrollBottom()
         {
             if (!pnlResults.VerticalScroll.Visible) return;
-
             var maxScroll = pnlResults.VerticalScroll.Maximum - pnlResults.VerticalScroll.LargeChange;
             if (pnlResults.VerticalScroll.Value >= maxScroll - 100)
             {
@@ -84,7 +187,7 @@ namespace IconFinder.Forms
                 _isRandomMode = true;
                 lblStatus.Text = "Загрузка...";
 
-                _currentResults = await System.Threading.Tasks.Task.Run(() => _iconService.GetRandomIcons(PageSize));
+                _currentResults = await Task.Run(() => _iconService.GetRandomIcons(PageSize));
                 _displayedCount = 0;
                 pnlResults.Controls.Clear();
                 lblStatus.Text = "Случайные иконки";
@@ -104,7 +207,7 @@ namespace IconFinder.Forms
             try
             {
                 _isLoading = true;
-                var newIcons = await System.Threading.Tasks.Task.Run(() => _iconService.GetRandomIcons(PageSize));
+                var newIcons = await Task.Run(() => _iconService.GetRandomIcons(PageSize));
                 _currentResults.AddRange(newIcons);
                 LoadMoreResults();
             }
@@ -136,7 +239,7 @@ namespace IconFinder.Forms
             await PerformSearch(query);
         }
 
-        private async System.Threading.Tasks.Task PerformSearch(string query)
+        private async Task PerformSearch(string query)
         {
             if (_isLoading) return;
             try
@@ -145,7 +248,11 @@ namespace IconFinder.Forms
                 _isRandomMode = false;
                 lblStatus.Text = "Поиск...";
 
-                _currentResults = await System.Threading.Tasks.Task.Run(() => _iconService.Search(query));
+                var translatedQuery = await Translator.TranslateAsync(query);
+                if (translatedQuery != query)
+                    Logger.Log($"Translated: '{query}' → '{translatedQuery}'");
+
+                _currentResults = await Task.Run(() => _iconService.Search(translatedQuery));
                 _displayedCount = 0;
                 pnlResults.Controls.Clear();
 
@@ -172,7 +279,6 @@ namespace IconFinder.Forms
             if (_currentResults == null || _displayedCount >= _currentResults.Count) return;
 
             var batch = _currentResults.Skip(_displayedCount).Take(PageSize).ToList();
-            Logger.Log($"LoadMoreResults: {batch.Count} cards");
 
             pnlResults.SuspendLayout();
             foreach (var icon in batch)
@@ -186,19 +292,16 @@ namespace IconFinder.Forms
 
             _displayedCount += batch.Count;
 
-            if (_isRandomMode)
-            {
-                btnShowMore.Visible = true;
-                btnShowMore.Text = "Показать еще";
-                lblStatus.Text = $"Случайные иконки (показано: {_displayedCount:N0})";
-            }
-            else
-            {
-                btnShowMore.Visible = _displayedCount < _currentResults.Count;
-                btnShowMore.Text = $"Показать еще ({_currentResults.Count - _displayedCount})";
-                lblStatus.Text = $"Показано: {_displayedCount:N0} из {_currentResults.Count:N0}";
-            }
+            btnShowMore.Visible = _isRandomMode || _displayedCount < _currentResults.Count;
+            btnShowMore.Text = _isRandomMode
+                ? "Показать еще"
+                : $"Показать еще ({_currentResults.Count - _displayedCount})";
 
+            lblStatus.Text = _isRandomMode
+                ? $"Случайные иконки (показано: {_displayedCount:N0})"
+                : $"Показано: {_displayedCount:N0} из {_currentResults.Count:N0}";
+
+            // Загружаем миниатюры
             this.BeginInvoke(new Action(() =>
             {
                 foreach (Control c in pnlResults.Controls)
@@ -233,6 +336,8 @@ namespace IconFinder.Forms
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             Logger.Log("MainForm closing");
+            Translator.SaveNewWords();
+            _ltService?.Dispose();
             _iconService?.Dispose();
             base.OnFormClosing(e);
         }

@@ -27,6 +27,7 @@ namespace IconFinder.Forms
             pnlResults = new FlowLayoutPanel();
             lblStatus = new Label();
             btnShowMore = new Button();
+            lblTotalIcons = new Label();
             SuspendLayout();
             // 
             // txtSearch
@@ -61,7 +62,7 @@ namespace IconFinder.Forms
             pnlResults.Location = new Point(20, 80);
             pnlResults.Name = "pnlResults";
             pnlResults.Padding = new Padding(5);
-            pnlResults.Size = new Size(1060, 518);
+            pnlResults.Size = new Size(1060, 540);
             pnlResults.TabIndex = 2;
             // 
             // lblStatus
@@ -69,7 +70,7 @@ namespace IconFinder.Forms
             lblStatus.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
             lblStatus.Font = new Font("Segoe UI", 9F);
             lblStatus.ForeColor = Color.FromArgb(160, 160, 160);
-            lblStatus.Location = new Point(24, 609);
+            lblStatus.Location = new Point(24, 655);
             lblStatus.Name = "lblStatus";
             lblStatus.Size = new Size(400, 20);
             lblStatus.TabIndex = 3;
@@ -85,7 +86,7 @@ namespace IconFinder.Forms
             btnShowMore.FlatStyle = FlatStyle.Flat;
             btnShowMore.Font = new Font("Segoe UI", 9F);
             btnShowMore.ForeColor = Color.White;
-            btnShowMore.Location = new Point(917, 604);
+            btnShowMore.Location = new Point(917, 650);
             btnShowMore.Name = "btnShowMore";
             btnShowMore.Size = new Size(160, 30);
             btnShowMore.TabIndex = 4;
@@ -93,10 +94,23 @@ namespace IconFinder.Forms
             btnShowMore.UseVisualStyleBackColor = false;
             btnShowMore.Visible = false;
             // 
+            // lblTotalIcons
+            // 
+            lblTotalIcons.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            lblTotalIcons.Font = new Font("Segoe UI", 9F);
+            lblTotalIcons.ForeColor = Color.FromArgb(160, 160, 160);
+            lblTotalIcons.Location = new Point(24, 634);
+            lblTotalIcons.Name = "lblTotalIcons";
+            lblTotalIcons.Size = new Size(400, 20);
+            lblTotalIcons.TabIndex = 3;
+            lblTotalIcons.Text = "Иконок";
+            lblTotalIcons.TextAlign = ContentAlignment.MiddleLeft;
+            // 
             // MainForm
             // 
             BackColor = Color.FromArgb(32, 32, 32);
-            ClientSize = new Size(1100, 646);
+            ClientSize = new Size(1100, 692);
+            Controls.Add(lblTotalIcons);
             Controls.Add(txtSearch);
             Controls.Add(lblSearchIcon);
             Controls.Add(pnlResults);
@@ -111,5 +125,7 @@ namespace IconFinder.Forms
             ResumeLayout(false);
             PerformLayout();
         }
+
+        private Label lblTotalIcons;
     }
 }

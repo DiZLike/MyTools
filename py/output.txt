@@ -1,0 +1,999 @@
+================================================================================
+Файл: F:\!Evgeny\git\MyTools\csharp\IconFinder\IconFinder\Controls\DarkColorTable.cs
+----------------------------------------
+﻿using System.Drawing;
+using System.Windows.Forms;
+
+namespace IconFinder.Controls
+{
+    internal class DarkColorTable : ProfessionalColorTable
+    {
+        public override Color ToolStripDropDownBackground => Color.FromArgb(45, 45, 48);
+        public override Color MenuBorder => Color.FromArgb(50, 50, 55);
+        public override Color MenuItemBorder => Color.FromArgb(45, 45, 48);
+        public override Color MenuItemSelected => Color.FromArgb(60, 60, 65);
+        public override Color ImageMarginGradientBegin => Color.FromArgb(45, 45, 48);
+        public override Color ImageMarginGradientMiddle => Color.FromArgb(45, 45, 48);
+        public override Color ImageMarginGradientEnd => Color.FromArgb(45, 45, 48);
+    }
+}
+----------------------------------------
+
+Файл: F:\!Evgeny\git\MyTools\csharp\IconFinder\IconFinder\Controls\IconCard.cs
+----------------------------------------
+﻿using System;
+using System.Drawing;
+using System.IO;
+using System.Windows.Forms;
+using IconFinder.Services;
+using SkiaSharp;
+using IconConverter = IconFinder.Services.IconConverter;
+
+namespace IconFinder.Controls
+{
+    public partial class IconCard : UserControl
+    {
+        private readonly IconInfo _iconInfo;
+        private readonly IconService _iconService;
+        private ContextMenuStrip _formatPopup;
+
+        public event EventHandler<IconInfo> IconClicked;
+
+        public IconCard(IconInfo iconInfo, IconService iconService)
+        {
+            InitializeComponent();
+            _iconInfo = iconInfo;
+            _iconService = iconService;
+            LoadIconInfo();
+            CreateFormatPopup();
+        }
+
+        private void CreateFormatPopup()
+        {
+            _formatPopup = new ContextMenuStrip
+            {
+                BackColor = Color.FromArgb(45, 45, 48),
+                ShowImageMargin = false,
+                ShowCheckMargin = false,
+                Renderer = new DarkToolStripRenderer()
+            };
+
+            foreach (var fmt in new[] { "PNG", "ICO", "WebP" })
+            {
+                var item = new ToolStripMenuItem
+                {
+                    Text = fmt,
+                    ForeColor = Color.FromArgb(200, 200, 200),
+                    Font = new Font("Segoe UI", 8),
+                    BackColor = Color.FromArgb(45, 45, 48),
+                    Padding = new Padding(8, 4, 8, 4)
+                };
+                item.MouseEnter += (s, e) => item.BackColor = Color.FromArgb(60, 60, 65);
+                item.MouseLeave += (s, e) => item.BackColor = Color.FromArgb(45, 45, 48);
+                item.Click += (s, e) => ConvertAndSave(fmt);
+                _formatPopup.Items.Add(item);
+            }
+        }
+
+        private void LoadIconInfo()
+        {
+            var fileName = Path.GetFileName(_iconInfo.FilePath);
+            lblName.Text = fileName.Length > 28 ? fileName.Substring(0, 25) + "..." : fileName;
+        }
+
+        public void LoadThumbnail()
+        {
+            if (picIcon.Image != null) return;
+            try
+            {
+                var data = _iconService.GetIconData(_iconInfo.FilePath);
+                if (data == null) return;
+
+                var ext = Path.GetExtension(_iconInfo.FilePath).ToLower();
+
+                if (ext == ".webp")
+                {
+                    using var skBitmap = SKBitmap.Decode(data);
+                    if (skBitmap == null) return;
+                    var scale = Math.Min(64f / skBitmap.Width, 64f / skBitmap.Height);
+                    var w = Math.Max(1, (int)(skBitmap.Width * scale));
+                    var h = Math.Max(1, (int)(skBitmap.Height * scale));
+                    using var resized = skBitmap.Resize(new SKImageInfo(w, h), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
+                    if (resized == null) return;
+                    using var image = SKImage.FromBitmap(resized);
+                    using var pngData = image.Encode(SKEncodedImageFormat.Png, 80);
+                    using var ms = new MemoryStream(pngData.ToArray());
+                    picIcon.Image = new Bitmap(ms);
+                }
+                else
+                {
+                    using var ms = new MemoryStream(data);
+                    using var original = new Bitmap(ms);
+                    var scale = Math.Min(64f / original.Width, 64f / original.Height);
+                    picIcon.Image = new Bitmap(original, (int)(original.Width * scale), (int)(original.Height * scale));
+                }
+            }
+            catch (Exception ex) { Logger.Log($"Thumbnail error: {_iconInfo.FilePath} - {ex.Message}"); }
+        }
+
+        private void cardPanel_Click(object sender, EventArgs e) => IconClicked?.Invoke(this, _iconInfo);
+        private void cardPanel_MouseEnter(object sender, EventArgs e) => cardPanel.BackColor = Color.FromArgb(60, 60, 65);
+        private void cardPanel_MouseLeave(object sender, EventArgs e) => cardPanel.BackColor = Color.FromArgb(45, 45, 48);
+        private void btnSave_Click(object sender, EventArgs e) => _formatPopup.Show(btnSave.PointToScreen(new Point(0, btnSave.Height)), ToolStripDropDownDirection.BelowRight);
+        private void btnSave_MouseEnter(object sender, EventArgs e) => btnSave.BackColor = Color.FromArgb(70, 70, 75);
+        private void btnSave_MouseLeave(object sender, EventArgs e) => btnSave.BackColor = Color.FromArgb(55, 55, 60);
+
+        private async void ConvertAndSave(string format)
+        {
+            try
+            {
+                _formatPopup.Close();
+                var ext = $".{format.ToLower()}";
+                var fileName = Path.GetFileNameWithoutExtension(_iconInfo.FilePath) + ext;
+
+                using var sfd = new SaveFileDialog { FileName = fileName, Filter = $"{format} Files|*{ext}", Title = $"Сохранить как {format}..." };
+                if (sfd.ShowDialog() == DialogResult.OK)
+                {
+                    var sourceData = _iconService.GetIconData(_iconInfo.FilePath);
+                    if (sourceData == null) return;
+                    var convertedData = await System.Threading.Tasks.Task.Run(() => IconConverter.ConvertTo(sourceData, ext));
+                    if (convertedData != null)
+                    {
+                        File.WriteAllBytes(sfd.FileName, convertedData);
+                        Logger.Log($"Saved: {sfd.FileName} ({convertedData.Length} bytes)");
+                    }
+                }
+            }
+            catch (Exception ex) { Logger.Log($"Convert error: {ex.Message}"); }
+        }
+
+        private static string FormatSize(int bytes) => bytes switch
+        {
+            < 1024 => $"{bytes} B",
+            < 1024 * 1024 => $"{bytes / 1024.0:F1} KB",
+            _ => $"{bytes / (1024.0 * 1024):F1} MB"
+        };
+    }
+}
+----------------------------------------
+
+================================================================================
+================================================================================
+Файл: F:\!Evgeny\git\MyTools\csharp\IconFinder\IconFinder\Forms\MainForm.cs
+----------------------------------------
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Windows.Forms;
+using IconFinder.Controls;
+using IconFinder.Services;
+using Timer = System.Windows.Forms.Timer;
+
+namespace IconFinder.Forms
+{
+    public partial class MainForm : Form
+    {
+        private IconService _iconService;
+        private List<IconInfo> _currentResults;
+        private int _displayedCount = 0;
+        private const int PageSize = 30;
+        private Timer _searchTimer;
+        private bool _isLoading = false;
+        private bool _isRandomMode = true;
+
+        public MainForm()
+        {
+            InitializeComponent();
+            Logger.Log("MainForm started");
+            InitializeSearch();
+            LoadRandomIcons();
+        }
+
+        private void InitializeSearch()
+        {
+            try
+            {
+                _iconService = new IconService(
+                    @"Data\icons.db",
+                    @"Data\icons.dat"
+                );
+                lblStatus.Text = $"Загружено иконок: {_iconService.TotalCount:N0}";
+                Logger.Log($"Initialized: {_iconService.TotalCount} icons");
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Init ERROR: {ex.Message}");
+                lblStatus.Text = $"Ошибка: {ex.Message}";
+                MessageBox.Show($"Ошибка загрузки данных: {ex.Message}", "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+
+            _searchTimer = new Timer { Interval = 300 };
+            _searchTimer.Tick += SearchTimer_Tick;
+
+            txtSearch.TextChanged += TxtSearch_TextChanged;
+            btnShowMore.Click += BtnShowMore_Click;
+
+            // Скролл: фокус + колесико
+            pnlResults.MouseEnter += (s, e) => pnlResults.Focus();
+            pnlResults.MouseWheel += PnlResults_MouseWheel;
+            pnlResults.Scroll += (s, e) => CheckScrollBottom();
+        }
+
+        private void PnlResults_MouseWheel(object sender, MouseEventArgs e)
+        {
+            CheckScrollBottom();
+        }
+
+        private void CheckScrollBottom()
+        {
+            if (!pnlResults.VerticalScroll.Visible) return;
+
+            var maxScroll = pnlResults.VerticalScroll.Maximum - pnlResults.VerticalScroll.LargeChange;
+            if (pnlResults.VerticalScroll.Value >= maxScroll - 100)
+            {
+                if (_isRandomMode && !_isLoading)
+                    LoadMoreRandomIcons();
+                else if (!_isRandomMode)
+                    LoadMoreResults();
+            }
+        }
+
+        private async void LoadRandomIcons()
+        {
+            if (_isLoading) return;
+            try
+            {
+                _isLoading = true;
+                _isRandomMode = true;
+                lblStatus.Text = "Загрузка...";
+
+                _currentResults = await System.Threading.Tasks.Task.Run(() => _iconService.GetRandomIcons(PageSize));
+                _displayedCount = 0;
+                pnlResults.Controls.Clear();
+                lblStatus.Text = "Случайные иконки";
+                LoadMoreResults();
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"LoadRandom ERROR: {ex.Message}");
+                lblStatus.Text = $"Ошибка: {ex.Message}";
+            }
+            finally { _isLoading = false; }
+        }
+
+        private async void LoadMoreRandomIcons()
+        {
+            if (_isLoading) return;
+            try
+            {
+                _isLoading = true;
+                var newIcons = await System.Threading.Tasks.Task.Run(() => _iconService.GetRandomIcons(PageSize));
+                _currentResults.AddRange(newIcons);
+                LoadMoreResults();
+            }
+            finally { _isLoading = false; }
+        }
+
+        private void TxtSearch_TextChanged(object sender, EventArgs e)
+        {
+            _searchTimer.Stop();
+            if (string.IsNullOrEmpty(txtSearch.Text.Trim()))
+            {
+                ClearResults();
+                LoadRandomIcons();
+                return;
+            }
+            _searchTimer.Start();
+        }
+
+        private async void SearchTimer_Tick(object sender, EventArgs e)
+        {
+            _searchTimer.Stop();
+            var query = txtSearch.Text.Trim();
+            if (string.IsNullOrEmpty(query))
+            {
+                ClearResults();
+                LoadRandomIcons();
+                return;
+            }
+            await PerformSearch(query);
+        }
+
+        private async System.Threading.Tasks.Task PerformSearch(string query)
+        {
+            if (_isLoading) return;
+            try
+            {
+                _isLoading = true;
+                _isRandomMode = false;
+                lblStatus.Text = "Поиск...";
+
+                _currentResults = await System.Threading.Tasks.Task.Run(() => _iconService.Search(query));
+                _displayedCount = 0;
+                pnlResults.Controls.Clear();
+
+                if (_currentResults.Count == 0)
+                {
+                    lblStatus.Text = "Ничего не найдено";
+                    btnShowMore.Visible = false;
+                    return;
+                }
+
+                lblStatus.Text = $"Найдено: {_currentResults.Count:N0}";
+                LoadMoreResults();
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Search ERROR: {ex.Message}");
+                lblStatus.Text = $"Ошибка поиска: {ex.Message}";
+            }
+            finally { _isLoading = false; }
+        }
+
+        private void LoadMoreResults()
+        {
+            if (_currentResults == null || _displayedCount >= _currentResults.Count) return;
+
+            var batch = _currentResults.Skip(_displayedCount).Take(PageSize).ToList();
+            Logger.Log($"LoadMoreResults: {batch.Count} cards");
+
+            pnlResults.SuspendLayout();
+            foreach (var icon in batch)
+            {
+                var card = new IconCard(icon, _iconService);
+                card.IconClicked += Card_IconClicked;
+                card.Margin = new Padding(5);
+                pnlResults.Controls.Add(card);
+            }
+            pnlResults.ResumeLayout(true);
+
+            _displayedCount += batch.Count;
+
+            if (_isRandomMode)
+            {
+                btnShowMore.Visible = true;
+                btnShowMore.Text = "Показать еще";
+                lblStatus.Text = $"Случайные иконки (показано: {_displayedCount:N0})";
+            }
+            else
+            {
+                btnShowMore.Visible = _displayedCount < _currentResults.Count;
+                btnShowMore.Text = $"Показать еще ({_currentResults.Count - _displayedCount})";
+                lblStatus.Text = $"Показано: {_displayedCount:N0} из {_currentResults.Count:N0}";
+            }
+
+            this.BeginInvoke(new Action(() =>
+            {
+                foreach (Control c in pnlResults.Controls)
+                    if (c is IconCard card && card.Visible)
+                        card.LoadThumbnail();
+            }));
+        }
+
+        private void BtnShowMore_Click(object sender, EventArgs e)
+        {
+            if (_isRandomMode) LoadMoreRandomIcons();
+            else LoadMoreResults();
+        }
+
+        private void Card_IconClicked(object sender, IconInfo icon)
+        {
+            Logger.Log($"Clicked: {icon.FilePath}");
+        }
+
+        private void ClearResults()
+        {
+            foreach (Control c in pnlResults.Controls)
+                if (c is IconCard card)
+                    card.IconClicked -= Card_IconClicked;
+
+            _currentResults = null;
+            _displayedCount = 0;
+            pnlResults.Controls.Clear();
+            btnShowMore.Visible = false;
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            Logger.Log("MainForm closing");
+            _iconService?.Dispose();
+            base.OnFormClosing(e);
+        }
+    }
+}
+----------------------------------------
+
+================================================================================
+================================================================================
+Файл: F:\!Evgeny\git\MyTools\csharp\IconFinder\IconFinder\Services\IconConverter.cs
+----------------------------------------
+﻿using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
+using SkiaSharp;
+
+namespace IconFinder.Services
+{
+    public static class IconConverter
+    {
+        public static byte[] ConvertToPng(byte[] sourceData)
+        {
+            using var skBitmap = SKBitmap.Decode(sourceData);
+            if (skBitmap == null) return null;
+            using var image = SKImage.FromBitmap(skBitmap);
+            using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+            return data.ToArray();
+        }
+
+        public static byte[] ConvertToIco(byte[] sourceData)
+        {
+            using var skBitmap = SKBitmap.Decode(sourceData);
+            if (skBitmap == null) return null;
+
+            var sizes = new[] { 256, 128, 64, 48, 32, 16 };
+            using var ms = new MemoryStream();
+            using var writer = new BinaryWriter(ms);
+
+            writer.Write((short)0);
+            writer.Write((short)1);
+            writer.Write((short)sizes.Length);
+
+            var images = new byte[sizes.Length][];
+            var offsets = new int[sizes.Length];
+            int offset = 6 + 16 * sizes.Length;
+
+            for (int i = 0; i < sizes.Length; i++)
+            {
+                var size = Math.Min(sizes[i], Math.Min(skBitmap.Width, skBitmap.Height));
+                using var resized = skBitmap.Resize(new SKImageInfo(size, size), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
+                using var image = SKImage.FromBitmap(resized);
+                using var pngData = image.Encode(SKEncodedImageFormat.Png, 100);
+                images[i] = pngData.ToArray();
+                offsets[i] = offset;
+                offset += images[i].Length;
+            }
+
+            for (int i = 0; i < sizes.Length; i++)
+            {
+                var size = Math.Min(sizes[i], Math.Min(skBitmap.Width, skBitmap.Height));
+                writer.Write((byte)size);
+                writer.Write((byte)size);
+                writer.Write((byte)0);
+                writer.Write((byte)0);
+                writer.Write((short)0);
+                writer.Write((short)32);
+                writer.Write(images[i].Length);
+                writer.Write(offsets[i]);
+            }
+
+            foreach (var img in images) writer.Write(img);
+            return ms.ToArray();
+        }
+
+        public static byte[] ConvertToWebp(byte[] sourceData)
+        {
+            using var skBitmap = SKBitmap.Decode(sourceData);
+            if (skBitmap == null) return null;
+            using var image = SKImage.FromBitmap(skBitmap);
+            using var data = image.Encode(SKEncodedImageFormat.Webp, 90);
+            return data.ToArray();
+        }
+
+        public static byte[] ConvertTo(byte[] sourceData, string targetFormat) => targetFormat.ToLower() switch
+        {
+            ".png" => ConvertToPng(sourceData),
+            ".ico" => ConvertToIco(sourceData),
+            ".webp" => ConvertToWebp(sourceData),
+            _ => sourceData
+        };
+    }
+}
+----------------------------------------
+
+================================================================================
+================================================================================
+Файл: F:\!Evgeny\git\MyTools\csharp\IconFinder\IconFinder\Services\IconInfo.cs
+----------------------------------------
+﻿namespace IconFinder.Services
+{
+    public class IconInfo
+    {
+        public string FilePath { get; set; }
+        public long Offset { get; set; }
+        public int Size { get; set; }
+    }
+}
+----------------------------------------
+
+================================================================================
+================================================================================
+Файл: F:\!Evgeny\git\MyTools\csharp\IconFinder\IconFinder\Services\IconService.cs
+----------------------------------------
+﻿using Microsoft.Data.Sqlite;
+using System;
+using System.Collections.Generic;
+using System.Data.SQLite;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
+using System.Text;
+
+namespace IconFinder.Services
+{
+    public class IconInfo
+    {
+        public string FilePath { get; set; }
+        public long Offset { get; set; }
+        public int SizeCompressed { get; set; }
+        public int SizeOriginal { get; set; }
+        public int Compression { get; set; }
+    }
+
+    public class TocEntry
+    {
+        public long Offset { get; set; }
+        public int SizeCompressed { get; set; }
+        public int SizeOriginal { get; set; }
+        public int Compression { get; set; }
+        public byte[] SharedPrefix { get; set; }
+    }
+
+    public class IconService : IDisposable
+    {
+        private const int COMPRESSION_NONE = 0;
+        private const int COMPRESSION_ZLIB = 1;
+        private const int COMPRESSION_BROTLI = 2;
+        private const int COMPRESSION_SHARED_BROTLI = 3;
+        private const int COMPRESSION_SHARED_ZLIB = 4;
+
+        private readonly string _dbPath;
+        private readonly string _datPath;
+        private Dictionary<string, TocEntry> _toc;
+        private List<string> _allPaths;
+        private Random _random = new();
+        private FileStream _dataStream;
+
+        public int TotalCount => _toc?.Count ?? 0;
+
+        public IconService(string dbPath, string datPath)
+        {
+            _dbPath = Path.GetFullPath(dbPath);
+            _datPath = Path.GetFullPath(datPath);
+            Logger.Log($"IconService init: db={_dbPath}, dat={_datPath}");
+            _dataStream = new FileStream(_datPath, FileMode.Open, FileAccess.Read, FileShare.Read, 16 * 1024 * 1024);
+            LoadToc();
+        }
+
+        private void LoadToc()
+        {
+            _toc = new(StringComparer.OrdinalIgnoreCase);
+            _allPaths = new();
+
+            // MAGIC: 4 байта "ICN4"
+            var magic = new byte[4];
+            _dataStream.ReadExactly(magic, 0, 4);
+            if (Encoding.ASCII.GetString(magic) != "ICN4")
+                throw new InvalidDataException($"Invalid MAGIC: expected ICN4, got {Encoding.ASCII.GetString(magic)}");
+
+            // header: count(4) + data_start(8) + prefix_len(2)
+            Span<byte> header = stackalloc byte[14];
+            _dataStream.ReadExactly(header);
+            var count = BitConverter.ToUInt32(header[..4]);
+            var dataStart = BitConverter.ToUInt64(header.Slice(4, 8));
+            var prefixLen = BitConverter.ToUInt16(header.Slice(12, 2));
+
+            Logger.Log($"Entries: {count}, data_start: {dataStart}, prefix_len: {prefixLen}");
+
+            // Shared prefix
+            byte[] sharedPrefix = null;
+            if (prefixLen > 0)
+            {
+                sharedPrefix = new byte[prefixLen];
+                _dataStream.ReadExactly(sharedPrefix, 0, prefixLen);
+                Logger.Log($"Shared prefix loaded: {prefixLen} bytes");
+            }
+
+            // Оглавление
+            for (int i = 0; i < count; i++)
+            {
+                var pathLen = ReadUInt16();
+                var path = ReadString(pathLen);
+                var offset = ReadInt64();
+                var sizeCompressed = ReadInt32();
+                var sizeOriginal = ReadInt32();
+                var compression = ReadByte();
+
+                var normalizedPath = NormalizePath(path);
+                _toc[normalizedPath] = new TocEntry
+                {
+                    Offset = offset,
+                    SizeCompressed = sizeCompressed,
+                    SizeOriginal = sizeOriginal,
+                    Compression = compression,
+                    SharedPrefix = sharedPrefix
+                };
+                _allPaths.Add(normalizedPath);
+            }
+
+            Logger.Log($"TOC loaded: {_toc.Count} entries");
+        }
+
+        private ushort ReadUInt16()
+        {
+            Span<byte> buf = stackalloc byte[2];
+            _dataStream.ReadExactly(buf);
+            return BitConverter.ToUInt16(buf);
+        }
+
+        private uint ReadUInt32()
+        {
+            Span<byte> buf = stackalloc byte[4];
+            _dataStream.ReadExactly(buf);
+            return BitConverter.ToUInt32(buf);
+        }
+
+        private int ReadInt32()
+        {
+            Span<byte> buf = stackalloc byte[4];
+            _dataStream.ReadExactly(buf);
+            return BitConverter.ToInt32(buf);
+        }
+
+        private long ReadInt64()
+        {
+            Span<byte> buf = stackalloc byte[8];
+            _dataStream.ReadExactly(buf);
+            return BitConverter.ToInt64(buf);
+        }
+
+        private byte ReadByte()
+        {
+            var b = _dataStream.ReadByte();
+            if (b == -1) throw new EndOfStreamException();
+            return (byte)b;
+        }
+
+        private string ReadString(int length)
+        {
+            Span<byte> buf = length <= 256 ? stackalloc byte[length] : new byte[length];
+            _dataStream.ReadExactly(buf);
+            return Encoding.UTF8.GetString(buf);
+        }
+
+        private static string NormalizePath(string path)
+        {
+            if (path.StartsWith("icons/", StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith("icons\\", StringComparison.OrdinalIgnoreCase))
+                path = path[6..];
+            return path.Replace('\\', '/');
+        }
+
+        public List<IconInfo> Search(string query, int limit = 5000, string mode = "wide")
+        {
+            var results = new List<IconInfo>();
+            var words = query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (words.Length == 0) return results;
+
+            using var conn = new SqliteConnection($"Data Source={_dbPath}");
+            conn.Open();
+
+            string ftsQuery;
+            if (mode == "exact")
+            {
+                ftsQuery = string.Join(" OR ", words.Select(w => $"icon_tags: {w}"));
+            }
+            else
+            {
+                ftsQuery = string.Join(" OR ", words);
+            }
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = @"
+                SELECT i.filepath 
+                FROM icons_fts f 
+                JOIN icons i ON f.rowid = i.id 
+                WHERE icons_fts MATCH @query 
+                LIMIT @limit";
+            cmd.Parameters.AddWithValue("@query", ftsQuery);
+            cmd.Parameters.AddWithValue("@limit", limit);
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var normalizedPath = NormalizePath(reader.GetString(0));
+                if (_toc.TryGetValue(normalizedPath, out var entry))
+                    results.Add(new IconInfo
+                    {
+                        FilePath = normalizedPath,
+                        Offset = entry.Offset,
+                        SizeCompressed = entry.SizeCompressed,
+                        SizeOriginal = entry.SizeOriginal,
+                        Compression = entry.Compression
+                    });
+            }
+
+            Logger.Log($"Search '{query}' [{mode}]: {results.Count} results");
+            return results;
+        }
+
+        public List<IconInfo> GetRandomIcons(int count = 30)
+        {
+            var results = new List<IconInfo>();
+            var indices = new HashSet<int>();
+            while (results.Count < count && indices.Count < _allPaths.Count)
+            {
+                var idx = _random.Next(_allPaths.Count);
+                if (indices.Add(idx) && _toc.TryGetValue(_allPaths[idx], out var entry))
+                    results.Add(new IconInfo
+                    {
+                        FilePath = _allPaths[idx],
+                        Offset = entry.Offset,
+                        SizeCompressed = entry.SizeCompressed,
+                        SizeOriginal = entry.SizeOriginal,
+                        Compression = entry.Compression
+                    });
+            }
+            return results;
+        }
+
+        public byte[] GetIconData(string path)
+        {
+            path = NormalizePath(path);
+            if (!_toc.TryGetValue(path, out var entry)) return null;
+
+            byte[] compressed;
+            lock (_dataStream)
+            {
+                compressed = new byte[entry.SizeCompressed];
+                _dataStream.Seek(entry.Offset, SeekOrigin.Begin);
+                _dataStream.ReadExactly(compressed, 0, entry.SizeCompressed);
+            }
+
+            return Decompress(compressed, entry);
+        }
+
+        public byte[] GetIconDataRaw(string path)
+        {
+            // Возвращает сжатые данные как есть (без распаковки)
+            path = NormalizePath(path);
+            if (!_toc.TryGetValue(path, out var entry)) return null;
+
+            lock (_dataStream)
+            {
+                var data = new byte[entry.SizeCompressed];
+                _dataStream.Seek(entry.Offset, SeekOrigin.Begin);
+                _dataStream.ReadExactly(data, 0, entry.SizeCompressed);
+                return data;
+            }
+        }
+
+        private byte[] Decompress(byte[] data, TocEntry entry)
+        {
+            switch (entry.Compression)
+            {
+                case COMPRESSION_NONE:
+                    return data;
+
+                case COMPRESSION_ZLIB:
+                    return ZlibDecompress(data);
+
+                case COMPRESSION_BROTLI:
+                    return BrotliDecompress(data);
+
+                case COMPRESSION_SHARED_BROTLI:
+                    return Concat(entry.SharedPrefix, BrotliDecompress(data));
+
+                case COMPRESSION_SHARED_ZLIB:
+                    return Concat(entry.SharedPrefix, ZlibDecompress(data));
+
+                default:
+                    throw new InvalidDataException($"Unknown compression method: {entry.Compression}");
+            }
+        }
+
+        private static byte[] ZlibDecompress(byte[] data)
+        {
+            // Zlib: первые 2 байта — заголовок, затем deflate
+            if (data.Length < 2)
+                throw new InvalidDataException("Zlib data too short");
+
+            using var input = new MemoryStream(data, 2, data.Length - 2);
+            using var output = new MemoryStream();
+            using var deflate = new DeflateStream(input, CompressionMode.Decompress);
+            deflate.CopyTo(output);
+            return output.ToArray();
+        }
+
+        private static byte[] BrotliDecompress(byte[] data)
+        {
+            using var input = new MemoryStream(data);
+            using var output = new MemoryStream();
+            using var brotli = new BrotliStream(input, CompressionMode.Decompress);
+            brotli.CopyTo(output);
+            return output.ToArray();
+        }
+
+        private static byte[] Concat(byte[] a, byte[] b)
+        {
+            var result = new byte[a.Length + b.Length];
+            Buffer.BlockCopy(a, 0, result, 0, a.Length);
+            Buffer.BlockCopy(b, 0, result, a.Length, b.Length);
+            return result;
+        }
+
+        public bool Exists(string path)
+        {
+            return _toc.ContainsKey(NormalizePath(path));
+        }
+
+        public TocEntry GetEntry(string path)
+        {
+            path = NormalizePath(path);
+            return _toc.TryGetValue(path, out var entry) ? entry : null;
+        }
+
+        public void Dispose()
+        {
+            Logger.Log("IconService disposed");
+            _dataStream?.Dispose();
+        }
+    }
+}
+----------------------------------------
+
+================================================================================
+================================================================================
+Файл: F:\!Evgeny\git\MyTools\csharp\IconFinder\IconFinder\Services\Logger.cs
+----------------------------------------
+﻿using System;
+using System.IO;
+
+namespace IconFinder.Services
+{
+    public static class Logger
+    {
+        private static readonly string LogPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "iconfinder.log");
+        private static readonly object _lock = new();
+
+        static Logger()
+        {
+            File.WriteAllText(LogPath, $"=== IconFinder Log Started: {DateTime.Now} ==={Environment.NewLine}");
+        }
+
+        public static void Log(string message)
+        {
+            lock (_lock)
+            {
+                var line = $"[{DateTime.Now:HH:mm:ss.fff}] {message}{Environment.NewLine}";
+                File.AppendAllText(LogPath, line);
+                System.Diagnostics.Debug.Write(line);
+            }
+        }
+    }
+}
+----------------------------------------
+
+================================================================================
+================================================================================
+Файл: F:\!Evgeny\git\MyTools\csharp\IconFinder\IconFinder\Services\ThumbnailCache.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Concurrent;
+using System.Drawing;
+using System.IO;
+using SkiaSharp;
+
+namespace IconFinder.Services
+{
+    public class ThumbnailCache : IDisposable
+    {
+        private readonly ConcurrentDictionary<string, Image> _cache = new();
+        private readonly IconService _iconService;
+        private readonly int _maxCachedImages = 200;
+        private readonly int _thumbnailSize = 64;
+
+        public ThumbnailCache(IconService iconService)
+        {
+            _iconService = iconService;
+        }
+
+        public Image GetThumbnail(string path)
+        {
+            if (_cache.TryGetValue(path, out var cached))
+                return cached;
+
+            var image = LoadThumbnail(path);
+            if (image == null) return null;
+
+            if (_cache.Count >= _maxCachedImages)
+            {
+                foreach (var key in _cache.Keys)
+                {
+                    if (_cache.TryRemove(key, out var old))
+                    {
+                        old?.Dispose();
+                        break;
+                    }
+                }
+            }
+
+            _cache[path] = image;
+            return image;
+        }
+
+        private Image LoadThumbnail(string path)
+        {
+            try
+            {
+                var data = _iconService.GetIconData(path);
+                if (data == null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"No data: {path}");
+                    return null;
+                }
+
+                using var original = SKBitmap.Decode(data);
+                if (original == null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Cannot decode: {path}");
+                    return null;
+                }
+
+                var scale = Math.Min(
+                    (float)_thumbnailSize / original.Width,
+                    (float)_thumbnailSize / original.Height
+                );
+
+                var newWidth = Math.Max(1, (int)(original.Width * scale));
+                var newHeight = Math.Max(1, (int)(original.Height * scale));
+
+                using var resized = original.Resize(
+                    new SKImageInfo(newWidth, newHeight),
+                    new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear)
+                );
+
+                if (resized == null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Cannot resize: {path}");
+                    return null;
+                }
+
+                using var image = SKImage.FromBitmap(resized);
+                if (image == null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Cannot create SKImage: {path}");
+                    return null;
+                }
+
+                using var pngData = image.Encode(SKEncodedImageFormat.Png, 80);
+                if (pngData == null || pngData.Size == 0)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Cannot encode PNG: {path}");
+                    return null;
+                }
+
+                using var ms = new MemoryStream(pngData.ToArray());
+                var bitmap = new Bitmap(ms);
+
+                System.Diagnostics.Debug.WriteLine($"OK: {path} ({bitmap.Width}x{bitmap.Height})");
+                return bitmap;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error loading {path}: {ex.Message}");
+                return null;
+            }
+        }
+
+        public void Dispose()
+        {
+            foreach (var image in _cache.Values)
+                image?.Dispose();
+            _cache.Clear();
+        }
+    }
+}
+----------------------------------------
+
+================================================================================

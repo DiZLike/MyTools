@@ -47,63 +47,70 @@ namespace IconFinder.Services
             try
             {
                 var data = _iconService.GetIconData(path);
-                if (data == null)
-                {
-                    System.Diagnostics.Debug.WriteLine($"No data: {path}");
-                    return null;
-                }
+                if (data == null) return null;
 
-                using var original = SKBitmap.Decode(data);
-                if (original == null)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Cannot decode: {path}");
-                    return null;
-                }
+                var ext = Path.GetExtension(path).ToLower();
 
-                var scale = Math.Min(
-                    (float)_thumbnailSize / original.Width,
-                    (float)_thumbnailSize / original.Height
-                );
-
-                var newWidth = Math.Max(1, (int)(original.Width * scale));
-                var newHeight = Math.Max(1, (int)(original.Height * scale));
-
-                using var resized = original.Resize(
-                    new SKImageInfo(newWidth, newHeight),
-                    new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear)
-                );
-
-                if (resized == null)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Cannot resize: {path}");
-                    return null;
-                }
-
-                using var image = SKImage.FromBitmap(resized);
-                if (image == null)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Cannot create SKImage: {path}");
-                    return null;
-                }
-
-                using var pngData = image.Encode(SKEncodedImageFormat.Png, 80);
-                if (pngData == null || pngData.Size == 0)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Cannot encode PNG: {path}");
-                    return null;
-                }
-
-                using var ms = new MemoryStream(pngData.ToArray());
-                var bitmap = new Bitmap(ms);
-
-                System.Diagnostics.Debug.WriteLine($"OK: {path} ({bitmap.Width}x{bitmap.Height})");
-                return bitmap;
+                if (ext == ".svg")
+                    return LoadSvgThumbnail(data);
+                else
+                    return LoadRasterThumbnail(data);
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error loading {path}: {ex.Message}");
                 return null;
             }
+        }
+
+        private Image LoadSvgThumbnail(byte[] data)
+        {
+            using var svg = new Svg.Skia.SKSvg();
+            using var stream = new MemoryStream(data);
+            var picture = svg.Load(stream);
+            if (picture == null) return null;
+
+            var scale = Math.Min(
+                (float)_thumbnailSize / picture.CullRect.Width,
+                (float)_thumbnailSize / picture.CullRect.Height);
+
+            var w = Math.Max(1, (int)(picture.CullRect.Width * scale));
+            var h = Math.Max(1, (int)(picture.CullRect.Height * scale));
+
+            using var surface = SKSurface.Create(new SKImageInfo(w, h));
+            var canvas = surface.Canvas;
+            canvas.Clear(SKColors.Transparent);
+            canvas.Scale(scale);
+            canvas.DrawPicture(picture);
+
+            using var image = surface.Snapshot();
+            using var pngData = image.Encode(SKEncodedImageFormat.Png, 80);
+            using var ms = new MemoryStream(pngData.ToArray());
+            return new Bitmap(ms);
+        }
+
+        private Image LoadRasterThumbnail(byte[] data)
+        {
+            using var original = SKBitmap.Decode(data);
+            if (original == null) return null;
+
+            var scale = Math.Min(
+                (float)_thumbnailSize / original.Width,
+                (float)_thumbnailSize / original.Height);
+
+            var newWidth = Math.Max(1, (int)(original.Width * scale));
+            var newHeight = Math.Max(1, (int)(original.Height * scale));
+
+            using var resized = original.Resize(
+                new SKImageInfo(newWidth, newHeight),
+                new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
+
+            if (resized == null) return null;
+
+            using var image = SKImage.FromBitmap(resized);
+            using var pngData = image.Encode(SKEncodedImageFormat.Png, 80);
+            using var ms = new MemoryStream(pngData.ToArray());
+            return new Bitmap(ms);
         }
 
         public void Dispose()

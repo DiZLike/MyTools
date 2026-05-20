@@ -1,6 +1,4 @@
 ﻿using System;
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.IO;
 using SkiaSharp;
 
@@ -10,16 +8,43 @@ namespace IconFinder.Services
     {
         public static byte[] ConvertToPng(byte[] sourceData)
         {
+            if (IsSvg(sourceData))
+            {
+                using var svg = new Svg.Skia.SKSvg();
+                using var stream = new MemoryStream(sourceData);
+                var picture = svg.Load(stream);
+                if (picture == null) return null;
+
+                var w = (int)picture.CullRect.Width;
+                var h = (int)picture.CullRect.Height;
+                using var surface = SKSurface.Create(new SKImageInfo(w, h));
+                surface.Canvas.DrawPicture(picture);
+                using var snapshot = surface.Snapshot();
+                using var pngData = snapshot.Encode(SKEncodedImageFormat.Png, 100);
+                return pngData.ToArray();
+            }
+
             using var skBitmap = SKBitmap.Decode(sourceData);
             if (skBitmap == null) return null;
-            using var image = SKImage.FromBitmap(skBitmap);
-            using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+            using var skImage = SKImage.FromBitmap(skBitmap);
+            using var data = skImage.Encode(SKEncodedImageFormat.Png, 100);
             return data.ToArray();
         }
 
         public static byte[] ConvertToIco(byte[] sourceData)
         {
-            using var skBitmap = SKBitmap.Decode(sourceData);
+            byte[] rasterData;
+            if (IsSvg(sourceData))
+            {
+                rasterData = ConvertToPng(sourceData);
+                if (rasterData == null) return null;
+            }
+            else
+            {
+                rasterData = sourceData;
+            }
+
+            using var skBitmap = SKBitmap.Decode(rasterData);
             if (skBitmap == null) return null;
 
             var sizes = new[] { 256, 128, 64, 48, 32, 16 };
@@ -38,8 +63,8 @@ namespace IconFinder.Services
             {
                 var size = Math.Min(sizes[i], Math.Min(skBitmap.Width, skBitmap.Height));
                 using var resized = skBitmap.Resize(new SKImageInfo(size, size), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
-                using var image = SKImage.FromBitmap(resized);
-                using var pngData = image.Encode(SKEncodedImageFormat.Png, 100);
+                using var icoImage = SKImage.FromBitmap(resized);
+                using var pngData = icoImage.Encode(SKEncodedImageFormat.Png, 100);
                 images[i] = pngData.ToArray();
                 offsets[i] = offset;
                 offset += images[i].Length;
@@ -64,11 +89,18 @@ namespace IconFinder.Services
 
         public static byte[] ConvertToWebp(byte[] sourceData)
         {
+            if (IsSvg(sourceData))
+            {
+                var pngData = ConvertToPng(sourceData);
+                if (pngData == null) return null;
+                sourceData = pngData;
+            }
+
             using var skBitmap = SKBitmap.Decode(sourceData);
             if (skBitmap == null) return null;
-            using var image = SKImage.FromBitmap(skBitmap);
-            using var data = image.Encode(SKEncodedImageFormat.Webp, 90);
-            return data.ToArray();
+            using var skImage = SKImage.FromBitmap(skBitmap);
+            using var webpData = skImage.Encode(SKEncodedImageFormat.Webp, 90);
+            return webpData.ToArray();
         }
 
         public static byte[] ConvertTo(byte[] sourceData, string targetFormat) => targetFormat.ToLower() switch
@@ -78,5 +110,12 @@ namespace IconFinder.Services
             ".webp" => ConvertToWebp(sourceData),
             _ => sourceData
         };
+
+        private static bool IsSvg(byte[] data)
+        {
+            if (data.Length < 4) return false;
+            return (data[0] == '<' && data[1] == 's' && data[2] == 'v' && data[3] == 'g')
+                || (data[0] == '<' && data[1] == '?' && data[2] == 'x' && data[3] == 'm');
+        }
     }
 }
