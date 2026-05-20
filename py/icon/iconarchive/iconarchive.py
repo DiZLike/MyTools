@@ -13,6 +13,12 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock, Event
 
+from rich.console import Console
+from rich.live import Live
+from rich.table import Table
+from rich.panel import Panel
+from rich.text import Text
+
 # === НАСТРОЙКИ ===
 BASE_URL = "https://www.iconarchive.com"
 DOWNLOAD_DIR = "downloads"
@@ -21,7 +27,7 @@ PACKS_INDEX_FILE = "packs_index.json"
 FAILED_FILE = "failed_icons.log"
 DELAY_MIN = 0.1
 DELAY_MAX = 0.3
-MAX_WORKERS = 70
+MAX_WORKERS = 200
 FORCE_RECHECK_ERRORS = True
 MAX_RETRY_ATTEMPTS = 3
 
@@ -42,8 +48,7 @@ shutdown_event = Event()
 save_lock = Lock()
 log_lock = Lock()
 
-# Для компактного вывода
-console_lock = Lock()
+# Статус
 last_error_msg = ""
 current_icon_msg = ""
 pack_progress_msg = ""
@@ -53,50 +58,39 @@ download_start_time = time.time()
 downloaded_count = 0
 downloaded_lock = Lock()
 
-# === УТИЛИТЫ ===
+# Rich
+console = Console()
 
-def log(msg):
-    """Обычный лог (для важных сообщений)"""
-    if shutdown_event.is_set():
-        return
-    with print_lock:
-        sys.stdout.write("\033[K")
-        print(f"\n{msg}", flush=True)
-        draw_status()
+def progress_bar_compact(current, total, width=20):
+    if total == 0:
+        return "[" + "░" * width + "]"
+    filled = int(width * current / total)
+    return "[" + "█" * filled + "░" * (width - filled) + "]"
 
-def draw_status():
-    """Рисует компактный статус в 5 строк"""
-    with console_lock:
-        lines = [
-            f"┌─ Файл: {current_icon_msg}",
-            f"├─ Пак:  {pack_progress_msg}",
-            f"├─ Всего: {global_progress_msg}",
-            f"├─ Скорость: {speed_msg}",
-            f"└─ Ошибка: {last_error_msg}"
-        ]
-        
-        for line in lines:
-            sys.stdout.write("\033[K")
-            print(line, flush=True)
-        
-        sys.stdout.write(f"\033[5A")
+def generate_status():
+    """Генерирует таблицу статуса для Rich"""
+    table = Table.grid(padding=(0, 1))
+    table.add_row(f"[bold]┌─[/] Файл: {current_icon_msg}")
+    table.add_row(f"[bold]├─[/] Пак:  {pack_progress_msg}")
+    table.add_row(f"[bold]├─[/] Всего: {global_progress_msg}")
+    table.add_row(f"[bold]├─[/] Скорость: {speed_msg}")
+    error_text = last_error_msg if last_error_msg else ""
+    table.add_row(f"[bold]└─[/] Ошибка: [red]{error_text}[/red]")
+    return Panel(table, title="[bold cyan]📦 IconArchive Parser[/]", border_style="cyan")
 
 def update_current_icon(icon_name, status="⏳"):
     global current_icon_msg
     current_icon_msg = f"{status} {icon_name[:80]}"
-    draw_status()
 
 def update_pack_progress(current, total, pack_name):
     global pack_progress_msg
     pct = (current / total * 100) if total > 0 else 0
     bar = progress_bar_compact(current, total, 20)
     pack_progress_msg = f"{bar} {pct:.1f}% | {current}/{total} | {pack_name[:40]}"
-    draw_status()
 
 def update_global_progress(done_packs, total_packs, current_page, total_pages):
     global global_progress_msg
     global_progress_msg = f"Паков: {done_packs}/{total_packs} | Страница: {current_page}/{total_pages}"
-    draw_status()
 
 def update_speed():
     global speed_msg, download_start_time, downloaded_count
@@ -104,12 +98,17 @@ def update_speed():
     if elapsed > 0:
         speed = downloaded_count / (elapsed / 60)
         speed_msg = f"{speed:.1f} файлов/мин | Всего скачано: {downloaded_count}"
-    draw_status()
 
 def update_last_error(error_msg):
     global last_error_msg
     last_error_msg = error_msg[:80] if error_msg else ""
-    draw_status()
+
+def log(msg):
+    """Лог через Rich"""
+    if shutdown_event.is_set():
+        return
+    with print_lock:
+        console.log(msg)
 
 def log_error(error_type, url, details=""):
     """Логирует реальные ошибки в файл"""
@@ -120,12 +119,6 @@ def log_error(error_type, url, details=""):
                 f.write(f"{timestamp} | {error_type} | {url} | {details}\n")
         except:
             pass
-
-def progress_bar_compact(current, total, width=20):
-    if total == 0:
-        return "[" + "░" * width + "]"
-    filled = int(width * current / total)
-    return "[" + "█" * filled + "░" * (width - filled) + "]"
 
 def safe_save_json(data, filepath):
     with save_lock:
@@ -159,13 +152,11 @@ def load_json(filepath):
         backup_path = filepath + f".backup_{int(time.time())}"
         try:
             shutil.copy2(filepath, backup_path)
-            log(f"   Бэкап: {backup_path}")
         except:
             pass
         repaired = try_repair_json(filepath)
         if repaired is not None:
             return repaired
-        log(f"   Использую пустую структуру")
         return {}
     except Exception as e:
         log(f"❌ Ошибка чтения {filepath}: {e}")
@@ -179,7 +170,6 @@ def try_repair_json(filepath):
         repaired = re.sub(r',\s*]', ']', repaired)
         try:
             data = json.loads(repaired)
-            log(f"✓ Восстановлен (trailing commas)")
             safe_save_json(data, filepath)
             return data
         except:
@@ -189,19 +179,17 @@ def try_repair_json(filepath):
             partial = '\n'.join(lines[:i]) + '\n}'
             try:
                 data = json.loads(partial)
-                log(f"✓ Восстановлен частично (до строки {i})")
                 safe_save_json(data, filepath)
                 return data
             except:
                 continue
-    except Exception as e:
-        log(f"   Ошибка восстановления: {e}")
+    except:
+        pass
     return None
 
 def rebuild_progress_from_disk():
     log("🔄 Восстановление прогресса из папки downloads...")
     if not os.path.exists(DOWNLOAD_DIR):
-        log("   Папка downloads не найдена")
         return {}
     
     progress = {}
@@ -259,10 +247,8 @@ def rebuild_progress_from_disk():
                 "rebuilt_at": time.strftime("%Y-%m-%d %H:%M:%S")
             }
         
-        log(f"✓ Восстановлено {len(progress)} паков")
         if progress:
             safe_save_json(progress, PROGRESS_FILE)
-            log(f"✓ progress.json пересоздан")
         
         return progress
     except Exception as e:
@@ -283,8 +269,6 @@ def sleep():
 # === ОБРАБОТЧИКИ СИГНАЛОВ ===
 
 def signal_handler(signum, frame):
-    with print_lock:
-        sys.stdout.write("\033[K\n")
     log("⚠️ Получен сигнал остановки (Ctrl+C)")
     log("⏳ Завершаю текущие задачи...")
     shutdown_event.set()
@@ -336,7 +320,6 @@ def safe_get(url, retries=3):
     return None
 
 def download_file(url, filepath, referer):
-    """Скачивает файл иконки"""
     if shutdown_event.is_set():
         return False
     
@@ -511,7 +494,6 @@ def download_icon(icon_data):
     icon_url = icon_data['icon_url']
     icon_name = icon_data['icon_name']
     icons_dir = icon_data['icons_dir']
-    pack_url = icon_data['pack_url']
     icon_idx = icon_data['icon_idx']
     total_icons = icon_data['total_icons']
     pack_name = icon_data['pack_name']
@@ -582,12 +564,13 @@ def download_icon(icon_data):
         
         if download_file(download_url, filepath, icon_url):
             update_current_icon(f"{icon_name}{ext}", "✓")
+            update_pack_progress(icon_idx, total_icons, pack_name)
+            update_speed()
             return {
                 "name": icon_name,
                 "file": filename,
                 "tags": icon_info["tags"]
             }
-        # Не получилось - пробуем следующий формат (SVG->PNG это нормально)
     
     # Все форматы не удались
     update_current_icon(icon_name, "✗")
@@ -598,9 +581,9 @@ def download_icon(icon_data):
 
 # === ОБРАБОТКА ПАКА ===
 
-def process_pack(pack, pack_num, total_processed, packs_index, total_packs, current_page, total_pages):
+def process_pack(pack, pack_num, packs_index, live):
     if shutdown_event.is_set():
-        return
+        return False
     
     pack_url = pack["url"]
     pack_title = pack["title"]
@@ -608,20 +591,22 @@ def process_pack(pack, pack_num, total_processed, packs_index, total_packs, curr
     log(f"ПАК [{pack_num}] {pack_title}")
     
     progress = load_json(PROGRESS_FILE)
+    if not isinstance(progress, dict):
+        progress = {}
     
-    if pack_url in progress:
+    if pack_url in progress and isinstance(progress[pack_url], dict):
         pack_progress = progress[pack_url]
         status = pack_progress.get("status", "")
         
         if status == "done" and pack_progress.get("errors_count", 0) == 0:
             icons_total = pack_progress.get("icons_total", 0)
             log(f"  ✅ Уже готов ({icons_total} иконок)")
-            return
+            return True
         
         attempts = pack_progress.get("attempts", 0)
         if attempts >= MAX_RETRY_ATTEMPTS:
             log(f"  ⚠️ Превышено попыток ({MAX_RETRY_ATTEMPTS})")
-            return
+            return False
         
         if FORCE_RECHECK_ERRORS and status in ["done_with_errors", "error", "in_progress"]:
             errors_count = pack_progress.get("errors_count", 0)
@@ -630,28 +615,25 @@ def process_pack(pack, pack_num, total_processed, packs_index, total_packs, curr
             progress[pack_url]["attempts"] = attempts + 1
             safe_save_json(progress, PROGRESS_FILE)
     
-    if pack_url not in progress or progress[pack_url].get("status") == "retry":
-        if pack_url not in progress:
-            progress[pack_url] = {
-                "status": "in_progress",
-                "icons_downloaded": 0,
-                "errors_count": 0,
-                "attempts": 1,
-                "first_attempt": time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-        else:
-            progress[pack_url]["status"] = "in_progress"
+    if pack_url not in progress or not isinstance(progress.get(pack_url), dict) or progress[pack_url].get("status") == "retry":
+        progress[pack_url] = {
+            "status": "in_progress",
+            "icons_downloaded": 0,
+            "errors_count": 0,
+            "attempts": 1,
+            "first_attempt": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
         safe_save_json(progress, PROGRESS_FILE)
     
     if shutdown_event.is_set():
-        return
+        return False
     
     html = safe_get(pack_url)
     if not html:
         progress[pack_url]["status"] = "error"
         safe_save_json(progress, PROGRESS_FILE)
         log_error("PACK_PAGE_ERROR", pack_url, f"Пак: {pack_title}")
-        return
+        return False
     
     pack_dirname = safe_filename(pack_title)
     pack_dir = os.path.join(DOWNLOAD_DIR, pack_dirname)
@@ -670,13 +652,12 @@ def process_pack(pack, pack_num, total_processed, packs_index, total_packs, curr
             })
             safe_save_json(packs_index, PACKS_INDEX_FILE)
     
-    # Собираем все иконки пака
     all_icons = []
     page_num = 1
     
     while True:
         if shutdown_event.is_set():
-            return
+            return False
         
         if page_num == 1:
             page_html = html
@@ -705,12 +686,11 @@ def process_pack(pack, pack_num, total_processed, packs_index, total_packs, curr
         progress[pack_url]["status"] = "empty"
         safe_save_json(progress, PROGRESS_FILE)
         log(f"  ⚠️ Иконки не найдены")
-        return
+        return False
     
     icons_dir = os.path.join(pack_dir, "icons")
     os.makedirs(icons_dir, exist_ok=True)
     
-    # Подготавливаем задачи
     icon_tasks = []
     skipped = 0
     
@@ -742,20 +722,23 @@ def process_pack(pack, pack_num, total_processed, packs_index, total_packs, curr
         log(f"  Уже скачано: {skipped}, осталось: {len(icon_tasks)}")
     
     if not icon_tasks:
-        progress[pack_url]["status"] = "done"
-        progress[pack_url]["icons_total"] = len(all_icons)
-        progress[pack_url]["icons_downloaded"] = len(all_icons)
-        progress[pack_url]["errors_count"] = 0
+        progress[pack_url] = {
+            "status": "done",
+            "icons_total": len(all_icons),
+            "icons_downloaded": len(all_icons),
+            "errors_count": 0,
+            "completed_at": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
         safe_save_json(progress, PROGRESS_FILE)
         update_meta_with_icons(meta_file, pack_url)
-        return
+        return True
     
-    # Параллельная загрузка
     downloaded = skipped
     failed = 0
     icons_info = []
     
     update_pack_progress(downloaded, len(all_icons), pack_title)
+    live.update(generate_status())
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = []
@@ -781,27 +764,46 @@ def process_pack(pack, pack_num, total_processed, packs_index, total_packs, curr
                 log_error("THREAD_ERROR", pack_url, str(e)[:100])
                 failed += 1
             
+            progress = load_json(PROGRESS_FILE)
+            if not isinstance(progress, dict):
+                progress = {}
+            if pack_url not in progress or not isinstance(progress.get(pack_url), dict):
+                progress[pack_url] = {}
             progress[pack_url]["icons_downloaded"] = downloaded
             progress[pack_url]["errors_count"] = failed + (len(all_icons) - downloaded - failed)
             safe_save_json(progress, PROGRESS_FILE)
             
             update_pack_progress(downloaded + failed, len(all_icons), pack_title)
             update_speed()
+            
+            # Обновляем Live каждые 10 иконок
+            if (downloaded + failed) % 10 == 0:
+                live.update(generate_status())
     
     update_meta_with_icons(meta_file, pack_url, icons_info)
     
     total_errors = len(all_icons) - downloaded
-    progress[pack_url]["status"] = "done" if total_errors == 0 else "done_with_errors"
-    progress[pack_url]["icons_total"] = len(all_icons)
-    progress[pack_url]["icons_downloaded"] = downloaded
-    progress[pack_url]["errors_count"] = total_errors
-    progress[pack_url]["completed_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    
+    progress = load_json(PROGRESS_FILE)
+    if not isinstance(progress, dict):
+        progress = {}
+    progress[pack_url] = {
+        "status": "done" if total_errors == 0 else "done_with_errors",
+        "icons_total": len(all_icons),
+        "icons_downloaded": downloaded,
+        "errors_count": total_errors,
+        "completed_at": time.strftime("%Y-%m-%d %H:%M:%S")
+    }
     safe_save_json(progress, PROGRESS_FILE)
+    
+    live.update(generate_status())
     
     if total_errors == 0:
         log(f"  ✅ {downloaded}/{len(all_icons)}")
+        return True
     else:
         log(f"  ⚠️ {downloaded}/{len(all_icons)} (ошибок: {total_errors})")
+        return False
 
 def update_meta_with_icons(meta_file, pack_url, new_icons_info=None):
     if not os.path.exists(meta_file):
@@ -848,20 +850,26 @@ def update_meta_with_icons(meta_file, pack_url, new_icons_info=None):
 # === ГЛАВНАЯ ===
 
 def main():
-    print("\n" * 5)
-    
     log("=" * 60)
     log("🚀 ПАРСЕР ИКОНОК С ICONARCHIVE.COM")
     log(f"📋 Приоритет: SVG -> PNG 512px -> PNG")
     log(f"🔧 Потоков: {MAX_WORKERS} | Лог ошибок: {FAILED_FILE}")
     log("=" * 60)
     
-    progress = load_json(PROGRESS_FILE)
-    if not progress:
-        progress = rebuild_progress_from_disk()
+    update_global_progress(0, 0, 0, 0)
     
-    done_packs = sum(1 for p in progress.values()
-                    if p.get("status") == "done" and p.get("errors_count", 0) == 0)
+    progress = load_json(PROGRESS_FILE)
+    if not isinstance(progress, dict):
+        progress = {}
+    
+    if not progress or all(not isinstance(v, dict) for v in progress.values()):
+        log("⚠️ progress.json пуст или поврежден")
+        progress = rebuild_progress_from_disk()
+        if not isinstance(progress, dict):
+            progress = {}
+    
+    done_packs = sum(1 for v in progress.values() 
+                    if isinstance(v, dict) and v.get("status") == "done" and v.get("errors_count", 0) == 0)
     
     packs_index = load_json(PACKS_INDEX_FILE)
     if not isinstance(packs_index, list):
@@ -880,63 +888,78 @@ def main():
     pack_num = 0
     total_processed = done_packs
     
-    try:
-        for page in range(start_page, total_pages + 1):
-            if shutdown_event.is_set():
-                break
-            
-            log(f"📑 СТРАНИЦА {page}/{total_pages}")
-            
-            if page == 1:
-                url = "https://www.iconarchive.com/news.html"
-            else:
-                url = f"https://www.iconarchive.com/news.{page}.html"
-            
-            html = safe_get(url)
-            if not html:
-                log_error("PAGE_ERROR", url, f"Страница {page}/{total_pages}")
-                continue
-            
-            packs = parse_packs_from_page(html)
-            log(f"📦 Паков: {len(packs)}")
-            
-            update_global_progress(total_processed, 2517, page, total_pages)
-            
-            for pack in packs:
+    update_global_progress(total_processed, 2517, start_page, total_pages)
+    
+    with Live(generate_status(), console=console, refresh_per_second=4) as live:
+        try:
+            for page in range(start_page, total_pages + 1):
                 if shutdown_event.is_set():
                     break
                 
-                pack_num += 1
-                process_pack(pack, pack_num, total_processed, packs_index, 2517, page, total_pages)
+                log(f"📑 СТРАНИЦА {page}/{total_pages}")
                 
-                if pack["url"] in progress and progress[pack["url"]].get("status") == "done":
-                    total_processed += 1
-                    update_global_progress(total_processed, 2517, page, total_pages)
-            
-            progress["__current_page__"] = page
+                if page == 1:
+                    url = "https://www.iconarchive.com/news.html"
+                else:
+                    url = f"https://www.iconarchive.com/news.{page}.html"
+                
+                html = safe_get(url)
+                if not html:
+                    log_error("PAGE_ERROR", url, f"Страница {page}/{total_pages}")
+                    continue
+                
+                packs = parse_packs_from_page(html)
+                log(f"📦 Паков: {len(packs)}")
+                
+                update_global_progress(total_processed, 2517, page, total_pages)
+                live.update(generate_status())
+                
+                for pack in packs:
+                    if shutdown_event.is_set():
+                        break
+                    
+                    pack_num += 1
+                    success = process_pack(pack, pack_num, packs_index, live)
+                    
+                    if success:
+                        total_processed += 1
+                        update_global_progress(total_processed, 2517, page, total_pages)
+                        live.update(generate_status())
+                    
+                    progress = load_json(PROGRESS_FILE)
+                    if not isinstance(progress, dict):
+                        progress = {}
+                
+                progress["__current_page__"] = page
+                safe_save_json(progress, PROGRESS_FILE)
+                safe_save_json(packs_index, PACKS_INDEX_FILE)
+        
+        except KeyboardInterrupt:
+            log("⚠️ Прервано пользователем")
+        except Exception as e:
+            log(f"❌ Критическая ошибка: {e}")
+            log_error("CRITICAL_ERROR", "main()", str(e))
+        finally:
+            progress = load_json(PROGRESS_FILE)
+            if not isinstance(progress, dict):
+                progress = {}
             safe_save_json(progress, PROGRESS_FILE)
-    
-    except KeyboardInterrupt:
-        log("\n⚠️ Прервано пользователем")
-    except Exception as e:
-        log(f"\n❌ Критическая ошибка: {e}")
-        log_error("CRITICAL_ERROR", "main()", str(e))
-    finally:
-        safe_save_json(progress, PROGRESS_FILE)
-        safe_save_json(packs_index, PACKS_INDEX_FILE)
+            safe_save_json(packs_index, PACKS_INDEX_FILE)
     
     final_progress = load_json(PROGRESS_FILE)
+    if not isinstance(final_progress, dict):
+        final_progress = {}
     final_progress.pop("__current_page__", None)
     
-    final_done = sum(1 for p in final_progress.values()
-                    if p.get("status") == "done" and p.get("errors_count", 0) == 0)
-    final_errors = sum(1 for p in final_progress.values()
-                      if p.get("status") == "done_with_errors")
-    total_icons = sum(p.get("icons_total", 0) for p in final_progress.values())
-    total_downloaded = sum(p.get("icons_downloaded", 0) for p in final_progress.values())
+    final_done = sum(1 for v in final_progress.values()
+                    if isinstance(v, dict) and v.get("status") == "done" and v.get("errors_count", 0) == 0)
+    final_errors = sum(1 for v in final_progress.values()
+                      if isinstance(v, dict) and v.get("status") == "done_with_errors")
+    total_icons = sum(v.get("icons_total", 0) for v in final_progress.values() if isinstance(v, dict))
+    total_downloaded = sum(v.get("icons_downloaded", 0) for v in final_progress.values() if isinstance(v, dict))
     
-    log(f"\n{'='*60}")
-    log(f"🏁 ГОТОВО")
+    log("=" * 60)
+    log("🏁 ГОТОВО")
     log(f"✅ Паков: {final_done} | ⚠️ С ошибками: {final_errors}")
     if total_icons > 0:
         log(f"🎨 Иконок: {total_downloaded}/{total_icons} ({total_downloaded/total_icons*100:.1f}%)")
