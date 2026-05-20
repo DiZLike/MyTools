@@ -6,7 +6,9 @@ namespace IconFinder.Services
 {
     public static class IconConverter
     {
-        public static byte[] ConvertToPng(byte[] sourceData)
+        private const int DefaultSvgSize = 512;
+
+        public static byte[] ConvertToPng(byte[] sourceData, int? svgSize = null)
         {
             if (IsSvg(sourceData))
             {
@@ -15,10 +17,20 @@ namespace IconFinder.Services
                 var picture = svg.Load(stream);
                 if (picture == null) return null;
 
-                var w = (int)picture.CullRect.Width;
-                var h = (int)picture.CullRect.Height;
+                var targetSize = svgSize ?? DefaultSvgSize;
+                var scale = Math.Min(
+                    (float)targetSize / picture.CullRect.Width,
+                    (float)targetSize / picture.CullRect.Height);
+
+                var w = Math.Max(1, (int)(picture.CullRect.Width * scale));
+                var h = Math.Max(1, (int)(picture.CullRect.Height * scale));
+
                 using var surface = SKSurface.Create(new SKImageInfo(w, h));
-                surface.Canvas.DrawPicture(picture);
+                var canvas = surface.Canvas;
+                canvas.Clear(SKColors.Transparent);
+                canvas.Scale(scale);
+                canvas.DrawPicture(picture);
+
                 using var snapshot = surface.Snapshot();
                 using var pngData = snapshot.Encode(SKEncodedImageFormat.Png, 100);
                 return pngData.ToArray();
@@ -31,12 +43,12 @@ namespace IconFinder.Services
             return data.ToArray();
         }
 
-        public static byte[] ConvertToIco(byte[] sourceData)
+        public static byte[] ConvertToIco(byte[] sourceData, int? svgSize = null)
         {
             byte[] rasterData;
             if (IsSvg(sourceData))
             {
-                rasterData = ConvertToPng(sourceData);
+                rasterData = ConvertToPng(sourceData, svgSize);
                 if (rasterData == null) return null;
             }
             else
@@ -62,7 +74,12 @@ namespace IconFinder.Services
             for (int i = 0; i < sizes.Length; i++)
             {
                 var size = Math.Min(sizes[i], Math.Min(skBitmap.Width, skBitmap.Height));
-                using var resized = skBitmap.Resize(new SKImageInfo(size, size), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
+                using var resized = skBitmap.Resize(
+                    new SKImageInfo(size, size),
+                    new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
+
+                if (resized == null) continue;
+
                 using var icoImage = SKImage.FromBitmap(resized);
                 using var pngData = icoImage.Encode(SKEncodedImageFormat.Png, 100);
                 images[i] = pngData.ToArray();
@@ -72,6 +89,8 @@ namespace IconFinder.Services
 
             for (int i = 0; i < sizes.Length; i++)
             {
+                if (images[i] == null) continue;
+
                 var size = Math.Min(sizes[i], Math.Min(skBitmap.Width, skBitmap.Height));
                 writer.Write((byte)size);
                 writer.Write((byte)size);
@@ -83,15 +102,20 @@ namespace IconFinder.Services
                 writer.Write(offsets[i]);
             }
 
-            foreach (var img in images) writer.Write(img);
+            foreach (var img in images)
+            {
+                if (img != null)
+                    writer.Write(img);
+            }
+
             return ms.ToArray();
         }
 
-        public static byte[] ConvertToWebp(byte[] sourceData)
+        public static byte[] ConvertToWebp(byte[] sourceData, int? svgSize = null)
         {
             if (IsSvg(sourceData))
             {
-                var pngData = ConvertToPng(sourceData);
+                var pngData = ConvertToPng(sourceData, svgSize);
                 if (pngData == null) return null;
                 sourceData = pngData;
             }
@@ -103,11 +127,11 @@ namespace IconFinder.Services
             return webpData.ToArray();
         }
 
-        public static byte[] ConvertTo(byte[] sourceData, string targetFormat) => targetFormat.ToLower() switch
+        public static byte[] ConvertTo(byte[] sourceData, string targetFormat, int? svgSize = null) => targetFormat.ToLower() switch
         {
-            ".png" => ConvertToPng(sourceData),
-            ".ico" => ConvertToIco(sourceData),
-            ".webp" => ConvertToWebp(sourceData),
+            ".png" => ConvertToPng(sourceData, svgSize),
+            ".ico" => ConvertToIco(sourceData, svgSize),
+            ".webp" => ConvertToWebp(sourceData, svgSize),
             _ => sourceData
         };
 

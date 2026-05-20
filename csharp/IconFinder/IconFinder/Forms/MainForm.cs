@@ -67,7 +67,7 @@ namespace IconFinder.Forms
             }
 
             var result = MessageBox.Show(
-                "Для работы перевода необходимо распаковать файлы Python (≈500 МБ).\n" +
+                "Для работы перевода необходимо распаковать файлы Python.\n" +
                 "Это займёт 1-2 минуты и выполняется только один раз.\n\n" +
                 "Продолжить?",
                 "Первая настройка",
@@ -132,16 +132,18 @@ namespace IconFinder.Forms
             var started = await _ltService.StartAsync();
 
             lblStatus.Text = started
-                ? $"Загружено иконок: {_iconService?.TotalCount ?? 0:N0} | Перевод: ✓"
-                : $"Загружено иконок: {_iconService?.TotalCount ?? 0:N0} | Перевод: словарь";
+                ? $"Перевод: ✓"
+                : $"Перевод: словарь";
         }
 
         private void InitializeSearch()
         {
             try
             {
+                if (!File.Exists(@"Data\icons.db") || !File.Exists(@"Data\icons.dat"))
+                    throw new Exception("Отсутствуют файлы данных");
                 _iconService = new IconService(@"Data\icons.db", @"Data\icons.dat");
-                lblStatus.Text = $"Загружено иконок: {_iconService.TotalCount:N0}";
+                lblTotalIcons.Text = $"Загружено иконок: {_iconService.TotalCount:N0}";
                 Logger.Log($"Initialized: {_iconService.TotalCount} icons");
             }
             catch (Exception ex)
@@ -150,6 +152,8 @@ namespace IconFinder.Forms
                 lblStatus.Text = $"Ошибка: {ex.Message}";
                 MessageBox.Show($"Ошибка загрузки данных: {ex.Message}", "Ошибка",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
+                this.Close();
+                Application.Exit();
             }
 
             _searchTimer = new Timer { Interval = 300 };

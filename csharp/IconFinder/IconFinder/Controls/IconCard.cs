@@ -81,7 +81,6 @@ namespace IconFinder.Controls
         {
             var fileName = Path.GetFileName(_iconInfo.FilePath);
             var displayName = fileName.Length > 28 ? fileName[..25] + "..." : fileName;
-            var sizeStr = FormatSize(_iconInfo.SizeOriginal);
             lblName.Text = $"{displayName}";
         }
 
@@ -173,7 +172,6 @@ namespace IconFinder.Controls
         {
             if (!_isDragging) return;
 
-            // Начинаем drag если мышь сдвинулась достаточно
             if (Math.Abs(e.X - (picIcon.Width / 2)) > 5 || Math.Abs(e.Y - (picIcon.Height / 2)) > 5)
             {
                 _isDragging = false;
@@ -188,19 +186,14 @@ namespace IconFinder.Controls
                 var data = _iconService.GetIconData(_iconInfo.FilePath);
                 if (data == null) return;
 
-                // Временный файл в temp
                 var tempDir = Path.Combine(Path.GetTempPath(), "IconFinder");
                 Directory.CreateDirectory(tempDir);
                 var fileName = Path.GetFileName(_iconInfo.FilePath);
                 var tempPath = Path.Combine(tempDir, fileName);
                 File.WriteAllBytes(tempPath, data);
 
-                // Drag & Drop
-                var dataObj = new DataObject(DataFormats.FileDrop, new[] { tempPath });
-                // Добавляем само изображение для программ, которые принимают картинки
-                using var ms = new MemoryStream(data);
-                dataObj.SetData(DataFormats.Bitmap, Image.FromStream(ms));
-
+                var dataObj = new DataObject();
+                dataObj.SetData(DataFormats.FileDrop, new string[] { tempPath });
                 DoDragDrop(dataObj, DragDropEffects.Copy);
             }
             catch (Exception ex)
@@ -258,7 +251,10 @@ namespace IconFinder.Controls
                 {
                     var sourceData = _iconService.GetIconData(_iconInfo.FilePath);
                     if (sourceData == null) return;
-                    var convertedData = await System.Threading.Tasks.Task.Run(() => IconConverter.ConvertTo(sourceData, ext));
+
+                    var convertedData = await System.Threading.Tasks.Task.Run(() =>
+                        IconConverter.ConvertTo(sourceData, ext, svgSize: 512));
+
                     if (convertedData != null)
                     {
                         File.WriteAllBytes(sfd.FileName, convertedData);
