@@ -98,7 +98,7 @@ def process_pack(pack_path):
 
 
 def create_db(db_path, console):
-    """Создаёт БД с нуля"""
+    """Создаёт БД """
     if os.path.exists(db_path):
         os.remove(db_path)
         console.print("  [yellow]🗑️  Старая БД удалена[/]")
