@@ -1,0 +1,93 @@
+PS F:\!Evgeny\git\MyTools\py\icon\iconarchive> py .\ia_to_db.py
+╭───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 🔍 ICONS DATABASE BUILDER                                                                                                                                                                                                     │
+╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+📦 Этап 1: Создание базы данных
+  ✅ БД создана
+  ⏱️  Время: 0.30с
+
+📂 Этап 2: Сбор и обработка паков
+  Обработка паков... (127000 иконок) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2269/2269 • 0:00:23 • 0:00:00
+  ⏱️  Время: 23.47с
+
+🔍 Этап 3: Индексация полнотекстового поиска
+  ⏱️  Время: 42.43с
+
+      📊 ИТОГОВАЯ СТАТИСТИКА      
+┏━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┓
+┃ Параметр         ┃    Значение ┃
+┡━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━┩
+│ Паков обработано │   2268/2269 │
+│ Паков с ошибками │           1 │
+│ Иконок всего     │     127,660 │
+│ Размер БД        │  1076.89 МБ │
+│ Общее время      │   66.21 сек │
+│ Путь к БД        │    icons.db │
+│ Проблемные паки  │ Mobilephone │
+└──────────────────┴─────────────┘
+
+╭───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 🔍 ТЕСТИРОВАНИЕ ПОИСКА                                                                                                                                                                                                        │
+╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[WIDE] 'acdc' → найдено: 85 (0.003с)
+├── icons\AC_DC\icons\ACDC-Backinblack.png
+├── icons\AC_DC\icons\ACDC-Ballbreaker.png
+├── icons\AC_DC\icons\ACDC-Blackice.png
+├── icons\AC_DC\icons\ACDC-Blowupyourvideo.png
+├── icons\AC_DC\icons\ACDC-Dirty-deeds.png
+└── ... и ещё 80
+[EXACT] 'acdc' → найдено: 16 (0.002с)
+├── icons\AC_DC\icons\ACDC-Backinblack.png
+├── icons\AC_DC\icons\ACDC-Ballbreaker.png
+├── icons\AC_DC\icons\ACDC-Blackice.png
+├── icons\AC_DC\icons\ACDC-Blowupyourvideo.png
+├── icons\AC_DC\icons\ACDC-Dirty-deeds.png
+└── ... и ещё 11
+[WIDE] 'hell' → найдено: 2566 (0.005с)
+├── icons\AC_DC\icons\ACDC-Backinblack.png
+├── icons\AC_DC\icons\ACDC-Ballbreaker.png
+├── icons\AC_DC\icons\ACDC-Blackice.png
+├── icons\AC_DC\icons\ACDC-Blowupyourvideo.png
+├── icons\AC_DC\icons\ACDC-Dirty-deeds.png
+└── ... и ещё 2561
+[EXACT] 'hell' → найдено: 25 (0.002с)
+├── icons\AC_DC\icons\ACDC-Highway-to-hell.png
+├── icons\Buuf\icons\Daemons-in-hell-they-call-to-me.png
+├── icons\Gorts Icons Vol. 3\icons\Der-Hell-Cat.png
+├── icons\Heaven And Hell\icons\Hell-Computer.png
+├── icons\Heaven And Hell\icons\Hell-Documents.png
+└── ... и ещё 20
+[WIDE] 'highway hell' → найдено: 9108 (0.007с)
+├── icons\AC_DC\icons\ACDC-Backinblack.png
+├── icons\AC_DC\icons\ACDC-Ballbreaker.png
+├── icons\AC_DC\icons\ACDC-Blackice.png
+├── icons\AC_DC\icons\ACDC-Blowupyourvideo.png
+├── icons\AC_DC\icons\ACDC-Dirty-deeds.png
+└── ... и ещё 9103
+[EXACT] 'highway hell' → найдено: 37 (0.002с)
+├── icons\AC_DC\icons\ACDC-Highway-to-hell.png
+├── icons\Buuf\icons\Daemons-in-hell-they-call-to-me.png
+├── icons\Gomibako\icons\Highway-empty.png
+├── icons\Gomibako\icons\Highway-full.png
+├── icons\Gorts Icons Vol. 3\icons\Der-Hell-Cat.png
+└── ... и ещё 32
+[WIDE] 'tnt' → найдено: 3195 (0.003с)
+├── icons\AC_DC\icons\ACDC-Backinblack.png
+├── icons\AC_DC\icons\ACDC-Ballbreaker.png
+├── icons\AC_DC\icons\ACDC-Blackice.png
+├── icons\AC_DC\icons\ACDC-Blowupyourvideo.png
+├── icons\AC_DC\icons\ACDC-Dirty-deeds.png
+└── ... и ещё 3190
+[EXACT] 'tnt' → найдено: 10 (0.002с)
+├── icons\AC_DC\icons\ACDC-TNT.png
+├── icons\Colorflow\icons\tnt.png
+├── icons\Container 4 _ Cargo Vans\icons\TNT-Shipping-Box.png
+├── icons\Container 4 _ Cargo Vans\icons\TNT-Van-Back.png
+├── icons\Container 4 _ Cargo Vans\icons\TNT-Van-Front.png
+└── ... и ещё 5
+
+╭───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ✅ Готово!                                                                                                                                                                                                                    │
+╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+PS F:\!Evgeny\git\MyTools\py\icon\iconarchive> 
