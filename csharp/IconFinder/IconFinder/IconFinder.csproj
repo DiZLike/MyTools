@@ -7,10 +7,25 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationIcon>Search.ico</ApplicationIcon>
+    <SupportedOSPlatformVersion>7.0</SupportedOSPlatformVersion>
+    <Company>DiZlike</Company>
+    <Description>Локальный поисковик иконок</Description>
+    <Copyright>DiZlike</Copyright>
+    <PackageIcon>Search_128px.png</PackageIcon>
+    <AssemblyVersion>1.0.0</AssemblyVersion>
+    <FileVersion>1.0.0</FileVersion>
+    <AssemblyTitle>Icon Finder</AssemblyTitle>
   </PropertyGroup>
 
   <ItemGroup>
     <Content Include="Search.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="C:\Users\Evgeny\Desktop\Search_128px.png">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
   </ItemGroup>
 
   <ItemGroup>
