@@ -155,7 +155,7 @@ namespace IconFinder.Services
         /// "exact"  — точная фраза в icon_tags
         /// </param>
         /// <param name="limit">Максимум результатов</param>
-        public List<IconInfo> Search(string query, int limit = 5000, string mode = "normal", bool prefix = true)
+        public List<IconInfo> Search(string query, int limit = 10000, string mode = "normal", bool prefix = true)
         {
             var results = new List<IconInfo>();
             var words = query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

@@ -11,6 +11,8 @@ namespace IconFinder.Forms
         private FlowLayoutPanel pnlResults;
         private Label lblStatus;
         private Button btnShowMore;
+        private Label lblTotalIcons;
+        private ProgressBar progressBar;
 
         protected override void Dispose(bool disposing)
         {
@@ -28,6 +30,7 @@ namespace IconFinder.Forms
             lblStatus = new Label();
             btnShowMore = new Button();
             lblTotalIcons = new Label();
+            progressBar = new ProgressBar();
             SuspendLayout();
             // 
             // txtSearch
@@ -102,14 +105,25 @@ namespace IconFinder.Forms
             lblTotalIcons.Location = new Point(24, 634);
             lblTotalIcons.Name = "lblTotalIcons";
             lblTotalIcons.Size = new Size(400, 20);
-            lblTotalIcons.TabIndex = 3;
+            lblTotalIcons.TabIndex = 5;
             lblTotalIcons.Text = "Иконок";
             lblTotalIcons.TextAlign = ContentAlignment.MiddleLeft;
+            // 
+            // progressBar
+            // 
+            progressBar.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            progressBar.Location = new Point(917, 625);
+            progressBar.Name = "progressBar";
+            progressBar.Size = new Size(160, 20);
+            progressBar.Style = ProgressBarStyle.Continuous;
+            progressBar.TabIndex = 6;
+            progressBar.Visible = false;
             // 
             // MainForm
             // 
             BackColor = Color.FromArgb(32, 32, 32);
             ClientSize = new Size(1100, 692);
+            Controls.Add(progressBar);
             Controls.Add(lblTotalIcons);
             Controls.Add(txtSearch);
             Controls.Add(lblSearchIcon);
@@ -125,7 +139,5 @@ namespace IconFinder.Forms
             ResumeLayout(false);
             PerformLayout();
         }
-
-        private Label lblTotalIcons;
     }
 }

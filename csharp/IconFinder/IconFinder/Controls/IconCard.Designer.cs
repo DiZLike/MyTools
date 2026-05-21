@@ -21,6 +21,7 @@ namespace IconFinder.Controls
         private void InitializeComponent()
         {
             cardPanel = new Panel();
+            lblExt = new Label();
             picIcon = new PictureBox();
             lblName = new Label();
             btnSave = new Button();
@@ -31,6 +32,7 @@ namespace IconFinder.Controls
             // cardPanel
             // 
             cardPanel.BackColor = Color.FromArgb(45, 45, 48);
+            cardPanel.Controls.Add(lblExt);
             cardPanel.Controls.Add(picIcon);
             cardPanel.Controls.Add(lblName);
             cardPanel.Controls.Add(btnSave);
@@ -42,6 +44,20 @@ namespace IconFinder.Controls
             cardPanel.Click += cardPanel_Click;
             cardPanel.MouseEnter += cardPanel_MouseEnter;
             cardPanel.MouseLeave += cardPanel_MouseLeave;
+            // 
+            // lblExt
+            // 
+            lblExt.BackColor = Color.Transparent;
+            lblExt.Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point, 204);
+            lblExt.ForeColor = Color.FromArgb(200, 200, 200);
+            lblExt.Location = new Point(5, 85);
+            lblExt.Name = "lblExt";
+            lblExt.Size = new Size(150, 20);
+            lblExt.TabIndex = 3;
+            lblExt.TextAlign = ContentAlignment.TopCenter;
+            lblExt.Click += cardPanel_Click;
+            lblExt.MouseEnter += cardPanel_MouseEnter;
+            lblExt.MouseLeave += cardPanel_MouseLeave;
             // 
             // picIcon
             // 
@@ -63,7 +79,7 @@ namespace IconFinder.Controls
             lblName.ForeColor = Color.FromArgb(200, 200, 200);
             lblName.Location = new Point(5, 68);
             lblName.Name = "lblName";
-            lblName.Size = new Size(150, 36);
+            lblName.Size = new Size(150, 17);
             lblName.TabIndex = 1;
             lblName.TextAlign = ContentAlignment.TopCenter;
             lblName.Click += cardPanel_Click;
@@ -99,5 +115,7 @@ namespace IconFinder.Controls
             ((System.ComponentModel.ISupportInitialize)picIcon).EndInit();
             ResumeLayout(false);
         }
+
+        private Label lblExt;
     }
 }

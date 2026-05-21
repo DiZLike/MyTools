@@ -19,7 +19,7 @@ namespace IconFinder.Services
 
         public LibreTranslateService(string basePath)
         {
-            _pythonPath = Path.Combine(basePath, "Data", "Python", "Scripts", "libretranslate.exe");
+            _pythonPath = Path.Combine(basePath, "Data", "Python", "python.exe");
         }
 
         public async Task<bool> StartAsync()
@@ -48,7 +48,7 @@ namespace IconFinder.Services
                 StartInfo = new ProcessStartInfo
                 {
                     FileName = _pythonPath,
-                    Arguments = "--load-only ru,en --host 127.0.0.1 --port 5500",
+                    Arguments = "-m libretranslate.main --load-only ru,en --host 127.0.0.1 --port 5500",
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,

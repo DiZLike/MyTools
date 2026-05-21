@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using IconFinder.Monitors;
 using SkiaSharp;
 
 namespace IconFinder.Services
@@ -8,7 +9,7 @@ namespace IconFinder.Services
     {
         private const int DefaultSvgSize = 512;
 
-        public static byte[] ConvertToPng(byte[] sourceData, int? svgSize = null)
+        public static byte[] ConvertToPng(byte[] sourceData, int? svgSize = null, int targetSize = 512)
         {
             if (IsSvg(sourceData))
             {
@@ -17,123 +18,180 @@ namespace IconFinder.Services
                 var picture = svg.Load(stream);
                 if (picture == null) return null;
 
-                var targetSize = svgSize ?? DefaultSvgSize;
-                var scale = Math.Min(
-                    (float)targetSize / picture.CullRect.Width,
-                    (float)targetSize / picture.CullRect.Height);
+                var actualSize = svgSize ?? targetSize;
+                var svgScale = Math.Min(
+                    (float)actualSize / picture.CullRect.Width,
+                    (float)actualSize / picture.CullRect.Height);
 
-                var w = Math.Max(1, (int)(picture.CullRect.Width * scale));
-                var h = Math.Max(1, (int)(picture.CullRect.Height * scale));
+                var w = Math.Max(1, (int)(picture.CullRect.Width * svgScale));
+                var h = Math.Max(1, (int)(picture.CullRect.Height * svgScale));
 
                 using var surface = SKSurface.Create(new SKImageInfo(w, h));
                 var canvas = surface.Canvas;
                 canvas.Clear(SKColors.Transparent);
-                canvas.Scale(scale);
+                canvas.Scale(svgScale);
                 canvas.DrawPicture(picture);
 
                 using var snapshot = surface.Snapshot();
                 using var pngData = snapshot.Encode(SKEncodedImageFormat.Png, 100);
+                UsingMonitor.Info.AddPng();
                 return pngData.ToArray();
             }
 
+            // Для растровых изображений
             using var skBitmap = SKBitmap.Decode(sourceData);
             if (skBitmap == null) return null;
-            using var skImage = SKImage.FromBitmap(skBitmap);
-            using var data = skImage.Encode(SKEncodedImageFormat.Png, 100);
-            return data.ToArray();
+
+            // Не увеличиваем размер выше исходного
+            var size = Math.Min(targetSize, Math.Max(skBitmap.Width, skBitmap.Height));
+            if (size == skBitmap.Width && size == skBitmap.Height)
+            {
+                // Если исходный размер уже подходит
+                using var skImage = SKImage.FromBitmap(skBitmap);
+                using var data = skImage.Encode(SKEncodedImageFormat.Png, 100);
+                UsingMonitor.Info.AddPng();
+                return data.ToArray();
+            }
+
+            var rasterScale = Math.Min((float)size / skBitmap.Width, (float)size / skBitmap.Height);
+            var newWidth = Math.Max(1, (int)(skBitmap.Width * rasterScale));
+            var newHeight = Math.Max(1, (int)(skBitmap.Height * rasterScale));
+
+            using var resized = skBitmap.Resize(
+                new SKImageInfo(newWidth, newHeight),
+                new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
+
+            if (resized == null) return null;
+
+            using var skImage2 = SKImage.FromBitmap(resized);
+            using var data2 = skImage2.Encode(SKEncodedImageFormat.Png, 100);
+            UsingMonitor.Info.AddPng();
+            return data2.ToArray();
         }
 
-        public static byte[] ConvertToIco(byte[] sourceData, int? svgSize = null)
+        public static byte[] ConvertToIco(byte[] sourceData, int? svgSize = null, int targetSize = 256)
         {
             byte[] rasterData;
             if (IsSvg(sourceData))
             {
-                rasterData = ConvertToPng(sourceData, svgSize);
+                rasterData = ConvertToPng(sourceData, svgSize, targetSize);
                 if (rasterData == null) return null;
             }
             else
             {
-                rasterData = sourceData;
+                // Для растровых используем ConvertToPng с ограничением размера
+                rasterData = ConvertToPng(sourceData, null, targetSize);
+                if (rasterData == null) return null;
             }
 
             using var skBitmap = SKBitmap.Decode(rasterData);
             if (skBitmap == null) return null;
 
-            var sizes = new[] { 256, 128, 64, 48, 32, 16 };
-            using var ms = new MemoryStream();
-            using var writer = new BinaryWriter(ms);
-
-            writer.Write((short)0);
-            writer.Write((short)1);
-            writer.Write((short)sizes.Length);
-
-            var images = new byte[sizes.Length][];
-            var offsets = new int[sizes.Length];
-            int offset = 6 + 16 * sizes.Length;
-
-            for (int i = 0; i < sizes.Length; i++)
+            // Создаем квадратную иконку
+            var size = Math.Min(targetSize, Math.Min(skBitmap.Width, skBitmap.Height));
+            if (skBitmap.Width != size || skBitmap.Height != size)
             {
-                var size = Math.Min(sizes[i], Math.Min(skBitmap.Width, skBitmap.Height));
                 using var resized = skBitmap.Resize(
                     new SKImageInfo(size, size),
                     new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
 
-                if (resized == null) continue;
+                if (resized == null) return null;
 
                 using var icoImage = SKImage.FromBitmap(resized);
                 using var pngData = icoImage.Encode(SKEncodedImageFormat.Png, 100);
-                images[i] = pngData.ToArray();
-                offsets[i] = offset;
-                offset += images[i].Length;
-            }
+                var imageData = pngData.ToArray();
 
-            for (int i = 0; i < sizes.Length; i++)
+                return CreateIcoFile(size, imageData);
+            }
+            else
             {
-                if (images[i] == null) continue;
+                using var icoImage = SKImage.FromBitmap(skBitmap);
+                using var pngData = icoImage.Encode(SKEncodedImageFormat.Png, 100);
+                var imageData = pngData.ToArray();
 
-                var size = Math.Min(sizes[i], Math.Min(skBitmap.Width, skBitmap.Height));
-                writer.Write((byte)size);
-                writer.Write((byte)size);
-                writer.Write((byte)0);
-                writer.Write((byte)0);
-                writer.Write((short)0);
-                writer.Write((short)32);
-                writer.Write(images[i].Length);
-                writer.Write(offsets[i]);
+                return CreateIcoFile(size, imageData);
             }
+        }
 
-            foreach (var img in images)
-            {
-                if (img != null)
-                    writer.Write(img);
-            }
+        private static byte[] CreateIcoFile(int size, byte[] imageData)
+        {
+            using var ms = new MemoryStream();
+            using var writer = new BinaryWriter(ms);
 
+            // ICO Header
+            writer.Write((short)0);  // reserved
+            writer.Write((short)1);  // ICO type
+            writer.Write((short)1);  // 1 icon
+
+            // Icon entry
+            writer.Write((byte)Math.Min(size, 255));  // width (max 255)
+            writer.Write((byte)Math.Min(size, 255));  // height (max 255)
+            writer.Write((byte)0);     // color palette
+            writer.Write((byte)0);     // reserved
+            writer.Write((short)0);    // color planes
+            writer.Write((short)32);   // bits per pixel
+            writer.Write(imageData.Length);  // size of image data
+            writer.Write(22);          // offset (6 + 16)
+
+            // Image data
+            writer.Write(imageData);
+
+            UsingMonitor.Info.AddIco();
             return ms.ToArray();
         }
 
-        public static byte[] ConvertToWebp(byte[] sourceData, int? svgSize = null)
+        public static byte[] ConvertToWebp(byte[] sourceData, int? svgSize = null, int targetSize = 512)
         {
+            byte[] rasterData;
             if (IsSvg(sourceData))
             {
-                var pngData = ConvertToPng(sourceData, svgSize);
-                if (pngData == null) return null;
-                sourceData = pngData;
+                rasterData = ConvertToPng(sourceData, svgSize, targetSize);
+                if (rasterData == null) return null;
+            }
+            else
+            {
+                rasterData = ConvertToPng(sourceData, null, targetSize);
+                if (rasterData == null) return null;
             }
 
-            using var skBitmap = SKBitmap.Decode(sourceData);
+            using var skBitmap = SKBitmap.Decode(rasterData);
             if (skBitmap == null) return null;
             using var skImage = SKImage.FromBitmap(skBitmap);
             using var webpData = skImage.Encode(SKEncodedImageFormat.Webp, 90);
+            UsingMonitor.Info.AddWebp();
             return webpData.ToArray();
         }
 
-        public static byte[] ConvertTo(byte[] sourceData, string targetFormat, int? svgSize = null) => targetFormat.ToLower() switch
+        public static byte[] ConvertTo(byte[] sourceData, string targetFormat, int? svgSize = null, int targetSize = 512) => targetFormat.ToLower() switch
         {
-            ".png" => ConvertToPng(sourceData, svgSize),
-            ".ico" => ConvertToIco(sourceData, svgSize),
-            ".webp" => ConvertToWebp(sourceData, svgSize),
+            ".png" => ConvertToPng(sourceData, svgSize, targetSize),
+            ".ico" => ConvertToIco(sourceData, svgSize, targetSize),
+            ".webp" => ConvertToWebp(sourceData, svgSize, targetSize),
             _ => sourceData
         };
+
+        public static (int Width, int Height) GetImageDimensions(byte[] data)
+        {
+            if (IsSvg(data))
+            {
+                try
+                {
+                    using var svg = new Svg.Skia.SKSvg();
+                    using var stream = new MemoryStream(data);
+                    var picture = svg.Load(stream);
+                    if (picture != null)
+                        return ((int)picture.CullRect.Width, (int)picture.CullRect.Height);
+                }
+                catch { }
+                return (0, 0); // SVG считается бесконечно масштабируемым
+            }
+
+            using var skBitmap = SKBitmap.Decode(data);
+            if (skBitmap != null)
+                return (skBitmap.Width, skBitmap.Height);
+
+            return (0, 0);
+        }
 
         private static bool IsSvg(byte[] data)
         {
