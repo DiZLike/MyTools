@@ -1,10 +1,13 @@
-﻿using Microsoft.Data.Sqlite;
+﻿// Файл: IconService.cs - Полная замена класса
+
+using Microsoft.Data.Sqlite;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
+using System.Threading;
 
 namespace IconFinder.Services
 {
@@ -40,8 +43,23 @@ namespace IconFinder.Services
         private List<string> _allPaths;
         private Random _random = new();
         private FileStream _dataStream;
+        private readonly ReaderWriterLockSlim _tocLock = new ReaderWriterLockSlim();
 
-        public int TotalCount => _toc?.Count ?? 0;
+        public int TotalCount
+        {
+            get
+            {
+                _tocLock.EnterReadLock();
+                try
+                {
+                    return _toc?.Count ?? 0;
+                }
+                finally
+                {
+                    _tocLock.ExitReadLock();
+                }
+            }
+        }
 
         public IconService(string dbPath, string datPath)
         {
@@ -54,52 +72,60 @@ namespace IconFinder.Services
 
         private void LoadToc()
         {
-            _toc = new(StringComparer.OrdinalIgnoreCase);
-            _allPaths = new();
-
-            var magic = new byte[4];
-            _dataStream.ReadExactly(magic, 0, 4);
-            if (Encoding.ASCII.GetString(magic) != "ICN4")
-                throw new InvalidDataException($"Invalid MAGIC: expected ICN4, got {Encoding.ASCII.GetString(magic)}");
-
-            Span<byte> header = stackalloc byte[14];
-            _dataStream.ReadExactly(header);
-            var count = BitConverter.ToUInt32(header[..4]);
-            var dataStart = BitConverter.ToUInt64(header.Slice(4, 8));
-            var prefixLen = BitConverter.ToUInt16(header.Slice(12, 2));
-
-            Logger.Log($"Entries: {count}, data_start: {dataStart}, prefix_len: {prefixLen}");
-
-            byte[] sharedPrefix = null;
-            if (prefixLen > 0)
+            _tocLock.EnterWriteLock();
+            try
             {
-                sharedPrefix = new byte[prefixLen];
-                _dataStream.ReadExactly(sharedPrefix, 0, prefixLen);
-                Logger.Log($"Shared prefix loaded: {prefixLen} bytes");
-            }
+                _toc = new Dictionary<string, TocEntry>(StringComparer.OrdinalIgnoreCase);
+                _allPaths = new List<string>();
 
-            for (int i = 0; i < count; i++)
-            {
-                var pathLen = ReadUInt16();
-                var path = ReadString(pathLen);
-                var offset = ReadInt64();
-                var sizeCompressed = ReadInt32();
-                var sizeOriginal = ReadInt32();
-                var compression = ReadByte();
+                var magic = new byte[4];
+                _dataStream.ReadExactly(magic, 0, 4);
+                if (Encoding.ASCII.GetString(magic) != "ICN4")
+                    throw new InvalidDataException($"Invalid MAGIC: expected ICN4, got {Encoding.ASCII.GetString(magic)}");
 
-                var normalizedPath = NormalizePath(path);
-                _toc[normalizedPath] = new TocEntry
+                Span<byte> header = stackalloc byte[14];
+                _dataStream.ReadExactly(header);
+                var count = BitConverter.ToUInt32(header[..4]);
+                var dataStart = BitConverter.ToUInt64(header.Slice(4, 8));
+                var prefixLen = BitConverter.ToUInt16(header.Slice(12, 2));
+
+                Logger.Log($"Entries: {count}, data_start: {dataStart}, prefix_len: {prefixLen}");
+
+                byte[] sharedPrefix = null;
+                if (prefixLen > 0)
                 {
-                    Offset = offset,
-                    SizeCompressed = sizeCompressed,
-                    SizeOriginal = sizeOriginal,
-                    Compression = compression,
-                    SharedPrefix = sharedPrefix
-                };
-                _allPaths.Add(normalizedPath);
-            }
+                    sharedPrefix = new byte[prefixLen];
+                    _dataStream.ReadExactly(sharedPrefix, 0, prefixLen);
+                    Logger.Log($"Shared prefix loaded: {prefixLen} bytes");
+                }
 
-            Logger.Log($"TOC loaded: {_toc.Count} entries");
+                for (int i = 0; i < count; i++)
+                {
+                    var pathLen = ReadUInt16();
+                    var path = ReadString(pathLen);
+                    var offset = ReadInt64();
+                    var sizeCompressed = ReadInt32();
+                    var sizeOriginal = ReadInt32();
+                    var compression = ReadByte();
+
+                    var normalizedPath = NormalizePath(path);
+                    _toc[normalizedPath] = new TocEntry
+                    {
+                        Offset = offset,
+                        SizeCompressed = sizeCompressed,
+                        SizeOriginal = sizeOriginal,
+                        Compression = compression,
+                        SharedPrefix = sharedPrefix
+                    };
+                    _allPaths.Add(normalizedPath);
+                }
+
+                Logger.Log($"TOC loaded: {_toc.Count} entries");
+            }
+            finally
+            {
+                _tocLock.ExitWriteLock();
+            }
         }
 
         private ushort ReadUInt16()
@@ -178,29 +204,37 @@ namespace IconFinder.Services
                 ftsQuery = string.Join(" OR ", words.Select(w => prefix ? $"icon_tags: {w}*" : $"icon_tags: {w}"));
             }
 
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = @"
-        SELECT i.filepath 
-        FROM icons_fts f 
-        JOIN icons i ON f.rowid = i.id 
-        WHERE icons_fts MATCH @query 
-        LIMIT @limit";
-            cmd.Parameters.AddWithValue("@query", ftsQuery);
-            cmd.Parameters.AddWithValue("@limit", limit);
-
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
+            _tocLock.EnterReadLock();
+            try
             {
-                var normalizedPath = NormalizePath(reader.GetString(0));
-                if (_toc.TryGetValue(normalizedPath, out var entry))
-                    results.Add(new IconInfo
-                    {
-                        FilePath = normalizedPath,
-                        Offset = entry.Offset,
-                        SizeCompressed = entry.SizeCompressed,
-                        SizeOriginal = entry.SizeOriginal,
-                        Compression = entry.Compression
-                    });
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = @"
+                    SELECT i.filepath 
+                    FROM icons_fts f 
+                    JOIN icons i ON f.rowid = i.id 
+                    WHERE icons_fts MATCH @query 
+                    LIMIT @limit";
+                cmd.Parameters.AddWithValue("@query", ftsQuery);
+                cmd.Parameters.AddWithValue("@limit", limit);
+
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var normalizedPath = NormalizePath(reader.GetString(0));
+                    if (_toc.TryGetValue(normalizedPath, out var entry))
+                        results.Add(new IconInfo
+                        {
+                            FilePath = normalizedPath,
+                            Offset = entry.Offset,
+                            SizeCompressed = entry.SizeCompressed,
+                            SizeOriginal = entry.SizeOriginal,
+                            Compression = entry.Compression
+                        });
+                }
+            }
+            finally
+            {
+                _tocLock.ExitReadLock();
             }
 
             Logger.Log($"Search '{query}' [{mode}]: {results.Count} results");
@@ -210,19 +244,27 @@ namespace IconFinder.Services
         public List<IconInfo> GetRandomIcons(int count = 30)
         {
             var results = new List<IconInfo>();
-            var indices = new HashSet<int>();
-            while (results.Count < count && indices.Count < _allPaths.Count)
+            _tocLock.EnterReadLock();
+            try
             {
-                var idx = _random.Next(_allPaths.Count);
-                if (indices.Add(idx) && _toc.TryGetValue(_allPaths[idx], out var entry))
-                    results.Add(new IconInfo
-                    {
-                        FilePath = _allPaths[idx],
-                        Offset = entry.Offset,
-                        SizeCompressed = entry.SizeCompressed,
-                        SizeOriginal = entry.SizeOriginal,
-                        Compression = entry.Compression
-                    });
+                var indices = new HashSet<int>();
+                while (results.Count < count && indices.Count < _allPaths.Count)
+                {
+                    var idx = _random.Next(_allPaths.Count);
+                    if (indices.Add(idx) && _toc.TryGetValue(_allPaths[idx], out var entry))
+                        results.Add(new IconInfo
+                        {
+                            FilePath = _allPaths[idx],
+                            Offset = entry.Offset,
+                            SizeCompressed = entry.SizeCompressed,
+                            SizeOriginal = entry.SizeOriginal,
+                            Compression = entry.Compression
+                        });
+                }
+            }
+            finally
+            {
+                _tocLock.ExitReadLock();
             }
             return results;
         }
@@ -230,7 +272,18 @@ namespace IconFinder.Services
         public byte[] GetIconData(string path)
         {
             path = NormalizePath(path);
-            if (!_toc.TryGetValue(path, out var entry)) return null;
+
+            _tocLock.EnterReadLock();
+            TocEntry entry;
+            try
+            {
+                if (!_toc.TryGetValue(path, out entry))
+                    return null;
+            }
+            finally
+            {
+                _tocLock.ExitReadLock();
+            }
 
             byte[] compressed;
             lock (_dataStream)
@@ -293,6 +346,7 @@ namespace IconFinder.Services
         public void Dispose()
         {
             Logger.Log("IconService disposed");
+            _tocLock?.Dispose();
             _dataStream?.Dispose();
         }
     }

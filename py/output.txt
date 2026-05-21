@@ -1,54 +1,4 @@
 ================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\IconFinder\IconFinder\Controls\DarkColorTable.cs
-----------------------------------------
-﻿using System.Drawing;
-using System.Windows.Forms;
-
-namespace IconFinder.Controls
-{
-    internal class DarkColorTable : ProfessionalColorTable
-    {
-        public override Color ToolStripDropDownBackground => Color.FromArgb(45, 45, 48);
-        public override Color MenuBorder => Color.FromArgb(50, 50, 55);
-        public override Color MenuItemBorder => Color.FromArgb(45, 45, 48);
-        public override Color MenuItemSelected => Color.FromArgb(60, 60, 65);
-        public override Color ImageMarginGradientBegin => Color.FromArgb(45, 45, 48);
-        public override Color ImageMarginGradientMiddle => Color.FromArgb(45, 45, 48);
-        public override Color ImageMarginGradientEnd => Color.FromArgb(45, 45, 48);
-    }
-}
-----------------------------------------
-
-Файл: D:\Evgeny\git\MyTools\csharp\IconFinder\IconFinder\Controls\DarkToolStripRenderer.cs
-----------------------------------------
-﻿using System.Drawing;
-using System.Windows.Forms;
-
-namespace IconFinder.Controls
-{
-    internal class DarkToolStripRenderer : ToolStripProfessionalRenderer
-    {
-        public DarkToolStripRenderer() : base(new DarkColorTable()) { }
-
-        protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
-        {
-            if (e.Item.Selected)
-            {
-                using var brush = new SolidBrush(Color.FromArgb(60, 60, 65));
-                e.Graphics.FillRectangle(brush, new Rectangle(Point.Empty, e.Item.Size));
-            }
-            else base.OnRenderMenuItemBackground(e);
-        }
-
-        protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
-        {
-            using var pen = new Pen(Color.FromArgb(50, 50, 55));
-            e.Graphics.DrawRectangle(pen, 0, 0, e.ToolStrip.Width - 1, e.ToolStrip.Height - 1);
-        }
-    }
-}
-----------------------------------------
-
 Файл: D:\Evgeny\git\MyTools\csharp\IconFinder\IconFinder\Controls\IconCard.cs
 ----------------------------------------
 ﻿using System;
@@ -101,7 +51,7 @@ namespace IconFinder.Controls
             {
                 var svgItem = new ToolStripMenuItem
                 {
-                    Text = "SVG",
+                    Text = "SVG (оригинал)",
                     ForeColor = Color.FromArgb(180, 220, 180),
                     Font = new Font("Segoe UI", 8, FontStyle.Bold),
                     BackColor = Color.FromArgb(45, 45, 48),
@@ -114,11 +64,67 @@ namespace IconFinder.Controls
                 _formatPopup.Items.Add(new ToolStripSeparator());
             }
 
+            // Создаем пункты меню с подменю для каждого формата
             foreach (var fmt in new[] { "PNG", "ICO", "WebP" })
             {
+                var formatItem = CreateFormatMenuItem(fmt);
+                _formatPopup.Items.Add(formatItem);
+            }
+        }
+        private ToolStripMenuItem CreateFormatMenuItem(string format)
+        {
+            var formatItem = new ToolStripMenuItem
+            {
+                Text = format,
+                ForeColor = Color.FromArgb(200, 200, 200),
+                Font = new Font("Segoe UI", 8),
+                BackColor = Color.FromArgb(45, 45, 48),
+                Padding = new Padding(8, 4, 8, 4)
+            };
+            formatItem.MouseEnter += (s, e) => formatItem.BackColor = Color.FromArgb(60, 60, 65);
+            formatItem.MouseLeave += (s, e) => formatItem.BackColor = Color.FromArgb(45, 45, 48);
+            // Создаем подменю с размерами
+            var sizeSubMenu = CreateSizeSubMenu(format);
+            formatItem.DropDownItems.AddRange(sizeSubMenu.ToArray<ToolStripItem>());
+
+            return formatItem;
+        }
+
+        private List<ToolStripItem> CreateSizeSubMenu(string format)
+        {
+            var items = new List<ToolStripItem>();
+
+            // Определяем размеры в зависимости от формата
+            int[] sizes;
+            string sizeFormat;
+
+            if (format == "ICO")
+            {
+                sizes = new[] { 16, 24, 32, 48, 64, 96, 128, 256 };
+                sizeFormat = "{0}×{0}";
+            }
+            else // PNG, WebP
+            {
+                sizes = new[] { 16, 24, 32, 48, 64, 96, 128, 256, 512 };
+                sizeFormat = "{0}px";
+            }
+
+            // Получаем размеры исходного изображения
+            var sourceData = _iconService.GetIconData(_iconInfo.FilePath);
+            var dimensions = sourceData != null ? IconConverter.GetImageDimensions(sourceData) : (0, 0);
+            var isSvg = Path.GetExtension(_iconInfo.FilePath).ToLower() == ".svg";
+            var maxDimension = Math.Max(dimensions.Item1, dimensions.Item2);
+
+            // Добавляем стандартные размеры
+            foreach (var size in sizes)
+            {
+                // Для SVG показываем все размеры, для растровых - только не превышающие исходник
+                if (!isSvg && size > maxDimension)
+                    continue;
+
                 var item = new ToolStripMenuItem
                 {
-                    Text = fmt,
+                    Text = string.Format(sizeFormat, size),
                     ForeColor = Color.FromArgb(200, 200, 200),
                     Font = new Font("Segoe UI", 8),
                     BackColor = Color.FromArgb(45, 45, 48),
@@ -126,16 +132,20 @@ namespace IconFinder.Controls
                 };
                 item.MouseEnter += (s, e) => item.BackColor = Color.FromArgb(60, 60, 65);
                 item.MouseLeave += (s, e) => item.BackColor = Color.FromArgb(45, 45, 48);
-                item.Click += (s, e) => ConvertAndSave(fmt);
-                _formatPopup.Items.Add(item);
+                item.Click += async (s, e) => await ConvertAndSave(format, size);
+                items.Add(item);
             }
+
+            return items;
         }
 
         private void LoadIconInfo()
         {
             var fileName = Path.GetFileName(_iconInfo.FilePath);
-            var displayName = fileName.Length > 28 ? fileName[..25] + "..." : fileName;
+            var fileNameWithoutExt = Path.GetFileNameWithoutExtension(_iconInfo.FilePath);
+            var displayName = fileNameWithoutExt.Length > 20 ? fileNameWithoutExt[..20] + "..." : fileNameWithoutExt;
             lblName.Text = $"{displayName}";
+            lblExt.Text = $"{Path.GetExtension(fileName).Trim('.').ToUpper()}";
         }
 
         public void LoadThumbnail()
@@ -197,7 +207,7 @@ namespace IconFinder.Controls
             var scale = Math.Min(64f / skBitmap.Width, 64f / skBitmap.Height);
             var w = Math.Max(1, (int)(skBitmap.Width * scale));
             var h = Math.Max(1, (int)(skBitmap.Height * scale));
-            using var resized = skBitmap.Resize(new SKImageInfo(w, h), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
+            using var resized = skBitmap.Resize(new SKImageInfo(w, h), new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None));
             if (resized == null) return;
             using var image = SKImage.FromBitmap(resized);
             using var pngData = image.Encode(SKEncodedImageFormat.Png, 80);
@@ -210,7 +220,17 @@ namespace IconFinder.Controls
             using var ms = new MemoryStream(data);
             using var original = new Bitmap(ms);
             var scale = Math.Min(64f / original.Width, 64f / original.Height);
-            picIcon.Image = new Bitmap(original, (int)(original.Width * scale), (int)(original.Height * scale));
+            var w = (int)(original.Width * scale);
+            var h = (int)(original.Height * scale);
+
+            // Создаем новый Bitmap и отключаем сглаживание
+            var resized = new Bitmap(w, h);
+            using var g = Graphics.FromImage(resized);
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+            g.DrawImage(original, 0, 0, w, h);
+
+            picIcon.Image = resized;
         }
 
         // ========== Drag & Drop ==========
@@ -289,19 +309,22 @@ namespace IconFinder.Controls
             }
         }
 
-        private async void ConvertAndSave(string format)
+        private async Task ConvertAndSave(string format, int size)
         {
             try
             {
+                // Закрываем все меню
                 _formatPopup.Close();
+
                 var ext = $".{format.ToLower()}";
-                var fileName = Path.GetFileNameWithoutExtension(_iconInfo.FilePath) + ext;
+                var sizeStr = format == "ICO" ? $"{size}x{size}" : $"{size}px";
+                var fileName = $"{Path.GetFileNameWithoutExtension(_iconInfo.FilePath)}_{sizeStr}{ext}";
 
                 using var sfd = new SaveFileDialog
                 {
                     FileName = fileName,
                     Filter = $"{format} Files|*{ext}",
-                    Title = $"Сохранить как {format}..."
+                    Title = $"Сохранить {format} {sizeStr}"
                 };
 
                 if (sfd.ShowDialog() == DialogResult.OK)
@@ -309,13 +332,13 @@ namespace IconFinder.Controls
                     var sourceData = _iconService.GetIconData(_iconInfo.FilePath);
                     if (sourceData == null) return;
 
-                    var convertedData = await System.Threading.Tasks.Task.Run(() =>
-                        IconConverter.ConvertTo(sourceData, ext, svgSize: 512));
+                    var convertedData = await Task.Run(() =>
+                        IconConverter.ConvertTo(sourceData, ext, svgSize: size, targetSize: size));
 
                     if (convertedData != null)
                     {
                         File.WriteAllBytes(sfd.FileName, convertedData);
-                        Logger.Log($"Saved: {sfd.FileName} ({convertedData.Length} bytes)");
+                        Logger.Log($"Saved {format} {sizeStr}: {sfd.FileName} ({convertedData.Length} bytes)");
                         UsingMonitor.CheckUsing();
                     }
                 }
@@ -361,6 +384,7 @@ namespace IconFinder.Controls
         private void InitializeComponent()
         {
             cardPanel = new Panel();
+            lblExt = new Label();
             picIcon = new PictureBox();
             lblName = new Label();
             btnSave = new Button();
@@ -371,6 +395,7 @@ namespace IconFinder.Controls
             // cardPanel
             // 
             cardPanel.BackColor = Color.FromArgb(45, 45, 48);
+            cardPanel.Controls.Add(lblExt);
             cardPanel.Controls.Add(picIcon);
             cardPanel.Controls.Add(lblName);
             cardPanel.Controls.Add(btnSave);
@@ -382,6 +407,20 @@ namespace IconFinder.Controls
             cardPanel.Click += cardPanel_Click;
             cardPanel.MouseEnter += cardPanel_MouseEnter;
             cardPanel.MouseLeave += cardPanel_MouseLeave;
+            // 
+            // lblExt
+            // 
+            lblExt.BackColor = Color.Transparent;
+            lblExt.Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point, 204);
+            lblExt.ForeColor = Color.FromArgb(200, 200, 200);
+            lblExt.Location = new Point(5, 85);
+            lblExt.Name = "lblExt";
+            lblExt.Size = new Size(150, 20);
+            lblExt.TabIndex = 3;
+            lblExt.TextAlign = ContentAlignment.TopCenter;
+            lblExt.Click += cardPanel_Click;
+            lblExt.MouseEnter += cardPanel_MouseEnter;
+            lblExt.MouseLeave += cardPanel_MouseLeave;
             // 
             // picIcon
             // 
@@ -403,7 +442,7 @@ namespace IconFinder.Controls
             lblName.ForeColor = Color.FromArgb(200, 200, 200);
             lblName.Location = new Point(5, 68);
             lblName.Name = "lblName";
-            lblName.Size = new Size(150, 36);
+            lblName.Size = new Size(150, 17);
             lblName.TabIndex = 1;
             lblName.TextAlign = ContentAlignment.TopCenter;
             lblName.Click += cardPanel_Click;
@@ -439,12 +478,157 @@ namespace IconFinder.Controls
             ((System.ComponentModel.ISupportInitialize)picIcon).EndInit();
             ResumeLayout(false);
         }
+
+        private Label lblExt;
     }
 }
 ----------------------------------------
 
 ================================================================================
 ================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\IconFinder\IconFinder\Forms\DonateForm.Designer.cs
+----------------------------------------
+﻿namespace IconFinder.Forms
+{
+    partial class DonateForm
+    {
+        private System.ComponentModel.IContainer components = null;
+        private System.Windows.Forms.Panel pnlButtons;
+        private System.Windows.Forms.Button btnDonate;
+        private System.Windows.Forms.Button btnLater;
+        private System.Windows.Forms.Label lblTitle;
+        private System.Windows.Forms.Label lblSubtitle;
+        private System.Windows.Forms.Label lblMessage;
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && (components != null))
+            {
+                components.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+
+        private void InitializeComponent()
+        {
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(DonateForm));
+            pnlButtons = new Panel();
+            btnDonate = new Button();
+            btnLater = new Button();
+            lblTitle = new Label();
+            lblSubtitle = new Label();
+            lblMessage = new Label();
+            pnlButtons.SuspendLayout();
+            SuspendLayout();
+            // 
+            // pnlButtons
+            // 
+            pnlButtons.BackColor = Color.FromArgb(40, 40, 40);
+            pnlButtons.Controls.Add(btnDonate);
+            pnlButtons.Controls.Add(btnLater);
+            pnlButtons.Dock = DockStyle.Bottom;
+            pnlButtons.Location = new Point(0, 372);
+            pnlButtons.Name = "pnlButtons";
+            pnlButtons.Size = new Size(460, 100);
+            pnlButtons.TabIndex = 0;
+            // 
+            // btnDonate
+            // 
+            btnDonate.BackColor = Color.FromArgb(0, 120, 215);
+            btnDonate.Cursor = Cursors.Hand;
+            btnDonate.FlatAppearance.BorderSize = 0;
+            btnDonate.FlatStyle = FlatStyle.Flat;
+            btnDonate.Font = new Font("Segoe UI", 11F, FontStyle.Bold);
+            btnDonate.ForeColor = Color.White;
+            btnDonate.Location = new Point(140, 12);
+            btnDonate.Name = "btnDonate";
+            btnDonate.Size = new Size(180, 40);
+            btnDonate.TabIndex = 0;
+            btnDonate.Text = "💝 Поддержать";
+            btnDonate.UseVisualStyleBackColor = false;
+            btnDonate.Click += BtnDonate_Click;
+            // 
+            // btnLater
+            // 
+            btnLater.BackColor = Color.FromArgb(55, 55, 60);
+            btnLater.Cursor = Cursors.Hand;
+            btnLater.FlatAppearance.BorderSize = 0;
+            btnLater.FlatStyle = FlatStyle.Flat;
+            btnLater.Font = new Font("Segoe UI", 9F);
+            btnLater.ForeColor = Color.FromArgb(180, 180, 180);
+            btnLater.Location = new Point(140, 58);
+            btnLater.Name = "btnLater";
+            btnLater.Size = new Size(180, 35);
+            btnLater.TabIndex = 1;
+            btnLater.Text = "Напомнить позже";
+            btnLater.UseVisualStyleBackColor = false;
+            btnLater.Click += BtnLater_Click;
+            // 
+            // lblTitle
+            // 
+            lblTitle.BackColor = Color.Transparent;
+            lblTitle.Dock = DockStyle.Top;
+            lblTitle.Font = new Font("Segoe UI", 16F, FontStyle.Bold);
+            lblTitle.ForeColor = Color.White;
+            lblTitle.Location = new Point(0, 0);
+            lblTitle.Name = "lblTitle";
+            lblTitle.Padding = new Padding(0, 20, 0, 0);
+            lblTitle.Size = new Size(460, 60);
+            lblTitle.TabIndex = 1;
+            lblTitle.Text = "Icon Finder — это бесплатно";
+            lblTitle.TextAlign = ContentAlignment.MiddleCenter;
+            // 
+            // lblSubtitle
+            // 
+            lblSubtitle.BackColor = Color.Transparent;
+            lblSubtitle.Dock = DockStyle.Top;
+            lblSubtitle.Font = new Font("Segoe UI", 11F, FontStyle.Italic);
+            lblSubtitle.ForeColor = Color.FromArgb(160, 160, 160);
+            lblSubtitle.Location = new Point(0, 60);
+            lblSubtitle.Name = "lblSubtitle";
+            lblSubtitle.Size = new Size(460, 35);
+            lblSubtitle.TabIndex = 2;
+            lblSubtitle.Text = "Но вы можете сказать «спасибо»";
+            lblSubtitle.TextAlign = ContentAlignment.MiddleCenter;
+            // 
+            // lblMessage
+            // 
+            lblMessage.BackColor = Color.Transparent;
+            lblMessage.Dock = DockStyle.Fill;
+            lblMessage.Font = new Font("Segoe UI", 9F);
+            lblMessage.ForeColor = Color.FromArgb(200, 200, 200);
+            lblMessage.Location = new Point(0, 95);
+            lblMessage.Name = "lblMessage";
+            lblMessage.Padding = new Padding(25, 10, 25, 10);
+            lblMessage.Size = new Size(460, 277);
+            lblMessage.TabIndex = 3;
+            lblMessage.Text = resources.GetString("lblMessage.Text");
+            lblMessage.TextAlign = ContentAlignment.MiddleCenter;
+            // 
+            // DonateForm
+            // 
+            AutoScaleDimensions = new SizeF(7F, 15F);
+            AutoScaleMode = AutoScaleMode.Font;
+            BackColor = Color.FromArgb(32, 32, 32);
+            ClientSize = new Size(460, 472);
+            Controls.Add(lblMessage);
+            Controls.Add(lblSubtitle);
+            Controls.Add(lblTitle);
+            Controls.Add(pnlButtons);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            Name = "DonateForm";
+            StartPosition = FormStartPosition.CenterScreen;
+            Text = "Поддержать IconFinder";
+            TopMost = true;
+            pnlButtons.ResumeLayout(false);
+            ResumeLayout(false);
+        }
+    }
+}
+----------------------------------------
+
 Файл: D:\Evgeny\git\MyTools\csharp\IconFinder\IconFinder\Forms\MainForm.cs
 ----------------------------------------
 using IconFinder.Controls;
@@ -692,6 +876,7 @@ namespace IconFinder.Forms
             _searchTimer.Tick += SearchTimer_Tick;
 
             txtSearch.TextChanged += TxtSearch_TextChanged;
+            txtSearch.KeyPress += TxtSearch_KeyPress; // Добавляем обработчик
             btnShowMore.Click += BtnShowMore_Click;
 
             pnlResults.MouseEnter += (s, e) => pnlResults.Focus();
@@ -750,28 +935,64 @@ namespace IconFinder.Forms
             finally { _isLoading = false; }
         }
 
+        private void TxtSearch_KeyPress(object sender, KeyPressEventArgs e)
+        {
+            // Разрешаем только буквы, цифры, пробел и backspace
+            if (!char.IsLetterOrDigit(e.KeyChar) && e.KeyChar != ' ' && e.KeyChar != (char)Keys.Back)
+            {
+                e.Handled = true; // Блокируем ввод
+            }
+        }
+
         private void TxtSearch_TextChanged(object sender, EventArgs e)
         {
             _searchTimer.Stop();
-            if (string.IsNullOrEmpty(txtSearch.Text.Trim()))
-            {
-                ClearResults();
-                LoadRandomIcons();
-                return;
-            }
-            _searchTimer.Start();
-        }
 
-        private async void SearchTimer_Tick(object sender, EventArgs e)
-        {
-            _searchTimer.Stop();
             var query = txtSearch.Text.Trim();
+
+            // Если поле пустое - показываем случайные иконки
             if (string.IsNullOrEmpty(query))
             {
                 ClearResults();
                 LoadRandomIcons();
                 return;
             }
+
+            // Удаляем недопустимые символы (на случай вставки из буфера обмена)
+            var filteredQuery = new string(query.Where(c => char.IsLetterOrDigit(c) || c == ' ').ToArray());
+
+            if (filteredQuery != query)
+            {
+                // Обновляем текст в поле, если были недопустимые символы
+                txtSearch.Text = filteredQuery;
+                txtSearch.SelectionStart = filteredQuery.Length;
+                return; // TextChanged вызовется снова
+            }
+
+            // Запускаем поиск только если 2 и более символов
+            if (filteredQuery.Length >= 2)
+            {
+                _searchTimer.Start();
+            }
+            else
+            {
+                lblStatus.Text = "Введите минимум 2 символа для поиска";
+            }
+        }
+
+        private async void SearchTimer_Tick(object sender, EventArgs e)
+        {
+            _searchTimer.Stop();
+            var query = txtSearch.Text.Trim();
+
+            // Дополнительная проверка на случай изменения текста во время таймера
+            if (string.IsNullOrEmpty(query) || query.Length < 2)
+            {
+                ClearResults();
+                LoadRandomIcons();
+                return;
+            }
+
             await PerformSearch(query);
         }
 
@@ -1031,6 +1252,52 @@ namespace IconFinder.Forms
 
 ================================================================================
 ================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\IconFinder\IconFinder\Monitors\UsingMonitor.cs
+----------------------------------------
+﻿using IconFinder.Forms;
+using IconFinder.Models;
+using IconFinder.Services;
+
+namespace IconFinder.Monitors
+{
+    public static class UsingMonitor
+    {
+        public static UsingInfo Info {  get; set; }
+
+        private static string _path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Data", "using.json");
+        private const int _usingLimit = 5;
+
+        static UsingMonitor()
+        {
+            if (!File.Exists(_path))
+                Info = new UsingInfo();
+        }
+        public static void Save()
+        {
+            JsonService.SaveToJson<UsingInfo>(Info, _path);
+        }
+        public static async Task Load()
+        {
+            Info = JsonService.LoadFromJson<UsingInfo>(_path);
+        }
+        public static void CheckUsing()
+        {
+            if (Info.TotalSaveCount > 0 && Info.TotalSaveCount % _usingLimit == 0)
+            {
+                ShowDonateForm();
+            }
+        }
+        private static void ShowDonateForm()
+        {
+            var donateForm = new DonateForm();
+            donateForm.Show();
+        }
+    }
+}
+----------------------------------------
+
+================================================================================
+================================================================================
 Файл: D:\Evgeny\git\MyTools\csharp\IconFinder\IconFinder\Services\IconConverter.cs
 ----------------------------------------
 ﻿using System;
@@ -1044,7 +1311,7 @@ namespace IconFinder.Services
     {
         private const int DefaultSvgSize = 512;
 
-        public static byte[] ConvertToPng(byte[] sourceData, int? svgSize = null)
+        public static byte[] ConvertToPng(byte[] sourceData, int? svgSize = null, int targetSize = 512)
         {
             if (IsSvg(sourceData))
             {
@@ -1053,111 +1320,143 @@ namespace IconFinder.Services
                 var picture = svg.Load(stream);
                 if (picture == null) return null;
 
-                var targetSize = svgSize ?? DefaultSvgSize;
-                var scale = Math.Min(
-                    (float)targetSize / picture.CullRect.Width,
-                    (float)targetSize / picture.CullRect.Height);
+                var actualSize = svgSize ?? targetSize;
+                var svgScale = Math.Min(
+                    (float)actualSize / picture.CullRect.Width,
+                    (float)actualSize / picture.CullRect.Height);
 
-                var w = Math.Max(1, (int)(picture.CullRect.Width * scale));
-                var h = Math.Max(1, (int)(picture.CullRect.Height * scale));
+                var w = Math.Max(1, (int)(picture.CullRect.Width * svgScale));
+                var h = Math.Max(1, (int)(picture.CullRect.Height * svgScale));
 
                 using var surface = SKSurface.Create(new SKImageInfo(w, h));
                 var canvas = surface.Canvas;
                 canvas.Clear(SKColors.Transparent);
-                canvas.Scale(scale);
+                canvas.Scale(svgScale);
                 canvas.DrawPicture(picture);
 
                 using var snapshot = surface.Snapshot();
                 using var pngData = snapshot.Encode(SKEncodedImageFormat.Png, 100);
+                UsingMonitor.Info.AddPng();
                 return pngData.ToArray();
             }
 
+            // Для растровых изображений
             using var skBitmap = SKBitmap.Decode(sourceData);
             if (skBitmap == null) return null;
-            using var skImage = SKImage.FromBitmap(skBitmap);
-            using var data = skImage.Encode(SKEncodedImageFormat.Png, 100);
+
+            // Не увеличиваем размер выше исходного
+            var size = Math.Min(targetSize, Math.Max(skBitmap.Width, skBitmap.Height));
+            if (size == skBitmap.Width && size == skBitmap.Height)
+            {
+                // Если исходный размер уже подходит
+                using var skImage = SKImage.FromBitmap(skBitmap);
+                using var data = skImage.Encode(SKEncodedImageFormat.Png, 100);
+                UsingMonitor.Info.AddPng();
+                return data.ToArray();
+            }
+
+            var rasterScale = Math.Min((float)size / skBitmap.Width, (float)size / skBitmap.Height);
+            var newWidth = Math.Max(1, (int)(skBitmap.Width * rasterScale));
+            var newHeight = Math.Max(1, (int)(skBitmap.Height * rasterScale));
+
+            using var resized = skBitmap.Resize(
+                new SKImageInfo(newWidth, newHeight),
+                new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
+
+            if (resized == null) return null;
+
+            using var skImage2 = SKImage.FromBitmap(resized);
+            using var data2 = skImage2.Encode(SKEncodedImageFormat.Png, 100);
             UsingMonitor.Info.AddPng();
-            return data.ToArray();
+            return data2.ToArray();
         }
 
-        public static byte[] ConvertToIco(byte[] sourceData, int? svgSize = null)
+        public static byte[] ConvertToIco(byte[] sourceData, int? svgSize = null, int targetSize = 256)
         {
             byte[] rasterData;
             if (IsSvg(sourceData))
             {
-                rasterData = ConvertToPng(sourceData, svgSize);
+                rasterData = ConvertToPng(sourceData, svgSize, targetSize);
                 if (rasterData == null) return null;
             }
             else
             {
-                rasterData = sourceData;
+                // Для растровых используем ConvertToPng с ограничением размера
+                rasterData = ConvertToPng(sourceData, null, targetSize);
+                if (rasterData == null) return null;
             }
 
             using var skBitmap = SKBitmap.Decode(rasterData);
             if (skBitmap == null) return null;
 
-            var sizes = new[] { 256, 128, 64, 48, 32, 16 };
-            using var ms = new MemoryStream();
-            using var writer = new BinaryWriter(ms);
-
-            writer.Write((short)0);
-            writer.Write((short)1);
-            writer.Write((short)sizes.Length);
-
-            var images = new byte[sizes.Length][];
-            var offsets = new int[sizes.Length];
-            int offset = 6 + 16 * sizes.Length;
-
-            for (int i = 0; i < sizes.Length; i++)
+            // Создаем квадратную иконку
+            var size = Math.Min(targetSize, Math.Min(skBitmap.Width, skBitmap.Height));
+            if (skBitmap.Width != size || skBitmap.Height != size)
             {
-                var size = Math.Min(sizes[i], Math.Min(skBitmap.Width, skBitmap.Height));
                 using var resized = skBitmap.Resize(
                     new SKImageInfo(size, size),
                     new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
 
-                if (resized == null) continue;
+                if (resized == null) return null;
 
                 using var icoImage = SKImage.FromBitmap(resized);
                 using var pngData = icoImage.Encode(SKEncodedImageFormat.Png, 100);
-                images[i] = pngData.ToArray();
-                offsets[i] = offset;
-                offset += images[i].Length;
-            }
+                var imageData = pngData.ToArray();
 
-            for (int i = 0; i < sizes.Length; i++)
+                return CreateIcoFile(size, imageData);
+            }
+            else
             {
-                if (images[i] == null) continue;
+                using var icoImage = SKImage.FromBitmap(skBitmap);
+                using var pngData = icoImage.Encode(SKEncodedImageFormat.Png, 100);
+                var imageData = pngData.ToArray();
 
-                var size = Math.Min(sizes[i], Math.Min(skBitmap.Width, skBitmap.Height));
-                writer.Write((byte)size);
-                writer.Write((byte)size);
-                writer.Write((byte)0);
-                writer.Write((byte)0);
-                writer.Write((short)0);
-                writer.Write((short)32);
-                writer.Write(images[i].Length);
-                writer.Write(offsets[i]);
+                return CreateIcoFile(size, imageData);
             }
+        }
 
-            foreach (var img in images)
-            {
-                if (img != null)
-                    writer.Write(img);
-            }
+        private static byte[] CreateIcoFile(int size, byte[] imageData)
+        {
+            using var ms = new MemoryStream();
+            using var writer = new BinaryWriter(ms);
+
+            // ICO Header
+            writer.Write((short)0);  // reserved
+            writer.Write((short)1);  // ICO type
+            writer.Write((short)1);  // 1 icon
+
+            // Icon entry
+            writer.Write((byte)Math.Min(size, 255));  // width (max 255)
+            writer.Write((byte)Math.Min(size, 255));  // height (max 255)
+            writer.Write((byte)0);     // color palette
+            writer.Write((byte)0);     // reserved
+            writer.Write((short)0);    // color planes
+            writer.Write((short)32);   // bits per pixel
+            writer.Write(imageData.Length);  // size of image data
+            writer.Write(22);          // offset (6 + 16)
+
+            // Image data
+            writer.Write(imageData);
+
             UsingMonitor.Info.AddIco();
             return ms.ToArray();
         }
 
-        public static byte[] ConvertToWebp(byte[] sourceData, int? svgSize = null)
+        public static byte[] ConvertToWebp(byte[] sourceData, int? svgSize = null, int targetSize = 512)
         {
+            byte[] rasterData;
             if (IsSvg(sourceData))
             {
-                var pngData = ConvertToPng(sourceData, svgSize);
-                if (pngData == null) return null;
-                sourceData = pngData;
+                rasterData = ConvertToPng(sourceData, svgSize, targetSize);
+                if (rasterData == null) return null;
+            }
+            else
+            {
+                rasterData = ConvertToPng(sourceData, null, targetSize);
+                if (rasterData == null) return null;
             }
 
-            using var skBitmap = SKBitmap.Decode(sourceData);
+            using var skBitmap = SKBitmap.Decode(rasterData);
             if (skBitmap == null) return null;
             using var skImage = SKImage.FromBitmap(skBitmap);
             using var webpData = skImage.Encode(SKEncodedImageFormat.Webp, 90);
@@ -1165,13 +1464,36 @@ namespace IconFinder.Services
             return webpData.ToArray();
         }
 
-        public static byte[] ConvertTo(byte[] sourceData, string targetFormat, int? svgSize = null) => targetFormat.ToLower() switch
+        public static byte[] ConvertTo(byte[] sourceData, string targetFormat, int? svgSize = null, int targetSize = 512) => targetFormat.ToLower() switch
         {
-            ".png" => ConvertToPng(sourceData, svgSize),
-            ".ico" => ConvertToIco(sourceData, svgSize),
-            ".webp" => ConvertToWebp(sourceData, svgSize),
+            ".png" => ConvertToPng(sourceData, svgSize, targetSize),
+            ".ico" => ConvertToIco(sourceData, svgSize, targetSize),
+            ".webp" => ConvertToWebp(sourceData, svgSize, targetSize),
             _ => sourceData
         };
+
+        public static (int Width, int Height) GetImageDimensions(byte[] data)
+        {
+            if (IsSvg(data))
+            {
+                try
+                {
+                    using var svg = new Svg.Skia.SKSvg();
+                    using var stream = new MemoryStream(data);
+                    var picture = svg.Load(stream);
+                    if (picture != null)
+                        return ((int)picture.CullRect.Width, (int)picture.CullRect.Height);
+                }
+                catch { }
+                return (0, 0); // SVG считается бесконечно масштабируемым
+            }
+
+            using var skBitmap = SKBitmap.Decode(data);
+            if (skBitmap != null)
+                return (skBitmap.Width, skBitmap.Height);
+
+            return (0, 0);
+        }
 
         private static bool IsSvg(byte[] data)
         {

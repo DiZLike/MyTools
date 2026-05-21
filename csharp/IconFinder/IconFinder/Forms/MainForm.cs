@@ -171,6 +171,8 @@ namespace IconFinder.Forms
             }
 
             int processed = 0;
+            int lastPercent = -1;
+
             using (var archive = ZipFile.OpenRead(archivePath))
             {
                 foreach (var entry in archive.Entries)
@@ -190,12 +192,16 @@ namespace IconFinder.Forms
                     processed++;
                     var percent = (int)((double)processed / totalEntries * 100);
 
-                    // Обновляем прогресс в UI-потоке
-                    this.Invoke(new Action(() =>
+                    // Обновляем прогресс только когда процент изменился (уменьшаем количество вызовов Invoke)
+                    if (percent != lastPercent)
                     {
-                        progressBar.Value = Math.Min(percent, 100);
-                        lblStatus.Text = $"Распаковка: {processed}/{totalEntries} ({percent}%)";
-                    }));
+                        lastPercent = percent;
+                        this.Invoke(new Action(() =>
+                        {
+                            progressBar.Value = Math.Min(percent, 100);
+                            lblStatus.Text = $"Распаковка: {processed}/{totalEntries} ({percent}%)";
+                        }));
+                    }
                 }
             }
 
@@ -425,12 +431,16 @@ namespace IconFinder.Forms
                 ? $"Случайные иконки (показано: {_displayedCount:N0})"
                 : $"Показано: {_displayedCount:N0} из {_currentResults.Count:N0}";
 
-            // Загружаем миниатюры
-            this.BeginInvoke(new Action(() =>
+            // Загружаем миниатюры асинхронно
+            this.BeginInvoke(new Action(async () =>
             {
                 foreach (Control c in pnlResults.Controls)
+                {
                     if (c is IconCard card && card.Visible)
-                        card.LoadThumbnail();
+                    {
+                        await card.LoadThumbnailAsync();
+                    }
+                }
             }));
         }
 
@@ -443,6 +453,8 @@ namespace IconFinder.Forms
         private void Card_IconClicked(object sender, IconInfo icon)
         {
             Logger.Log($"Clicked: {icon.FilePath}");
+            var preview = new PreviewForm(icon, _iconService);
+            preview.ShowDialog();
         }
 
         private void ClearResults()

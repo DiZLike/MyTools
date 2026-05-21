@@ -1,4 +1,6 @@
-﻿using System;
+﻿// Файл: IconCard.cs - Полная замена с оптимизациями
+
+using System;
 using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
@@ -15,6 +17,7 @@ namespace IconFinder.Controls
         private readonly IconService _iconService;
         private ContextMenuStrip _formatPopup;
         private bool _isDragging = false;
+        private byte[] _cachedSourceData;
 
         public event EventHandler<IconInfo> IconClicked;
 
@@ -68,6 +71,7 @@ namespace IconFinder.Controls
                 _formatPopup.Items.Add(formatItem);
             }
         }
+
         private ToolStripMenuItem CreateFormatMenuItem(string format)
         {
             var formatItem = new ToolStripMenuItem
@@ -80,11 +84,19 @@ namespace IconFinder.Controls
             };
             formatItem.MouseEnter += (s, e) => formatItem.BackColor = Color.FromArgb(60, 60, 65);
             formatItem.MouseLeave += (s, e) => formatItem.BackColor = Color.FromArgb(45, 45, 48);
+
             // Создаем подменю с размерами
             var sizeSubMenu = CreateSizeSubMenu(format);
             formatItem.DropDownItems.AddRange(sizeSubMenu.ToArray<ToolStripItem>());
 
             return formatItem;
+        }
+
+        private byte[] GetCachedSourceData()
+        {
+            if (_cachedSourceData == null)
+                _cachedSourceData = _iconService.GetIconData(_iconInfo.FilePath);
+            return _cachedSourceData;
         }
 
         private List<ToolStripItem> CreateSizeSubMenu(string format)
@@ -107,7 +119,7 @@ namespace IconFinder.Controls
             }
 
             // Получаем размеры исходного изображения
-            var sourceData = _iconService.GetIconData(_iconInfo.FilePath);
+            var sourceData = GetCachedSourceData();
             var dimensions = sourceData != null ? IconConverter.GetImageDimensions(sourceData) : (0, 0);
             var isSvg = Path.GetExtension(_iconInfo.FilePath).ToLower() == ".svg";
             var maxDimension = Math.Max(dimensions.Item1, dimensions.Item2);
@@ -145,12 +157,42 @@ namespace IconFinder.Controls
             lblExt.Text = $"{Path.GetExtension(fileName).Trim('.').ToUpper()}";
         }
 
+        public async Task LoadThumbnailAsync()
+        {
+            if (picIcon.Image != null) return;
+            try
+            {
+                var data = await Task.Run(() => GetCachedSourceData());
+                if (data == null) return;
+
+                var ext = Path.GetExtension(_iconInfo.FilePath).ToLower();
+
+                if (ext == ".svg")
+                {
+                    LoadSvgThumbnail(data);
+                }
+                else if (ext == ".webp")
+                {
+                    LoadWebpThumbnail(data);
+                }
+                else
+                {
+                    LoadRasterThumbnail(data);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Thumbnail error: {_iconInfo.FilePath} - {ex.Message}");
+            }
+        }
+
+        // Синхронная версия для обратной совместимости
         public void LoadThumbnail()
         {
             if (picIcon.Image != null) return;
             try
             {
-                var data = _iconService.GetIconData(_iconInfo.FilePath);
+                var data = GetCachedSourceData();
                 if (data == null) return;
 
                 var ext = Path.GetExtension(_iconInfo.FilePath).ToLower();
@@ -222,10 +264,13 @@ namespace IconFinder.Controls
 
             // Создаем новый Bitmap и отключаем сглаживание
             var resized = new Bitmap(w, h);
-            using var g = Graphics.FromImage(resized);
-            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
-            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
-            g.DrawImage(original, 0, 0, w, h);
+            using (var g = Graphics.FromImage(resized))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+                g.DrawImage(original, 0, 0, w, h);
+            }
+            // original автоматически освободится благодаря using
 
             picIcon.Image = resized;
         }
@@ -254,7 +299,7 @@ namespace IconFinder.Controls
         {
             try
             {
-                var data = _iconService.GetIconData(_iconInfo.FilePath);
+                var data = GetCachedSourceData();
                 if (data == null) return;
 
                 var tempDir = Path.Combine(Path.GetTempPath(), "IconFinder");
@@ -296,7 +341,7 @@ namespace IconFinder.Controls
 
             if (sfd.ShowDialog() == DialogResult.OK)
             {
-                var data = _iconService.GetIconData(_iconInfo.FilePath);
+                var data = GetCachedSourceData();
                 if (data != null)
                 {
                     File.WriteAllBytes(sfd.FileName, data);
@@ -326,7 +371,7 @@ namespace IconFinder.Controls
 
                 if (sfd.ShowDialog() == DialogResult.OK)
                 {
-                    var sourceData = _iconService.GetIconData(_iconInfo.FilePath);
+                    var sourceData = GetCachedSourceData();
                     if (sourceData == null) return;
 
                     var convertedData = await Task.Run(() =>
@@ -345,12 +390,5 @@ namespace IconFinder.Controls
                 Logger.Log($"Convert error: {ex.Message}");
             }
         }
-
-        private static string FormatSize(int bytes) => bytes switch
-        {
-            < 1024 => $"{bytes} B",
-            < 1024 * 1024 => $"{bytes / 1024.0:F1} KB",
-            _ => $"{bytes / (1024.0 * 1024):F1} MB"
-        };
     }
 }

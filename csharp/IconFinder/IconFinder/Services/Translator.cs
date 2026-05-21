@@ -1,4 +1,7 @@
-﻿using System;
+﻿// Файл: Translator.cs - Оптимизированная версия
+
+using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -8,32 +11,39 @@ namespace IconFinder.Services
 {
     public static class Translator
     {
-        private static readonly Dictionary<string, string> _dict = new(StringComparer.OrdinalIgnoreCase);
-        private static readonly HashSet<string> _newWords = new(); // слова для сохранения
+        private static readonly ConcurrentDictionary<string, string> _dict = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, byte> _newWords = new ConcurrentDictionary<string, byte>(); // потокобезопасный HashSet
         private static LibreTranslateService _ltService;
         private static string _dictPath;
-        private static bool _loaded = false;
+        private static volatile bool _loaded = false;
+        private static readonly object _loadLock = new object();
 
         public static void LoadDictionary(string dictPath)
         {
             if (_loaded) return;
-            _loaded = true;
-            _dictPath = dictPath;
 
-            if (!File.Exists(dictPath))
+            lock (_loadLock)
             {
-                Logger.Log($"Dictionary not found: {dictPath}");
-                return;
-            }
+                if (_loaded) return;
 
-            foreach (var line in File.ReadAllLines(dictPath))
-            {
-                var parts = line.Split(new[] { " → ", "\t", "=" }, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length == 2)
-                    _dict[parts[0].Trim().ToLower()] = parts[1].Trim().ToLower();
-            }
+                _loaded = true;
+                _dictPath = dictPath;
 
-            Logger.Log($"Dictionary: {_dict.Count} words");
+                if (!File.Exists(dictPath))
+                {
+                    Logger.Log($"Dictionary not found: {dictPath}");
+                    return;
+                }
+
+                foreach (var line in File.ReadAllLines(dictPath))
+                {
+                    var parts = line.Split(new[] { " → ", "\t", "=" }, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length == 2)
+                        _dict.TryAdd(parts[0].Trim().ToLower(), parts[1].Trim().ToLower());
+                }
+
+                Logger.Log($"Dictionary: {_dict.Count} words");
+            }
         }
 
         public static void SetTranslateService(LibreTranslateService service)
@@ -106,10 +116,9 @@ namespace IconFinder.Services
                         result[unknownIndices[j]] = enWord;
 
                         // Добавляем в словарь и в список новых слов
-                        if (!_dict.ContainsKey(ruWord))
+                        if (_dict.TryAdd(ruWord, enWord))
                         {
-                            _dict[ruWord] = enWord;
-                            _newWords.Add($"{ruWord} → {enWord}");
+                            _newWords.TryAdd($"{ruWord} → {enWord}", 0);
                         }
                     }
                 }
@@ -129,8 +138,8 @@ namespace IconFinder.Services
 
             try
             {
-                var linesToAdd = _newWords
-                    .Where(w => !_dictContainsLine(w)) // избегаем дубликатов в файле
+                var linesToAdd = _newWords.Keys
+                    .Where(w => !DictContainsLine(w))
                     .ToList();
 
                 if (linesToAdd.Count == 0) return;
@@ -150,7 +159,7 @@ namespace IconFinder.Services
             }
         }
 
-        private static bool _dictContainsLine(string line)
+        private static bool DictContainsLine(string line)
         {
             if (!File.Exists(_dictPath)) return false;
             return File.ReadAllLines(_dictPath).Any(l => l.Trim() == line.Trim());
