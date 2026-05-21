@@ -1,6 +1,7 @@
 **/[Bb]in/
 **/[Oo]bj/
 **/[Dd]ownloads/
+**/__pycache__/
 **/ffmpeg.exe
 **/ffprobe.exe
 **/icons.db
