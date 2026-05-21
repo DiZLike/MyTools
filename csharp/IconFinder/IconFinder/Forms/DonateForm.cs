@@ -7,8 +7,8 @@ namespace IconFinder.Forms
     public partial class DonateForm : Form
     {
         // ЗАМЕНИТЕ НА СВОИ ССЫЛКИ!
-        private const string DONATE_URL = "https://www.donationalerts.com/r/ваш_ник";
-        private const string DONATE_URL_ALT = "https://boosty.to/ваш_ник";
+        private const string DONATE_URL = "https://donatepay.ru/don/dizlike91?goal=Icon Finder";
+        private const string DONATE_URL_ALT = "https://donatepay.ru/don/dizlike91?goal=Icon Finder";
 
         public DonateForm()
         {

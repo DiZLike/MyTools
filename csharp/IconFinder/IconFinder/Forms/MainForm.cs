@@ -36,7 +36,7 @@ namespace IconFinder.Forms
 
             // Всё остальное — после показа формы
             this.Shown += MainForm_Shown;
-
+            UsingMonitor.Info.AddRun();
         }
 
         private async void MainForm_Shown(object sender, EventArgs e)
@@ -54,7 +54,6 @@ namespace IconFinder.Forms
                 // Запуск сервера перевода
                 await StartTranslateServer();
             }
-            UsingMonitor.Info.AddRun();
         }
         private async void LoadUsingMonitor()
         {
