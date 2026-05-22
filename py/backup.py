@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
 """
-Скрипт для резервного копирования папки /home/admin/media/hdd/web
-Бэкапы сохраняются в /home/admin/media/hdd/!Evgeny/src/BackUp
-Поддерживает:
-- Полные бэкапы
-- Инкрементные бэкапы (только измененные файлы)
-- Исключение папок из архивации (настраивается через переменную EXCLUDE_DIRS)
-- Отображение прогресса создания бэкапа
-- Восстановление с заменой существующих файлов
-- АВТОМАТИЧЕСКОЕ ВОССТАНОВЛЕНИЕ ЦЕПОЧКИ инкрементных бэкапов
-- Проверка целостности архивов
+Скрипт для резервного копирования /home/admin/media/hdd/web
+Бэкапы в /home/admin/media/hdd/!Evgeny/src/BackUp
 """
 
 import os
@@ -20,615 +12,811 @@ import logging
 import argparse
 import json
 import hashlib
-from datetime import datetime
-from pathlib import Path
-from tqdm import tqdm
 import tempfile
 import re
-from typing import List, Optional, Tuple, Set
+from datetime import datetime
+from pathlib import Path
+from collections import defaultdict
+from typing import Optional
+
+from rich.console import Console
+from rich.progress import (
+    Progress, BarColumn, TextColumn, FileSizeColumn,
+    SpinnerColumn, TimeRemainingColumn
+)
+from rich.panel import Panel
+from rich.table import Table
+from rich.tree import Tree
+from rich.columns import Columns
+from rich.box import SIMPLE, ROUNDED, HEAVY
 
 
-# ==================== НАСТРОЙКИ ====================
-EXCLUDE_DIRS = ['__pycache__', '.git', 'media', 'node_modules', 'dist', 'build']
+EXCLUDE_DIRS = ['__pycache__', '.git', '.venv', '.vscode', 'media', 'node_modules', 'dist', 'build']
 SOURCE_DIR = "/home/admin/media/hdd/web"
 BACKUP_DIR = "/home/admin/media/hdd/!Evgeny/src/BackUp"
-MAX_BACKUPS = None  # None = без ограничений
-# ===================================================
+MAX_BACKUPS = None
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Вспомогательные функции
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def format_size(size_bytes: int) -> str:
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.1f} PB"
+
+
+def get_ext(path: str) -> str:
+    ext = os.path.splitext(path)[1].lower()
+    return ext if ext else "(нет)"
+
+
+def parse_backup_info(filename: str) -> Optional[dict]:
+    match = re.match(r'web_backup_(full|inc)_(\d{8}_\d{6})\.tar\.gz', filename)
+    if match:
+        return {
+            'type': match.group(1),
+            'timestamp': match.group(2),
+            'datetime': datetime.strptime(match.group(2), '%Y%m%d_%H%M%S'),
+            'filename': filename
+        }
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BackupManager
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class BackupManager:
-    """Менеджер резервного копирования с поддержкой инкрементных бэкапов"""
-    
     def __init__(self, source_dir=SOURCE_DIR, backup_dir=BACKUP_DIR,
-                 max_backups=MAX_BACKUPS, exclude_dirs=None):
+                 max_backups=MAX_BACKUPS, exclude_dirs=None, skip_symlink_check=False):
         self.source_dir = Path(source_dir)
         self.backup_dir = Path(backup_dir)
         self.max_backups = max_backups
         self.exclude_dirs = exclude_dirs or EXCLUDE_DIRS
         self.state_file = self.backup_dir / "backup_state.json"
-        
+        self.console = Console()
+        self.skip_symlink_check = skip_symlink_check
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         self._setup_logging()
-    
+
     def _setup_logging(self):
-        """Настройка логирования"""
         log_file = self.backup_dir / "backup.log"
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[logging.FileHandler(log_file), logging.StreamHandler(sys.stdout)]
-        )
-        self.logger = logging.getLogger(__name__)
-    
-    def _get_file_hash(self, file_path: Path) -> Optional[str]:
-        """Быстрое хеширование с ограничением размера"""
-        hash_md5 = hashlib.md5()
-        try:
-            with open(file_path, "rb") as f:
-                # Хешируем только первые 64KB + размер для скорости
-                chunk = f.read(65536)
-                hash_md5.update(chunk)
-                hash_md5.update(str(file_path.stat().st_size).encode())
-            return hash_md5.hexdigest()
-        except Exception as e:
-            self.logger.warning(f"Не удалось вычислить хеш для {file_path}: {e}")
-            return None
-    
-    def _get_file_info(self, file_path: Path) -> dict:
-        """Получение информации о файле"""
-        stat = file_path.stat()
-        return {
-            'size': stat.st_size,
-            'mtime': stat.st_mtime,
-            'hash': None  # Вычисляем только при необходимости
-        }
-    
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        rich_handler = logging.StreamHandler()
+        rich_handler.setFormatter(logging.Formatter('%(message)s'))
+        logging.basicConfig(level=logging.INFO, handlers=[rich_handler, file_handler])
+        self.logger = logging.getLogger("backup")
+
     def _load_state(self) -> Optional[dict]:
-        """Загрузка состояния последнего бэкапа"""
         if self.state_file.exists():
             try:
                 with open(self.state_file, 'r') as f:
                     return json.load(f)
-            except Exception as e:
-                self.logger.warning(f"Не удалось загрузить состояние: {e}")
+            except Exception:
+                return None
         return None
-    
+
     def _save_state(self, state: dict):
-        """Сохранение состояния бэкапа"""
         try:
             with open(self.state_file, 'w') as f:
                 json.dump(state, f, indent=2, default=str)
-        except Exception as e:
-            self.logger.error(f"Не удалось сохранить состояние: {e}")
-    
-    def _parse_backup_info(self, filename: str) -> Optional[dict]:
-        """Парсинг имени файла бэкапа"""
-        pattern = r'web_backup_(full|inc)_(\d{8}_\d{6})\.tar\.gz'
-        match = re.match(pattern, filename)
-        if match:
-            return {
-                'type': match.group(1),
-                'timestamp': match.group(2),
-                'datetime': datetime.strptime(match.group(2), '%Y%m%d_%H%M%S'),
-                'filename': filename
-            }
-        return None
-    
-    def _get_all_backups(self) -> List[dict]:
-        """Получение отсортированного списка всех бэкапов"""
-        backups = []
-        for file_path in self.backup_dir.glob("web_backup_*.tar.gz"):
-            if file_path.is_file():
-                info = self._parse_backup_info(file_path.name)
-                if info:
-                    info['path'] = file_path
-                    backups.append(info)
-        backups.sort(key=lambda x: x['datetime'])
-        return backups
-    
-    def _find_base_full_backup(self, inc_backup_info: dict) -> Optional[dict]:
-        """Находит полный бэкап, на котором основан инкрементный"""
-        full_backup = None
-        for backup in self._get_all_backups():
-            if backup['type'] == 'full' and backup['datetime'] < inc_backup_info['datetime']:
-                full_backup = backup
-            elif backup['datetime'] >= inc_backup_info['datetime']:
-                break
-        return full_backup
-    
-    def _get_incremental_chain(self, target: dict) -> List[dict]:
-        """Получение цепочки инкрементных бэкапов для восстановления"""
-        all_backups = self._get_all_backups()
-        
-        if target['type'] == 'full':
-            return [target]
-        
-        full_backup = self._find_base_full_backup(target)
-        if not full_backup:
-            self.logger.error(f"Не найден полный бэкап для {target['filename']}")
-            return []
-        
-        chain = [full_backup]
-        for backup in all_backups:
-            if backup['type'] == 'inc' and full_backup['datetime'] < backup['datetime'] <= target['datetime']:
-                chain.append(backup)
-        
-        return chain
-    
-    def _verify_backup(self, archive_path: Path) -> bool:
-        """Проверка целостности архива"""
+        except Exception:
+            pass
+
+    def _get_file_info(self, file_path: Path) -> dict:
+        stat = file_path.stat()
+        return {'size': stat.st_size, 'mtime': stat.st_mtime, 'hash': None}
+
+    def _get_file_hash(self, file_path: Path) -> Optional[str]:
         try:
-            with tarfile.open(archive_path, "r:gz") as tar:
-                for member in tar.getmembers():
-                    try:
-                        f = tar.extractfile(member)
-                        if f:
-                            f.read()
-                    except Exception as e:
-                        self.logger.error(f"Ошибка чтения {member.name}: {e}")
-                        return False
-            self.logger.info(f"✅ Проверка целостности пройдена: {archive_path.name}")
-            return True
-        except Exception as e:
-            self.logger.error(f"❌ Архив поврежден: {archive_path.name} - {e}")
-            return False
-    
-    def _restore_from_chain(self, chain: List[dict], temp_dir: Path) -> bool:
-        """Восстановление из цепочки бэкапов во временную директорию"""
-        try:
-            for i, backup_info in enumerate(chain, 1):
-                self.logger.info(f"  [{i}/{len(chain)}] Обработка: {backup_info['filename']}")
-                
-                with tarfile.open(backup_info['path'], "r:gz") as tar:
-                    members = [m for m in tar.getmembers() if m.isfile()]
-                    total_size = sum(m.size for m in members)
-                    
-                    with tqdm(total=total_size, unit='B', unit_scale=True, unit_divisor=1024,
-                             desc=f"  Распаковка {backup_info['type']}",
-                             bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as pbar:
-                        
-                        for member in members:
-                            try:
-                                tar.extract(member, path=temp_dir, set_attrs=False)
-                                pbar.update(member.size)
-                                pbar.set_postfix(file=member.name[:30], refresh=True)
-                            except Exception as e:
-                                self.logger.warning(f"    Не удалось извлечь {member.name}: {e}")
-                
-                self.logger.info(f"  ✅ {backup_info['filename']} распакован")
-            return True
-        except Exception as e:
-            self.logger.error(f"Ошибка при восстановлении цепочки: {e}")
-            return False
-    
-    def _apply_deleted_files(self, temp_dir: Path, backup_info: dict) -> bool:
-        """Применение информации об удалённых файлах"""
-        try:
-            with tarfile.open(backup_info['path'], "r:gz") as tar:
-                deleted_files = [m for m in tar.getmembers() 
-                                if '.deleted_' in m.name and m.name.endswith('.json')]
-                
-                if not deleted_files:
-                    return True
-                
-                for deleted_file in deleted_files:
-                    with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
-                        extracted = tar.extractfile(deleted_file)
-                        if extracted:
-                            f.write(extracted.read())
-                            tmp_path = Path(f.name)
-                    
-                    with open(tmp_path, 'r') as f:
-                        deleted_data = json.load(f)
-                    
-                    for rel_path in deleted_data.get('deleted_files', []):
-                        web_dir = temp_dir / 'web'
-                        file_to_delete = web_dir / rel_path if web_dir.exists() else temp_dir / rel_path
-                        if file_to_delete.exists():
-                            file_to_delete.unlink()
-                            self.logger.info(f"  🗑️ Удалён файл: {rel_path}")
-                    
-                    tmp_path.unlink()
-            return True
-        except Exception as e:
-            self.logger.warning(f"Не удалось применить информацию об удалённых файлах: {e}")
-            return False
-    
-    def _scan_directory(self) -> Tuple[List[Path], int]:
-        """Однократное сканирование директории"""
-        files = []
-        total_size = 0
-        
+            hash_md5 = hashlib.md5()
+            with open(file_path, "rb") as f:
+                hash_md5.update(f.read(65536))
+                hash_md5.update(str(file_path.stat().st_size).encode())
+            return hash_md5.hexdigest()
+        except Exception:
+            return None
+
+    def _walk_source_dir(self) -> dict:
+        files = {}
         for root, dirs, filenames in os.walk(self.source_dir):
             dirs[:] = [d for d in dirs if d not in self.exclude_dirs]
             for filename in filenames:
                 file_path = Path(root) / filename
-                if file_path.is_file():
-                    files.append(file_path)
-                    total_size += file_path.stat().st_size
-        
-        return files, total_size
-    
-    def create_full_backup(self) -> Optional[Path]:
-        """Создание полной резервной копии с прогресс-баром"""
+                if file_path.is_file() or file_path.is_symlink():
+                    rel_path = str(file_path.relative_to(self.source_dir)).replace('\\', '/')
+                    files[rel_path] = file_path
+        return files
+
+    def _get_all_backups(self) -> list:
+        backups = []
+        for file_path in self.backup_dir.glob("web_backup_*.tar.gz"):
+            if file_path.is_file():
+                info = parse_backup_info(file_path.name)
+                if info:
+                    info['path'] = file_path
+                    backups.append(info)
+        return sorted(backups, key=lambda x: x['datetime'])
+
+    def _get_incremental_chain(self, target: dict) -> list:
+        all_backups = self._get_all_backups()
+        if target['type'] == 'full':
+            return [target]
+
+        full_backup = None
+        for backup in all_backups:
+            if backup['type'] == 'full' and backup['datetime'] < target['datetime']:
+                full_backup = backup
+            elif backup['datetime'] >= target['datetime']:
+                break
+
+        if not full_backup:
+            return []
+
+        chain = [full_backup]
+        for backup in all_backups:
+            if backup['type'] == 'inc' and full_backup['datetime'] < backup['datetime'] <= target['datetime']:
+                chain.append(backup)
+        return chain
+
+    def _cleanup_old_backups(self):
+        if not self.max_backups:
+            return
+        backup_files = sorted(
+            self.backup_dir.glob("web_backup_*.tar.gz"),
+            key=lambda x: x.stat().st_mtime, reverse=True
+        )
+        for old_file in backup_files[self.max_backups:]:
+            old_file.unlink()
+
+    def _print_header(self, title: str, subtitle: str = None):
+        self.console.print()
+        self.console.print(Panel(
+            f"[bold white]{title}[/bold white]",
+            box=HEAVY, border_style="cyan", padding=(1, 2)
+        ))
+        if subtitle:
+            self.console.print(f"  [dim]{subtitle}[/dim]")
+        self.console.print()
+
+    def _print_step(self, step_num: int, total_steps: int, description: str):
+        self.console.print(f"[bold cyan]▸ Шаг {step_num}/{total_steps}:[/bold cyan] {description}")
+        self.console.print()
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Создание бэкапа
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def create_backup(self, backup_type='full') -> Optional[Path]:
         if not self.source_dir.exists():
-            self.logger.error(f"Исходная директория не существует: {self.source_dir}")
+            self.console.print(Panel.fit("[red]Директория не существует[/red]", border_style="red"))
             return None
-        
+
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            archive_name = f"web_backup_full_{timestamp}.tar.gz"
+            type_str = 'full' if backup_type == 'full' else 'inc'
+            archive_name = f"web_backup_{type_str}_{timestamp}.tar.gz"
             archive_path = self.backup_dir / archive_name
-            
-            self.logger.info(f"Начинаю создание ПОЛНОЙ резервной копии: {archive_path}")
-            self.logger.info(f"Исключаемые директории: {', '.join(self.exclude_dirs)}")
-            
-            # Однократное сканирование
-            self.logger.info("Сканирование файлов...")
-            files_to_backup, total_size = self._scan_directory()
-            total_files = len(files_to_backup)
-            
-            self.logger.info(f"Найдено файлов: {total_files}, общий размер: {self._format_size(total_size)}")
-            
-            # Сохраняем состояние
-            state = {'timestamp': timestamp, 'type': 'full', 
-                    'source_dir': str(self.source_dir), 'files': {}}
-            
-            self.logger.info("Создание архива...")
-            
-            with tarfile.open(archive_path, "w:gz") as tar:
-                with tqdm(total=total_size, unit='B', unit_scale=True, unit_divisor=1024,
-                         desc="Архивация",
-                         bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as pbar:
-                    
-                    for file_path in files_to_backup:
-                        try:
-                            arcname = self.source_dir.name / file_path.relative_to(self.source_dir)
-                            tar.add(file_path, arcname=arcname, recursive=False)
-                            
-                            # Сохраняем базовую информацию без хеша
-                            relative_path = str(file_path.relative_to(self.source_dir))
-                            state['files'][relative_path] = self._get_file_info(file_path)
-                            
-                            pbar.update(file_path.stat().st_size)
-                            pbar.set_postfix(file=file_path.name[:30], refresh=True)
-                        except Exception as e:
-                            self.logger.warning(f"Не удалось добавить файл {file_path}: {e}")
-            
-            self._save_state(state)
-            
-            # Проверка целостности
-            if not self._verify_backup(archive_path):
-                self.logger.error("❌ Архив не прошел проверку целостности!")
-                archive_path.unlink()
-                return None
-            
-            archive_size = archive_path.stat().st_size
-            compression_ratio = (1 - archive_size / total_size) * 100 if total_size > 0 else 0
-            
-            self.logger.info("=" * 60)
-            self.logger.info("✅ ПОЛНАЯ резервная копия создана успешно!")
-            self.logger.info(f"📁 Путь: {archive_path}")
-            self.logger.info(f"📦 Размер архива: {self._format_size(archive_size)}")
-            self.logger.info(f"📊 Исходный размер: {self._format_size(total_size)}")
-            self.logger.info(f"🗜️  Степень сжатия: {compression_ratio:.1f}%")
-            self.logger.info(f"📄 Файлов в архиве: {total_files}")
-            self.logger.info("=" * 60)
-            
-            if self.max_backups is not None:
-                self._cleanup_old_backups()
-            
-            return archive_path
-            
-        except Exception as e:
-            self.logger.error(f"❌ Ошибка при создании резервной копии: {e}")
-            if 'archive_path' in locals() and archive_path.exists():
-                archive_path.unlink()
-            return None
-    
-    def _get_changed_files(self, previous_state: dict) -> Tuple[List[Path], List[Path], List[str]]:
-        """Определение измененных, новых и удаленных файлов"""
-        new_files = []
-        modified_files = []
-        
-        # Сканируем текущие файлы
-        current_files = {}
-        for root, dirs, files in os.walk(self.source_dir):
-            dirs[:] = [d for d in dirs if d not in self.exclude_dirs]
-            for file in files:
-                file_path = Path(root) / file
-                relative_path = str(file_path.relative_to(self.source_dir))
-                current_files[relative_path] = file_path
-        
-        previous_files = set(previous_state.get('files', {}).keys())
-        current_files_set = set(current_files.keys())
-        
-        # Удаленные файлы
-        deleted_files = list(previous_files - current_files_set)
-        
-        # Новые и измененные файлы
-        for rel_path, file_path in current_files.items():
-            if rel_path not in previous_files:
-                new_files.append(file_path)
+
+            title = "📦 ПОЛНЫЙ БЭКАП" if backup_type == 'full' else "📦 ИНКРЕМЕНТАЛЬНЫЙ БЭКАП"
+            subtitle = f"Исключения: {', '.join(self.exclude_dirs)}"
+            self._print_header(title, subtitle)
+
+            # ── Шаг 1: Сканирование ──
+            self._print_step(1, 3, "Сканирование файлов")
+
+            if backup_type == 'full':
+                files_to_backup, deleted_files, total_size, state = self._scan_full(timestamp)
             else:
-                prev_info = previous_state['files'][rel_path]
-                current_info = self._get_file_info(file_path)
-                
-                # Быстрое сравнение по размеру и времени
-                if (prev_info.get('size') != current_info.get('size') or
-                    prev_info.get('mtime') != current_info.get('mtime')):
-                    # Только при несовпадении вычисляем хеш
-                    current_info['hash'] = self._get_file_hash(file_path)
-                    if prev_info.get('hash') != current_info.get('hash'):
-                        modified_files.append(file_path)
-        
-        return new_files, modified_files, deleted_files
-    
-    def create_incremental_backup(self) -> Optional[Path]:
-        """Создание инкрементной резервной копии"""
-        if not self.source_dir.exists():
-            self.logger.error(f"Исходная директория не существует: {self.source_dir}")
+                result = self._scan_incremental(timestamp)
+                if result is None:
+                    return None
+                files_to_backup, deleted_files, total_size, state = result
+
+            total_files = len(files_to_backup)
+            if total_files == 0:
+                self.console.print("[yellow]Нет файлов для архивации[/yellow]")
+                return None
+
+            # ── Шаг 2: Архивация ──
+            self._print_step(2, 3, f"Создание архива: {archive_name}")
+            ext_stats = self._create_archive(archive_path, files_to_backup, total_size,
+                                             state, backup_type, deleted_files, timestamp)
+
+            # ── Шаг 3: Проверка ──
+            self._print_step(3, 3, "Проверка целостности архива")
+            success, errors = self._verify_backup(archive_path)
+
+            # ── Итоги ──
+            self._print_summary(archive_path, archive_name, total_files, ext_stats, success, errors)
+
+            self._save_state(state)
+            if self.max_backups:
+                self._cleanup_old_backups()
+
+            return archive_path
+
+        except Exception as e:
+            self.console.print(Panel.fit(f"[red]✗ Ошибка: {e}[/red]", border_style="red"))
+            self.logger.exception("Ошибка при создании бэкапа")
             return None
-        
+
+    def _scan_full(self, timestamp: str) -> tuple:
+        current_files = self._walk_source_dir()
+        files_to_backup = list(current_files.values())
+
+        with Progress(
+            TextColumn("[bold]{task.percentage:>3.0f}%"),
+            BarColumn(bar_width=None),
+            TextColumn("[cyan]{task.description}[/cyan]"),
+            console=self.console
+        ) as progress:
+            task = progress.add_task("Сканирование", total=len(files_to_backup) or 1)
+
+            for _ in files_to_backup:
+                progress.advance(task)
+
+            total_size = sum(f.stat().st_size for f in files_to_backup
+                           if f.is_file() and not f.is_symlink())
+
+            progress.update(task,
+                          description=f"[green]✓ Найдено: {len(files_to_backup):,} файлов "
+                                      f"({format_size(total_size)})[/green]")
+
+        self.console.print()
+        state = {'timestamp': timestamp, 'type': 'full', 'source_dir': str(self.source_dir), 'files': {}}
+        return files_to_backup, [], total_size, state
+
+    def _scan_incremental(self, timestamp: str) -> Optional[tuple]:
         previous_state = self._load_state()
         if not previous_state:
-            self.logger.info("Нет предыдущего состояния. Создаю полный бэкап...")
-            return self.create_full_backup()
-        
-        try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            archive_name = f"web_backup_inc_{timestamp}.tar.gz"
-            archive_path = self.backup_dir / archive_name
-            
-            self.logger.info(f"Начинаю создание ИНКРЕМЕНТНОЙ резервной копии: {archive_path}")
-            self.logger.info(f"Базовый бэкап от: {previous_state.get('timestamp', 'unknown')}")
-            
-            self.logger.info("Поиск измененных файлов...")
-            new_files, modified_files, deleted_files = self._get_changed_files(previous_state)
-            
+            self.console.print("[yellow]Нет предыдущего состояния. Создаю полный бэкап...[/yellow]")
+            self.console.print()
+            return self._scan_full(timestamp)
+
+        current_files = self._walk_source_dir()
+        prev_files = set(previous_state.get('files', {}).keys())
+        curr_files = set(current_files.keys())
+
+        deleted_files = list(prev_files - curr_files)
+        new_files = [current_files[f] for f in (curr_files - prev_files) if f in current_files]
+        modified_files = []
+
+        common_files = list(prev_files & curr_files)
+
+        with Progress(
+            TextColumn("[bold]{task.percentage:>3.0f}%"),
+            BarColumn(bar_width=None),
+            TextColumn("[cyan]{task.description}[/cyan]"),
+            console=self.console
+        ) as progress:
+            task = progress.add_task("Сравнение", total=len(common_files) or 1)
+
+            for f in common_files:
+                file_path = current_files[f]
+                prev_info = previous_state['files'][f]
+                curr_info = self._get_file_info(file_path)
+
+                if (prev_info.get('size') != curr_info.get('size') or
+                    prev_info.get('mtime') != curr_info.get('mtime')):
+                    curr_info['hash'] = self._get_file_hash(file_path)
+                    if prev_info.get('hash') != curr_info.get('hash'):
+                        modified_files.append(file_path)
+
+                progress.advance(task)
+
             files_to_backup = new_files + modified_files
-            if not files_to_backup:
-                self.logger.info("📭 Изменений не обнаружено. Инкрементный бэкап не требуется.")
+
+            if not files_to_backup and not deleted_files:
+                progress.update(task, description="[yellow]Изменений не обнаружено[/yellow]")
+                self.console.print()
                 return None
-            
-            total_size = sum(f.stat().st_size for f in files_to_backup if f.is_file())
-            
-            self.logger.info(f"🔄 Найдено изменений:")
-            self.logger.info(f"  📄 Новых файлов: {len(new_files)}")
-            self.logger.info(f"  ✏️  Измененных файлов: {len(modified_files)}")
-            self.logger.info(f"  ❌ Удаленных файлов: {len(deleted_files)}")
-            self.logger.info(f"  💾 Общий размер изменений: {self._format_size(total_size)}")
-            
-            # Новое состояние
-            new_state = {
-                'timestamp': timestamp,
-                'type': 'incremental',
-                'source_dir': str(self.source_dir),
-                'base_backup': previous_state.get('timestamp'),
-                'files': previous_state.get('files', {}).copy()
-            }
-            
-            self.logger.info("Создание инкрементного архива...")
-            
+
+            progress.update(task,
+                          description=f"[green]✓ Новых: {len(new_files):,}, "
+                                      f"измененных: {len(modified_files):,}, "
+                                      f"удаленных: {len(deleted_files):,}[/green]")
+
+        self.console.print()
+
+        total_size = sum(f.stat().st_size for f in files_to_backup
+                       if f.is_file() and not f.is_symlink())
+
+        state = previous_state.copy()
+        state.update({'timestamp': timestamp, 'type': 'incremental', 'base_backup': previous_state.get('timestamp')})
+
+        stats_table = Table(box=SIMPLE, show_header=False, padding=(0, 4))
+        stats_table.add_column(style="cyan", width=15)
+        stats_table.add_column(style="white", justify="right")
+        stats_table.add_row("🆕 Новых файлов", str(len(new_files)))
+        stats_table.add_row("✏️  Измененных", str(len(modified_files)))
+        stats_table.add_row("🗑️  Удаленных", str(len(deleted_files)))
+        stats_table.add_row("💾 Общий размер", format_size(total_size))
+        self.console.print(stats_table)
+        self.console.print()
+
+        return files_to_backup, deleted_files, total_size, state
+
+    def _create_archive(self, archive_path: Path, files_to_backup: list,
+                        total_size: int, state: dict, backup_type: str,
+                        deleted_files: list, timestamp: str) -> dict:
+        ext_stats = defaultdict(lambda: {'total': 0, 'raw_size': 0})
+
+        files_with_size = []
+        for f in files_to_backup:
+            if f.is_file() and not f.is_symlink():
+                size = f.stat().st_size
+            else:
+                size = 0
+            files_with_size.append((f, size))
+
+        if total_size == 0:
+            total_size = len(files_to_backup) or 1
+
+        with Progress(
+            TextColumn("[bold]{task.percentage:>3.0f}%"),
+            BarColumn(bar_width=None, complete_style="green"),
+            FileSizeColumn(),
+            TextColumn("•"),
+            TimeRemainingColumn(),
+            console=self.console,
+            expand=True
+        ) as progress:
+            task = progress.add_task("[cyan]Архивация", total=total_size)
+
             with tarfile.open(archive_path, "w:gz") as tar:
-                with tqdm(total=total_size, unit='B', unit_scale=True, unit_divisor=1024,
-                         desc="Инкрементная архивация",
-                         bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as pbar:
-                    
-                    for file_path in files_to_backup:
-                        try:
-                            arcname = self.source_dir.name / file_path.relative_to(self.source_dir)
+                for file_path, file_size in files_with_size:
+                    rel_path = str(file_path.relative_to(self.source_dir))
+
+                    try:
+                        arcname = str(self.source_dir.name / file_path.relative_to(self.source_dir))
+
+                        if file_path.is_symlink():
+                            tarinfo = tarfile.TarInfo(name=arcname)
+                            tarinfo.type = tarfile.SYMTYPE
+                            tarinfo.linkname = os.readlink(file_path)
+                            tarinfo.mode = file_path.stat().st_mode
+                            tarinfo.mtime = file_path.stat().st_mtime
+                            tar.addfile(tarinfo)
+                        else:
                             tar.add(file_path, arcname=arcname, recursive=False)
-                            
-                            relative_path = str(file_path.relative_to(self.source_dir))
-                            new_state['files'][relative_path] = self._get_file_info(file_path)
-                            
-                            pbar.update(file_path.stat().st_size)
-                            pbar.set_postfix(file=file_path.name[:30], refresh=True)
+                            state['files'][rel_path] = self._get_file_info(file_path)
+                            ext = get_ext(rel_path)
+                            ext_stats[ext]['total'] += 1
+                            ext_stats[ext]['raw_size'] += file_size
+
+                        progress.update(task, advance=file_size)
+
+                    except Exception:
+                        pass
+
+        self.console.print()
+
+        if backup_type == 'incremental' and deleted_files:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp:
+                json.dump({'deleted_files': deleted_files, 'timestamp': timestamp}, tmp)
+                tmp_path = Path(tmp.name)
+            with tarfile.open(archive_path, "a:gz") as tar:
+                tar.add(tmp_path, arcname=f".deleted_{timestamp}.json")
+            tmp_path.unlink()
+            for f in deleted_files:
+                state['files'].pop(f, None)
+
+        return ext_stats
+
+    def _verify_backup(self, archive_path: Path) -> tuple:
+        errors = []
+        warnings = []
+
+        try:
+            with tarfile.open(archive_path, "r:gz") as tar:
+                members = tar.getmembers()
+                total_members = len(members)
+
+                with Progress(
+                    TextColumn("[bold]{task.percentage:>3.0f}%"),
+                    BarColumn(bar_width=None, complete_style="yellow"),
+                    TextColumn("[yellow]{task.description}[/yellow]"),
+                    console=self.console
+                ) as progress:
+                    task = progress.add_task("Проверка", total=total_members)
+
+                    for member in members:
+                        progress.advance(task)
+
+                        try:
+                            if member.issym():
+                                if self.skip_symlink_check:
+                                    continue
+                                if not member.linkname:
+                                    errors.append(f"Поврежденный symlink: {member.name}")
+                                elif member.linkname.startswith('/') and not self.skip_symlink_check:
+                                    warnings.append(f"Абсолютный symlink: {member.name} -> {member.linkname}")
+                                continue
+
+                            if member.isfile():
+                                f = tar.extractfile(member)
+                                if f:
+                                    try:
+                                        f.read()
+                                    except Exception as e:
+                                        errors.append(f"Ошибка чтения {member.name}: {e}")
                         except Exception as e:
-                            self.logger.warning(f"Не удалось добавить файл {file_path}: {e}")
-                    
-                    # Информация об удаленных файлах
-                    if deleted_files:
-                        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp:
-                            json.dump({'deleted_files': deleted_files, 'timestamp': timestamp}, tmp)
-                            tmp_path = Path(tmp.name)
-                        tar.add(tmp_path, arcname=f".deleted_{timestamp}.json")
-                        tmp_path.unlink()
-                    
-                    # Удаляем информацию об удаленных файлах из состояния
-                    for deleted_file in deleted_files:
-                        new_state['files'].pop(deleted_file, None)
-            
-            self._save_state(new_state)
-            
-            # Проверка целостности
-            if not self._verify_backup(archive_path):
-                self.logger.error("❌ Архив не прошел проверку целостности!")
-                archive_path.unlink()
-                return None
-            
-            archive_size = archive_path.stat().st_size
-            compression_ratio = (1 - archive_size / total_size) * 100 if total_size > 0 else 0
-            
-            self.logger.info("=" * 60)
-            self.logger.info("✅ ИНКРЕМЕНТНАЯ резервная копия создана успешно!")
-            self.logger.info(f"📁 Путь: {archive_path}")
-            self.logger.info(f"📦 Размер архива: {self._format_size(archive_size)}")
-            self.logger.info(f"📊 Размер изменений: {self._format_size(total_size)}")
-            self.logger.info(f"🗜️  Степень сжатия: {compression_ratio:.1f}%")
-            self.logger.info(f"📄 Измененных файлов: {len(files_to_backup)}")
-            self.logger.info(f"🗑️  Удаленных файлов: {len(deleted_files)}")
-            self.logger.info("=" * 60)
-            
-            if self.max_backups is not None:
-                self._cleanup_old_backups()
-            
-            return archive_path
-            
+                            errors.append(f"Ошибка обработки {member.name}: {e}")
+
+                    if errors:
+                        progress.update(task, description=f"[red]✗ Найдено ошибок: {len(errors)}[/red]")
+                    elif warnings:
+                        progress.update(task, description=f"[yellow]⚠ Проверка пройдена "
+                                                          f"(предупреждений: {len(warnings)})[/yellow]")
+                    else:
+                        progress.update(task, description="[green]✓ Проверка пройдена успешно[/green]")
+
+            self.console.print()
+
+            if errors:
+                self.console.print(Panel(
+                    "\n".join(f"[red]• {e}[/red]" for e in errors[:10]) +
+                    (f"\n[dim]... и ещё {len(errors) - 10}[/dim]" if len(errors) > 10 else ""),
+                    title="[red]ОШИБКИ[/red]", border_style="red"
+                ))
+
+            if warnings:
+                self.console.print(Panel(
+                    "\n".join(f"[yellow]• {w}[/yellow]" for w in warnings[:10]) +
+                    (f"\n[dim]... и ещё {len(warnings) - 10}[/dim]" if len(warnings) > 10 else ""),
+                    title="[yellow]ПРЕДУПРЕЖДЕНИЯ[/yellow]", border_style="yellow"
+                ))
+
+            return len(errors) == 0, errors
+
         except Exception as e:
-            self.logger.error(f"❌ Ошибка при создании инкрементной копии: {e}")
-            if 'archive_path' in locals() and archive_path.exists():
-                archive_path.unlink()
-            return None
-    
-    def create_backup(self, backup_type='full') -> Optional[Path]:
-        """Создание резервной копии"""
-        if backup_type == 'incremental':
-            return self.create_incremental_backup()
-        return self.create_full_backup()
-    
-    def restore_backup(self, archive_name=None) -> bool:
-        """Восстановление из резервной копии с автоматической обработкой цепочки"""
+            self.console.print(f"  [red]✗ Критическая ошибка: {e}[/red]")
+            return False, [str(e)]
+
+    def _print_summary(self, archive_path: Path, archive_name: str,
+                       total_files: int, ext_stats: dict,
+                       success: bool, errors: list):
+        archive_size = archive_path.stat().st_size
+        total_raw = sum(s['raw_size'] for s in ext_stats.values())
+        ratio = (1 - archive_size / total_raw) * 100 if total_raw > 0 else 0
+
+        # Таблица по расширениям
+        if ext_stats:
+            table = Table(box=SIMPLE, show_header=True, header_style="bold cyan")
+            table.add_column("Расширение", style="cyan", width=10)
+            table.add_column("Файлов", justify="right", width=8)
+            table.add_column("Размер", justify="right", width=12)
+
+            sorted_exts = sorted(ext_stats.items(), key=lambda x: x[1]['raw_size'], reverse=True)[:10]
+            for ext, stats in sorted_exts:
+                if stats['total'] > 0:
+                    table.add_row(ext, str(stats['total']), format_size(stats['raw_size']))
+
+            total_ext_files = sum(s['total'] for s in ext_stats.values())
+            if total_ext_files > 0:
+                table.add_section()
+                table.add_row("[bold]ИТОГО[/bold]", f"[bold]{total_ext_files}[/bold]",
+                             f"[bold]{format_size(total_raw)}[/bold]")
+
+            self.console.print(table)
+            self.console.print()
+
+        # Итоговая таблица
+        status_title = "✓ БЭКАП СОЗДАН" if success else "⚠ БЭКАП СОЗДАН (с ошибками)"
+        status_style = "bold green" if success else "bold yellow"
+        border_style = "green" if success else "yellow"
+
+        result_table = Table(
+            title=f"[bold]{status_title}[/bold]",
+            title_style=status_style,
+            box=ROUNDED, border_style=border_style, padding=(0, 2)
+        )
+        result_table.add_column("Параметр", style="cyan", justify="right")
+        result_table.add_column("Значение", style="white")
+        result_table.add_row("", "")
+        result_table.add_row("📁 Файлов в архиве", f"{total_files:,}")
+        result_table.add_row("💾 Исходный размер", format_size(total_raw))
+        result_table.add_row("📦 Размер архива", f"[bold green]{format_size(archive_size)}[/bold green]")
+        result_table.add_row("🗜️  Сжатие", f"[bold]{ratio:.1f}%[/bold]")
+        result_table.add_row("", "")
+        result_table.add_row("📄 Имя файла", f"[bold blue]{archive_name}[/bold blue]")
+        result_table.add_row("📍 Путь", f"[dim]{archive_path}[/dim]")
+
+        self.console.print(result_table)
+        self.console.print()
+
+        if not success:
+            self.console.print("[yellow]Архив может быть поврежден. Рекомендуется создать новый.[/yellow]")
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Восстановление
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def restore_backup(self, archive_name=None, create_backup_before=True) -> bool:
         if archive_name:
             archive_path = self.backup_dir / archive_name
             if not archive_path.exists():
-                self.logger.error(f"❌ Архив не найден: {archive_path}")
+                self.console.print(Panel.fit("[red]Архив не найден[/red]", border_style="red"))
                 return False
         else:
             backups = self._get_all_backups()
             if not backups:
-                self.logger.error("❌ Нет доступных резервных копий для восстановления")
+                self.console.print(Panel.fit("[red]Нет доступных бэкапов[/red]", border_style="red"))
                 return False
             archive_path = backups[-1]['path']
             archive_name = backups[-1]['filename']
-        
-        backup_info = self._parse_backup_info(archive_path.name)
+
+        backup_info = parse_backup_info(archive_path.name)
         if not backup_info:
-            self.logger.error(f"❌ Не удалось определить тип архива: {archive_name}")
+            self.console.print(Panel.fit("[red]Неизвестный формат[/red]", border_style="red"))
             return False
-        
-        # Проверка целостности перед восстановлением
-        self.logger.info("🔍 Проверка целостности архива...")
-        if not self._verify_backup(archive_path):
-            self.logger.error("❌ Восстановление отменено из-за повреждения архива")
-            return False
-        
-        self.logger.info(f"🔄 Начинаю восстановление из архива: {archive_path}")
-        self.logger.info(f"📋 Тип бэкапа: {backup_info['type'].upper()}")
-        
-        chain = self._get_incremental_chain(backup_info)
-        if not chain:
-            self.logger.error("❌ Не удалось построить цепочку для восстановления")
-            return False
-        
-        self.logger.info("=" * 60)
-        self.logger.info("📋 ПЛАН ВОССТАНОВЛЕНИЯ:")
-        self.logger.info(f"  Целевая точка: {backup_info['filename']}")
-        self.logger.info(f"  Всего бэкапов в цепочке: {len(chain)}")
-        for i, b in enumerate(chain, 1):
-            marker = "🎯" if b['filename'] == archive_path.name else "📦"
-            self.logger.info(f"    {i}. {marker} {b['filename']} ({b['type'].upper()})")
-        self.logger.info("=" * 60)
-        
-        # Резервная копия текущего состояния
-        self.logger.info("💾 Создаю резервную копию текущего состояния...")
-        current_backup = self.create_full_backup()
-        if not current_backup:
-            self.logger.warning("⚠️  Не удалось создать резервную копию текущего состояния")
-            if input("Продолжить восстановление? (y/n): ").lower() != 'y':
-                self.logger.info("Восстановление отменено")
+
+        backup_info['path'] = archive_path
+
+        self._print_header("🔄 ВОССТАНОВЛЕНИЕ ИЗ БЭКАПА", f"Архив: {archive_name}")
+
+        # Шаг 1: Цепочка
+        self._print_step(1, 5, "Анализ цепочки бэкапов")
+
+        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+                    console=self.console) as progress:
+            task = progress.add_task("[cyan]Построение цепочки восстановления...", total=None)
+            chain = self._get_incremental_chain(backup_info)
+            if not chain:
+                progress.update(task, description="[red]✗ Не удалось построить цепочку[/red]")
                 return False
-        
+            progress.update(task, description=f"[green]✓ Цепочка построена: {len(chain)} бэкапов[/green]")
+
+        self.console.print()
+
+        tree = Tree("🔗 [bold]План восстановления[/bold]")
+        for i, b in enumerate(chain, 1):
+            if b['filename'] == archive_path.name:
+                tree.add(f"[bold green]► {i}. {b['filename']} (целевой)[/bold green]")
+            else:
+                tree.add(f"[dim]  {i}. {b['filename']}[/dim]")
+        self.console.print(Panel(tree, border_style="blue"))
+        self.console.print()
+
+        # Шаг 2: Предварительный бэкап текущего состояния
+        self._print_step(2, 5, "Предварительный бэкап текущего состояния")
+        if create_backup_before:
+            if self.create_backup('full'):
+                self.console.print("[green]✓ Текущее состояние сохранено[/green]")
+            else:
+                self.console.print("[yellow]⚠ Не удалось создать предварительный бэкап[/yellow]")
+        else:
+            self.console.print("[dim]Пропущен (флаг -nb)[/dim]")
+        self.console.print()
+
+        # Шаг 3: Распаковка во временную директорию
+        self._print_step(3, 5, "Распаковка архива во временную директорию")
+
         with tempfile.TemporaryDirectory() as temp_dir_str:
             temp_dir = Path(temp_dir_str)
-            
-            self.logger.info("📦 Восстановление цепочки бэкапов...")
-            if not self._restore_from_chain(chain, temp_dir):
-                return False
-            
-            self._apply_deleted_files(temp_dir, backup_info)
-            
-            self.logger.info("📁 Копирование восстановленных файлов...")
+
+            with Progress(
+                TextColumn("[bold]{task.percentage:>3.0f}%"),
+                BarColumn(bar_width=None, complete_style="cyan"),
+                TextColumn("[cyan]{task.description}[/cyan]"),
+                console=self.console
+            ) as progress:
+                task = progress.add_task("Извлечение", total=len(chain))
+
+                for i, backup_info_chain in enumerate(chain, 1):
+                    progress.update(task, description=f"Извлечение [{i}/{len(chain)}] "
+                                                    f"{backup_info_chain['filename']}")
+
+                    with tarfile.open(backup_info_chain['path'], "r:gz") as tar:
+                        members = tar.getmembers()
+                        file_members = [m for m in members if m.isfile() or m.issym()]
+
+                        for member in file_members:
+                            try:
+                                tar.extract(member, path=temp_dir, filter='data')
+                            except Exception:
+                                pass
+
+                    progress.advance(task)
+
+            self.console.print()
+
+            # Обработка удаленных файлов
+            for backup_info_chain in chain:
+                try:
+                    with tarfile.open(backup_info_chain['path'], "r:gz") as tar:
+                        for member in tar.getmembers():
+                            if '.deleted_' in member.name and member.name.endswith('.json'):
+                                with tempfile.NamedTemporaryFile(mode='wb', delete=False) as f:
+                                    extracted = tar.extractfile(member)
+                                    if extracted:
+                                        f.write(extracted.read())
+                                        tmp_path = Path(f.name)
+
+                                with open(tmp_path, 'r') as f:
+                                    deleted_data = json.load(f)
+
+                                for rel_path in deleted_data.get('deleted_files', []):
+                                    for d in temp_dir.rglob('*'):
+                                        try:
+                                            if d.relative_to(temp_dir) == Path(rel_path) and d.exists():
+                                                d.unlink()
+                                        except ValueError:
+                                            pass
+                                tmp_path.unlink()
+                except Exception:
+                    pass
+
+            # Шаг 4: Проверка распакованных файлов
+            self._print_step(4, 5, "Проверка распакованных данных")
             
             temp_web_dir = temp_dir / 'web'
             if not temp_web_dir.exists():
                 items = list(temp_dir.iterdir())
                 temp_web_dir = items[0] if len(items) == 1 and items[0].is_dir() else temp_dir
+
+            all_items = list(temp_web_dir.rglob('*'))
+            files_only = [i for i in all_items if i.is_file() or i.is_symlink()]
             
-            self.source_dir.mkdir(parents=True, exist_ok=True)
-            
-            files_to_copy = [f for f in temp_web_dir.rglob('*') if f.is_file()]
-            
-            with tqdm(total=len(files_to_copy), unit='файл', desc="Копирование",
-                     bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]') as pbar:
+            if not files_only:
+                self.console.print("[red]✗ В архиве нет файлов для восстановления![/red]")
+                self.console.print("[yellow]Целевая директория НЕ изменена.[/yellow]")
+                return False
                 
-                for item in files_to_copy:
-                    relative_path = item.relative_to(temp_web_dir)
-                    target_path = self.source_dir / relative_path
-                    target_path.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(item, target_path)
-                    pbar.update(1)
-                    pbar.set_postfix(file=relative_path.name[:30], refresh=True)
+            self.console.print(f"[green]✓ Найдено {len(files_only):,} файлов для восстановления[/green]")
+            self.console.print()
+
+            # Шаг 5: Безопасное копирование с предварительным бэкапом в памяти
+            self._print_step(5, 5, "Копирование файлов в целевую директорию")
+
+            # Создаём бэкап текущих файлов во временную директорию
+            backup_of_current = temp_dir / "_current_backup"
+            if self.source_dir.exists():
+                try:
+                    shutil.copytree(self.source_dir, backup_of_current, symlinks=True)
+                    self.console.print("[dim]Создана резервная копия текущих файлов[/dim]")
+                except Exception as e:
+                    self.console.print(f"[yellow]⚠ Не удалось создать резервную копию: {e}[/yellow]")
+
+            with Progress(
+                TextColumn("[bold]{task.percentage:>3.0f}%"),
+                BarColumn(bar_width=None, complete_style="green"),
+                TextColumn("[cyan]{task.description}[/cyan]"),
+                console=self.console
+            ) as progress:
+                task = progress.add_task("Копирование", total=len(files_only))
+
+                errors_count = 0
+                for item in files_only:
+                    try:
+                        rel_path = item.relative_to(temp_web_dir)
+                        target_path = self.source_dir / rel_path
+                        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+                        # Удаляем только конкретный файл, если он существует
+                        if target_path.exists() or target_path.is_symlink():
+                            target_path.unlink()
+
+                        if item.is_symlink():
+                            target_path.symlink_to(os.readlink(item))
+                        else:
+                            shutil.copy2(item, target_path)
+
+                        progress.advance(task)
+                    except Exception as e:
+                        errors_count += 1
+                        if errors_count <= 5:  # Показываем только первые 5 ошибок
+                            self.logger.error(f"Ошибка копирования {rel_path}: {e}")
+
+                if errors_count > 0:
+                    progress.update(task, 
+                        description=f"[yellow]⚠ Копирование завершено с {errors_count} ошибками[/yellow]")
+                else:
+                    progress.update(task, description="[green]✓ Копирование завершено[/green]")
+
+            self.console.print()
             
-            self.logger.info("=" * 60)
-            self.logger.info(f"✅ Восстановление успешно завершено!")
-            self.logger.info(f"📁 Целевая директория: {self.source_dir}")
-            self.logger.info(f"📦 Архив-источник: {archive_path.name}")
-            self.logger.info(f"🔗 Восстановлено бэкапов: {len(chain)}")
-            self.logger.info("=" * 60)
+            # Удаляем файлы, которых нет в бэкапе (опционально)
+            if self.source_dir.exists():
+                backup_files_set = {str(item.relative_to(temp_web_dir)).replace('\\', '/') 
+                                for item in files_only}
+                current_files = set()
+                for root, _, files in os.walk(self.source_dir):
+                    for file in files:
+                        file_path = Path(root) / file
+                        try:
+                            rel = str(file_path.relative_to(self.source_dir)).replace('\\', '/')
+                            current_files.add(rel)
+                        except ValueError:
+                            pass
+                
+                files_to_remove = current_files - backup_files_set
+                if files_to_remove:
+                    self.console.print(f"[yellow]⚠ Найдено {len(files_to_remove)} файлов, "
+                                    f"которых нет в бэкапе[/yellow]")
+                    self.console.print("[dim]Эти файлы не будут удалены для безопасности[/dim]")
+                    self.console.print()
+
+            result_table = Table(
+                title="[bold]✓ ВОССТАНОВЛЕНИЕ ЗАВЕРШЕНО[/bold]",
+                title_style="bold green",
+                box=ROUNDED, border_style="green", padding=(0, 2)
+            )
+            result_table.add_column("Параметр", style="cyan", justify="right")
+            result_table.add_column("Значение", style="white")
+            result_table.add_row("", "")
+            result_table.add_row("📁 Целевая директория", str(self.source_dir))
+            result_table.add_row("📦 Архив-источник", archive_name)
+            result_table.add_row("🔗 Бэкапов в цепочке", str(len(chain)))
+            result_table.add_row("📄 Восстановлено файлов", f"{len(files_only):,}")
+            
+            if errors_count > 0:
+                result_table.add_row("❌ Ошибок при копировании", str(errors_count))
+
+            self.console.print(result_table)
+            self.console.print()
+
+            self.logger.info("Восстановлено из: %s", archive_path.name)
             return True
-    
-    def _cleanup_old_backups(self):
-        """Удаление старых архивов"""
-        if self.max_backups is None:
-            return
-        
-        backup_files = sorted(
-            self.backup_dir.glob("web_backup_*.tar.gz"),
-            key=lambda x: x.stat().st_mtime,
-            reverse=True
-        )
-        
-        for old_file in backup_files[self.max_backups:]:
-            self.logger.info(f"  Удаляю: {old_file.name}")
-            old_file.unlink()
-    
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Список бэкапов
+    # ═══════════════════════════════════════════════════════════════════════
+
     def list_backups(self):
-        """Вывод списка резервных копий"""
         backups = self._get_all_backups()
-        
+
         if not backups:
-            self.logger.info("📭 Нет созданных резервных копий")
+            self.console.print(Panel.fit("[yellow]Нет созданных бэкапов[/yellow]", border_style="yellow"))
             return
-        
-        self.logger.info(f"📚 Существующие резервные копии в {self.backup_dir}:")
-        print("=" * 80)
-        
-        total_size_all = 0
+
+        self._print_header("📚 СПИСОК БЭКАПОВ")
+
+        table = Table(box=ROUNDED, border_style="blue", padding=(0, 2))
+        table.add_column("#", style="dim", width=3, justify="right")
+        table.add_column("Тип", style="cyan", width=10)
+        table.add_column("Имя файла", style="blue")
+        table.add_column("Размер", style="green", width=12, justify="right")
+        table.add_column("Создан", style="yellow", width=20)
+        table.add_column("Возраст", style="magenta", width=15)
+
+        total_size = 0
         for i, backup in enumerate(backups, 1):
             size = backup['path'].stat().st_size
-            total_size_all += size
-            backup_type = "🔵 ПОЛНЫЙ" if backup['type'] == 'full' else "🟢 ИНКРЕМЕНТНЫЙ"
-            
+            total_size += size
+            backup_type = "🔵 Полный" if backup['type'] == 'full' else "🟢 Инкрем."
+
             age = datetime.now() - backup['datetime']
-            age_str = f"{age.days} дн. {age.seconds // 3600} ч." if age.days > 0 else \
-                     f"{age.seconds // 3600} ч. {(age.seconds % 3600) // 60} мин."
-            
-            self.logger.info(f"  {i:2d}. {backup_type} 📦 {backup['filename']}")
-            self.logger.info(f"      📏 Размер: {self._format_size(size)}")
-            self.logger.info(f"      🕐 Создан: {backup['datetime'].strftime('%Y-%m-%d %H:%M:%S')}")
-            self.logger.info(f"      ⏳ Возраст: {age_str}")
-            print()
-        
-        self.logger.info(f"💾 Общий размер всех бэкапов: {self._format_size(total_size_all)}")
-        self.logger.info(f"📊 Количество бэкапов: {len(backups)}")
-        
-        state = self._load_state()
-        if state:
-            self.logger.info(f"📋 Последний бэкап: {state.get('type', 'unknown').upper()} "
-                           f"от {state.get('timestamp', 'unknown')}")
-        
-        print()
-        self.logger.info("🔗 Цепочки бэкапов:")
-        self._show_backup_chains(backups)
-        print("=" * 80)
-    
-    def _show_backup_chains(self, backups: List[dict]):
-        """Показать доступные цепочки бэкапов"""
+            if age.days > 0:
+                age_str = f"{age.days} дн. {age.seconds // 3600} ч."
+            else:
+                age_str = f"{age.seconds // 3600} ч. {(age.seconds % 3600) // 60} мин."
+
+            table.add_row(
+                str(i), backup_type, backup['filename'],
+                format_size(size),
+                backup['datetime'].strftime('%Y-%m-%d %H:%M:%S'),
+                age_str
+            )
+
+        self.console.print(table)
+        self.console.print()
+
+        stats = Columns([
+            Panel(f"[green]💾 Общий размер\n{format_size(total_size)}[/green]", box=SIMPLE),
+            Panel(f"[cyan]📊 Всего бэкапов\n{len(backups)}[/cyan]", box=SIMPLE)
+        ])
+        self.console.print(stats)
+        self.console.print()
+
         chains = []
         current_chain = []
-        
         for backup in backups:
             if backup['type'] == 'full':
                 if current_chain:
@@ -636,88 +824,86 @@ class BackupManager:
                 current_chain = [backup]
             elif current_chain:
                 current_chain.append(backup)
-        
         if current_chain:
             chains.append(current_chain)
-        
-        for i, chain in enumerate(chains, 1):
-            full = chain[0]
-            inc_count = len(chain) - 1
-            self.logger.info(f"  Цепочка #{i}: {full['datetime'].strftime('%Y-%m-%d')} → {inc_count} инкр. бэкапов")
-            if inc_count > 0:
-                self.logger.info(f"    Последний: {chain[-1]['filename']}")
-    
-    def _format_size(self, size_bytes: int) -> str:
-        """Форматирование размера в читаемый вид"""
-        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-            if size_bytes < 1024.0:
-                return f"{size_bytes:.2f} {unit}"
-            size_bytes /= 1024.0
-        return f"{size_bytes:.2f} PB"
 
+        if chains:
+            tree = Tree("🔗 [bold]Цепочки бэкапов[/bold]")
+            for i, chain in enumerate(chains, 1):
+                full = chain[0]
+                inc_count = len(chain) - 1
+                branch = tree.add(
+                    f"[cyan]Цепочка #{i}: {full['datetime'].strftime('%Y-%m-%d')} "
+                    f"→ {inc_count} инкрементальных[/cyan]"
+                )
+                if inc_count > 0:
+                    branch.add(f"[dim]└─ Последний: {chain[-1]['filename']}[/dim]")
+
+            self.console.print(Panel(tree, border_style="blue"))
+            self.console.print()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# main
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    """Главная функция"""
     parser = argparse.ArgumentParser(
-        description="🔄 Скрипт резервного копирования папки web с поддержкой инкрементных бэкапов",
-        epilog="Примеры использования:\n"
-               "  python3 backup.py --backup              # Создать полный бэкап\n"
-               "  python3 backup.py --backup inc          # Создать инкрементный бэкап\n"
-               "  python3 backup.py --list                # Показать список бэкапов\n"
-               "  python3 backup.py --restore             # Восстановить из последнего бэкапа\n"
-               "  python3 backup.py --restore web_backup_full_20260513.tar.gz\n"
-               "  python3 backup.py --clean               # Очистить состояние",
-        formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    
-    parser.add_argument('--backup', '-b', nargs='?', const='full', 
-                       choices=['full', 'inc', 'incremental'],
-                       help='Создать резервную копию')
-    parser.add_argument('--list', '-l', action='store_true',
-                       help='Показать список существующих бэкапов')
-    parser.add_argument('--restore', '-r', nargs='?', const='last', metavar='ARCHIVE',
-                       help='Восстановить из бэкапа')
-    parser.add_argument('--exclude', '-e', nargs='+', 
-                       help='Директории для исключения')
-    parser.add_argument('--clean', '-c', action='store_true',
-                       help='Очистить состояние')
-    
+        description="Резервное копирование с инкрементальными бэкапами",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Примеры:\n"
+               "  %(prog)s -b           # Полный бэкап\n"
+               "  %(prog)s -b inc       # Инкрементальный\n"
+               "  %(prog)s -l           # Список\n"
+               "  %(prog)s -r           # Восстановить последний\n"
+               "  %(prog)s -r file -nb  # Без предв. бэкапа\n"
+               "  %(prog)s -r -nb -ns   # Без проверки symlinks")
+
+    parser.add_argument('--backup', '-b', nargs='?', const='full',
+                       choices=['full', 'inc', 'incremental'])
+    parser.add_argument('--list', '-l', action='store_true')
+    parser.add_argument('--restore', '-r', nargs='?', const='last', metavar='ARCHIVE')
+    parser.add_argument('--no-backup-before', '-nb', action='store_true')
+    parser.add_argument('--no-symlink-check', '-ns', action='store_true')
+    parser.add_argument('--exclude', '-e', nargs='+')
+    parser.add_argument('--clean', '-c', action='store_true')
+
     args = parser.parse_args()
-    
+
     try:
-        import tqdm
+        import rich
     except ImportError:
-        print("❌ Для работы необходим модуль tqdm")
-        print("   Установите: pip install tqdm")
+        print("pip install rich")
         sys.exit(1)
-    
-    exclude_dirs = args.exclude if args.exclude else EXCLUDE_DIRS
-    
-    backup_manager = BackupManager(max_backups=MAX_BACKUPS, exclude_dirs=exclude_dirs)
-    
+
+    manager = BackupManager(
+        max_backups=MAX_BACKUPS,
+        exclude_dirs=args.exclude if args.exclude else EXCLUDE_DIRS,
+        skip_symlink_check=args.no_symlink_check
+    )
+
     if args.clean:
-        if backup_manager.state_file.exists():
-            backup_manager.state_file.unlink()
-            backup_manager.logger.info("✅ Состояние очищено. Следующий бэкап будет полным.")
-        else:
-            backup_manager.logger.info("ℹ️ Файл состояния не найден.")
+        if manager.state_file.exists():
+            manager.state_file.unlink()
+            manager.console.print("[green]✓ Состояние очищено[/green]")
         return
-    
+
     if args.backup:
         backup_type = 'incremental' if args.backup in ['inc', 'incremental'] else 'full'
-        backup_manager.create_backup(backup_type)
-    
+        manager.create_backup(backup_type)
+
     if args.list:
-        backup_manager.list_backups()
-    
+        manager.list_backups()
+
     if args.restore:
+        create_backup_before = not args.no_backup_before
         if args.restore == 'last':
-            backup_manager.restore_backup()
+            manager.restore_backup(create_backup_before=create_backup_before)
         else:
-            backup_manager.restore_backup(args.restore)
-    
+            manager.restore_backup(args.restore, create_backup_before)
+
     if not (args.backup or args.list or args.restore or args.clean):
-        backup_manager.create_backup('incremental')
+        manager.create_backup('incremental')
 
 
 if __name__ == "__main__":
