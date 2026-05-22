@@ -288,7 +288,7 @@ def decode_multipage(page_paths: List[str], qr_path: str, config: dict, output_w
     print(f"   mag_left_full: [{mag_left_full.min():.1f}, {mag_left_full.max():.1f}], mean={mag_left_full.mean():.1f}")
     print(f"   mag_right_full: [{mag_right_full.min():.1f}, {mag_right_full.max():.1f}], mean={mag_right_full.mean():.1f}")
     
-    # Шаг 1: Яркость (0-255) -> dB
+    # Шаг 1: Яркость (0-255) -> dB (правильное обратное преобразование)
     mag_left_db = (mag_left_full / 255.0) * (-mag_min) + mag_min
     mag_right_db = (mag_right_full / 255.0) * (-mag_min) + mag_min
     
@@ -300,7 +300,8 @@ def decode_multipage(page_paths: List[str], qr_path: str, config: dict, output_w
     if mag_right_db.max() < -10:
         print(f"   ⚠️ ПРЕДУПРЕЖДЕНИЕ: Максимум dB правого канала = {mag_right_db.max():.1f} (ожидается ~0)")
     
-    # Шаг 2: dB -> линейная амплитуда с ref
+    # Шаг 2: dB -> линейная амплитуда с ПРАВИЛЬНЫМ ref
+    # ref должен быть исходной амплитудой, которая была max() при кодировании
     mag_left = librosa.db_to_amplitude(mag_left_db, ref=ref_left)
     mag_right = librosa.db_to_amplitude(mag_right_db, ref=ref_right)
     
