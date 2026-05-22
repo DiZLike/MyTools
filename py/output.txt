@@ -1,0 +1,790 @@
+================================================================================
+Файл: F:\!Evgeny\src\py\au_to_img\config.py
+----------------------------------------
+# config.py
+
+PRESETS = {
+    # --- СТАНДАРТНЫЕ ПРЕСЕТЫ ---
+    # 75% перекрытие (hop = N_FFT / 4)
+    "75p_n512":   {"N_FFT": 512,  "HOP_LENGTH": 128},
+    "75p_n1024":  {"N_FFT": 1024, "HOP_LENGTH": 256},
+    "75p_n2048":  {"N_FFT": 2048, "HOP_LENGTH": 512},
+    "75p_n4096":  {"N_FFT": 4096, "HOP_LENGTH": 1024},
+    "75p_n8192":  {"N_FFT": 8192, "HOP_LENGTH": 2048},
+
+    # 87.5% перекрытие (hop = N_FFT / 8)
+    "87p_n256":   {"N_FFT": 256,  "HOP_LENGTH": 32},
+    "87p_n512":   {"N_FFT": 512,  "HOP_LENGTH": 64},
+    "87p_n1024":  {"N_FFT": 1024, "HOP_LENGTH": 128},
+    "87p_n2048":  {"N_FFT": 2048, "HOP_LENGTH": 256},
+    "87p_n4096":  {"N_FFT": 4096, "HOP_LENGTH": 512},
+
+    # --- ПРЕСЕТЫ ДЛЯ JPEG-СЖАТИЯ ---
+    "jpeg_n256_75p":  {"N_FFT": 256,  "HOP_LENGTH": 64},
+    "jpeg_n512_75p":  {"N_FFT": 512,  "HOP_LENGTH": 128},
+    "jpeg_n512_87p":  {"N_FFT": 512,  "HOP_LENGTH": 64},
+    "jpeg_n1024_87p": {"N_FFT": 1024, "HOP_LENGTH": 128},
+
+    # --- ПРЕСЕТЫ ДЛЯ WebP-СЖАТИЯ ---
+    "webp_n128_75p":  {"N_FFT": 128,  "HOP_LENGTH": 32},
+    "webp_n128_87p":  {"N_FFT": 128,  "HOP_LENGTH": 16},
+    "webp_n256_75p":  {"N_FFT": 256,  "HOP_LENGTH": 64},
+    "webp_n256_87p":  {"N_FFT": 256,  "HOP_LENGTH": 32},
+    "webp_n512_87p":  {"N_FFT": 512,  "HOP_LENGTH": 64},
+
+    # --- ПРЕСЕТЫ ДЛЯ AVIF-СЖАТИЯ ---
+    "avif_n128_75p":  {"N_FFT": 128,  "HOP_LENGTH": 32},
+    "avif_n128_87p":  {"N_FFT": 128,  "HOP_LENGTH": 16},
+    "avif_n256_75p":  {"N_FFT": 256,  "HOP_LENGTH": 64},
+    "avif_n256_87p":  {"N_FFT": 256,  "HOP_LENGTH": 32},
+    "avif_n512_87p":  {"N_FFT": 512,  "HOP_LENGTH": 64},
+
+    # --- ПРЕСЕТЫ ДЛЯ ВИДЕО-СЖАТИЯ ---
+    # Оптимизированы под высокую временную избыточность (87.5% перекрытие)
+    "video_n1024_87p": {"N_FFT": 1024, "HOP_LENGTH": 128},
+    "video_n2048_87p": {"N_FFT": 2048, "HOP_LENGTH": 256},
+    "video_n4096_87p": {"N_FFT": 4096, "HOP_LENGTH": 512},
+    
+    # 93.75% перекрытие — максимальная временная избыточность
+    "video_n1024_93p": {"N_FFT": 1024, "HOP_LENGTH": 64},
+    "video_n2048_93p": {"N_FFT": 2048, "HOP_LENGTH": 128},
+
+    "custom":  {"N_FFT": 4096, "HOP_LENGTH": 2048},
+}
+
+DEFAULT_CONFIG = {
+    # --- ФАЙЛЫ ---
+    "mp3_file": "track.mp3",          # Входной аудиофайл (MP3 или WAV)
+    "active_preset": "75p_n4096",     # Пресет из PRESETS: размер FFT и длина хопа
+    
+    # --- ДИАПАЗОН ОБРАБОТКИ ---
+    "trim_enabled": True,             # Включить обрезку трека по времени
+    "trim_start": 60.0,                 # Начало обрабатываемого фрагмента в секундах
+    "trim_end": 130.0,                   # Конец обрабатываемого фрагмента (0 = до конца трека)
+    
+    # --- НАСТРОЙКИ ФОРМАТА ИЗОБРАЖЕНИЯ ---
+    "output_format": "jpeg",          # Формат: "png", "webp", "jpeg"/"jpg", "avif"
+    "output_quality": 5,              # Качество для webp/jpeg/avif (1-100). Для PNG: уровень сжатия (1-9)
+    "output_lossless": False,         # Lossless-режим для webp и avif
+
+    # --- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ AVIF ---
+    "avif_speed": 0,                    # Скорость кодирования AVIF (0-10, 0 = лучшее сжатие)
+    "avif_subsampling": "4:2:0",        # Цветовая субдискретизация: "4:4:4", "4:2:2", "4:2:0"
+    
+    # --- МАСШТАБИРОВАНИЕ ИЗОБРАЖЕНИЯ ---
+    "scale_enabled": False,           # Включить масштабирование спектрограммы
+    "scale_x": 2,                     # Масштаб по ширине (деление: 2 = в 2 раза уже)
+    "scale_y": 1,                     # Масштаб по высоте (деление: 2 = в 2 раза ниже)
+    "scale_method": "lanczos",        # Метод интерполяции: "lanczos", "bilinear", "bicubic", "nearest"
+    
+    # --- ПАРАМЕТРЫ ГЕНЕРАЦИИ ФАЗЫ ---
+    "phase_generate_iterations": 5000,   # Число итераций Griffin-Lim (больше = точнее, но медленнее)
+    "phase_generate_random_seed": 454,    # Seed для воспроизводимости (-1 = случайный)
+    "griffin_lim_mode": "fast",     # Режим Griffin-Lim: "standard", "fast", "multi_scale"
+    "griffin_lim_parallel": True,       # Параллельная обработка Mid/Side (ускорение ~2x)
+    
+    # --- РАННЯЯ ОСТАНОВКА (early stopping) ---
+    "early_stop_enabled": True,         # Включить раннюю остановку
+    "early_stop_threshold": 0.0001,     # Минимальное улучшение ошибки для продолжения
+    "early_stop_patience": 10,          # Сколько итераций ждать улучшения перед остановкой
+    
+    # --- ПАРАМЕТРЫ MULTI-SCALE РЕЖИМА ---
+    "multi_scale_factor": 2,            # Фактор уменьшения для грубого этапа (2, 4, 8)
+    "multi_scale_coarse_iterations": -1, # Итераций на грубом этапе (-1 = все итерации)
+    "multi_scale_fine_iterations": 400,   # Итераций на точном этапе (-1 = половина от общего)
+    
+    # --- ОБРЕЗКА НИЗКИХ ЧАСТОТ (убирает инфразвук и DC) ---
+    "low_cut_enabled": True,            # Включить обрезку низких частот
+    "low_cut_freq": 0,                 # Частота среза снизу в Гц (рекомендуется 20-100)
+    
+    # --- ОБРЕЗКА ВЫСОКИХ ЧАСТОТ (экономия места) ---
+    "high_cut_enabled": True,           # Включить обрезку высоких частот
+    "high_cut_mode": "auto",            # "auto" - автоматический срез по спаду энергии
+                                        # "manual" - ручная установка частоты
+    "high_cut_freq": 16000,             # Частота среза сверху в Гц (для manual режима)
+    "high_cut_auto_threshold_db": -80,  # Порог энергии для автосреза (тише этого = обрезаем)
+    "high_cut_auto_freq_min": 8000,     # Минимальная частота, выше которой ищем спад
+    "high_cut_auto_margin_db": 10,      # Запас над порогом для надёжности среза
+
+        # --- НАСТРОЙКИ ВИДЕО-КОДИРОВАНИЯ (базовые) ---
+    "video_codec": "h265",              # Кодек: "h265"
+    "video_crf": 16,                    # Качество (0 = lossless, 51 = ужас, 16-28 разумно)
+    "video_preset": "veryslow",         # Скорость: "fast", "medium", "slow", "veryslow"
+    "video_fps": 30,                    # Частота кадров (не влияет на качество, только метаданные)
+    "video_columns_per_frame": 128,     # Размер кадра: сколько столбцов спектрограммы в кадре
+    "video_pixel_format": "yuv420p",    # Цветность: "yuv420p" или "yuv444p"
+
+    "data_dir": "data",                 # Папка для выходных файлов
+}
+----------------------------------------
+
+Файл: F:\!Evgeny\src\py\au_to_img\decoder.py
+----------------------------------------
+# decoder.py
+import time
+import numpy as np
+import librosa
+import soundfile as sf
+from PIL import Image
+from transforms import ms_to_lr
+from phase_generator import (griffin_lim, griffin_lim_fast, 
+                             griffin_lim_multi_scale, griffin_lim_stereo_parallel)
+
+
+def _pad_spectrum(data: np.ndarray, low_pad: int, high_pad: int) -> np.ndarray:
+    if low_pad > 0:
+        data = np.vstack([np.zeros((low_pad, data.shape[1]), dtype=data.dtype), data])
+    if high_pad > 0:
+        data = np.vstack([data, np.zeros((high_pad, data.shape[1]), dtype=data.dtype)])
+    return data
+
+
+def image_to_audio(image_path: str, output_wav_path: str, metadata: dict) -> np.ndarray:
+    n_freqs, n_frames = metadata['shape']
+    n_freqs_original = metadata['shape_original'][0]
+    low_cut_bin = metadata.get('low_cut_bin', 0)
+    high_cut_bins_removed = metadata.get('high_cut_bins_removed', 0)
+    flipped = metadata.get('flipped', False)
+    
+    sr = metadata['sr']
+    n_fft = metadata['n_fft']
+    hop_length = metadata['hop_length']
+    original_length = metadata['original_length']
+    mag_min = metadata.get('mag_min', -120)
+    ref_mid = metadata.get('ref_mid', 1.0)
+    ref_side = metadata.get('ref_side', 1.0)
+
+    img = Image.open(image_path).convert('RGB')
+    
+    target_size = (n_frames, n_freqs)
+    if img.size != target_size:
+        img = img.resize(target_size, Image.LANCZOS)
+    
+    arr = np.array(img, dtype=np.float32)
+    if flipped:
+        arr = np.flipud(arr)
+
+    mag_mid_norm = arr[:, :, 1] / 255.0
+    mag_side_norm = arr[:, :, 2] / 255.0
+    mag_mid_db = mag_mid_norm * (-mag_min) + mag_min
+    mag_side_db = mag_side_norm * (-mag_min) + mag_min
+    mag_mid = librosa.db_to_amplitude(mag_mid_db, ref=ref_mid)
+    mag_side = librosa.db_to_amplitude(mag_side_db, ref=ref_side)
+
+    mag_mid = _pad_spectrum(mag_mid, low_cut_bin, high_cut_bins_removed)
+    mag_side = _pad_spectrum(mag_side, low_cut_bin, high_cut_bins_removed)
+
+    t_start = time.time()
+    
+    # Всегда генерируем фазу
+    iterations = metadata.get('phase_generate_iterations', 100)
+    random_seed = metadata.get('phase_generate_random_seed', 5)
+    if random_seed == -1:
+        random_seed = None
+    
+    gl_mode = metadata.get('griffin_lim_mode', 'standard')
+    parallel = metadata.get('griffin_lim_parallel', True)
+    
+    early_stop_threshold = metadata.get('early_stop_threshold', 0.0001)
+    early_stop_patience = metadata.get('early_stop_patience', 15)
+    
+    if parallel and gl_mode in ('standard', 'fast', 'multi_scale'):
+        print(f"\nГенерация фазы через Griffin-Lim ({gl_mode}, {iterations} итераций, параллельно)")
+        
+        if gl_mode == 'multi_scale':
+            scale_factor = metadata.get('multi_scale_factor', 4)
+            coarse_iter = metadata.get('multi_scale_coarse_iterations', -1)
+            fine_iter = metadata.get('multi_scale_fine_iterations', -1)
+            
+            if coarse_iter == -1:
+                coarse_iter = None
+            if fine_iter == -1:
+                fine_iter = None
+        else:
+            scale_factor = 4
+            coarse_iter = None
+            fine_iter = None
+        
+        phase_mid, phase_side = griffin_lim_stereo_parallel(
+            mag_mid, mag_side, n_fft, hop_length,
+            iterations=iterations,
+            random_seed=random_seed,
+            mode=gl_mode,
+            scale_factor=scale_factor,
+            coarse_iterations=coarse_iter,
+            fine_iterations=fine_iter,
+            early_stop_threshold=early_stop_threshold,
+            early_stop_patience=early_stop_patience,
+            num_workers=2,
+            verbose=True
+        )
+    else:
+        print(f"\nГенерация фазы через Griffin-Lim ({gl_mode}, {iterations} итераций)...")
+        
+        if gl_mode == 'fast':
+            phase_mid = griffin_lim_fast(mag_mid, n_fft, hop_length, 
+                                         iterations=iterations, 
+                                         random_seed=random_seed,
+                                         early_stop_threshold=early_stop_threshold,
+                                         early_stop_patience=early_stop_patience)
+            phase_side = griffin_lim_fast(mag_side, n_fft, hop_length, 
+                                          iterations=iterations, 
+                                          random_seed=random_seed + 1 if random_seed else None,
+                                          early_stop_threshold=early_stop_threshold,
+                                          early_stop_patience=early_stop_patience)
+        elif gl_mode == 'multi_scale':
+            scale_factor = metadata.get('multi_scale_factor', 4)
+            coarse_iter = metadata.get('multi_scale_coarse_iterations', -1)
+            fine_iter = metadata.get('multi_scale_fine_iterations', -1)
+            
+            if coarse_iter == -1:
+                coarse_iter = None
+            if fine_iter == -1:
+                fine_iter = None
+            
+            phase_mid = griffin_lim_multi_scale(mag_mid, n_fft, hop_length, 
+                                                iterations=iterations, 
+                                                random_seed=random_seed,
+                                                scale_factor=scale_factor,
+                                                coarse_iterations=coarse_iter,
+                                                fine_iterations=fine_iter,
+                                                early_stop_threshold=early_stop_threshold,
+                                                early_stop_patience=early_stop_patience)
+            phase_side = griffin_lim_multi_scale(mag_side, n_fft, hop_length, 
+                                                 iterations=iterations, 
+                                                 random_seed=random_seed + 1 if random_seed else None,
+                                                 scale_factor=scale_factor,
+                                                 coarse_iterations=coarse_iter,
+                                                 fine_iterations=fine_iter,
+                                                 early_stop_threshold=early_stop_threshold,
+                                                 early_stop_patience=early_stop_patience)
+        else:
+            phase_mid = griffin_lim(mag_mid, n_fft, hop_length, 
+                                    iterations=iterations, 
+                                    random_seed=random_seed,
+                                    early_stop_threshold=early_stop_threshold,
+                                    early_stop_patience=early_stop_patience)
+            phase_side = griffin_lim(mag_side, n_fft, hop_length, 
+                                     iterations=iterations, 
+                                     random_seed=random_seed + 1 if random_seed else None,
+                                     early_stop_threshold=early_stop_threshold,
+                                     early_stop_patience=early_stop_patience)
+
+    # Проверки на NaN и некорректные значения
+    for name, ph in [("Mid", phase_mid), ("Side", phase_side)]:
+        if np.any(np.isnan(ph)):
+            np.nan_to_num(ph, copy=False, nan=0.0)
+        if np.abs(ph).max() > np.pi * 1.1:
+            np.clip(ph, -np.pi, np.pi, out=ph)
+
+    print("Восстановление комплексных спектров...")
+    D_mid = mag_mid.astype(np.complex64) * np.exp(1j * phase_mid.astype(np.float32))
+    D_side = mag_side.astype(np.complex64) * np.exp(1j * phase_side.astype(np.float32))
+
+    print("Обратное STFT...")
+    y_mid = librosa.istft(D_mid, hop_length=hop_length, length=original_length, window='hann')
+    y_side = librosa.istft(D_side, hop_length=hop_length, length=original_length, window='hann')
+
+    y_left, y_right = ms_to_lr(y_mid, y_side)
+    
+    y_recovered = np.stack([y_left, y_right], axis=1)
+    max_val = np.max(np.abs(y_recovered))
+    if max_val > 0:
+        y_recovered = y_recovered / max_val * 0.95
+
+    duration = y_recovered.shape[0] / sr
+    elapsed = time.time() - t_start
+    print(f"Сохранение: {output_wav_path} ({duration:.2f} сек, {elapsed:.1f} сек)")
+    
+    y_16bit = (y_recovered * 32767).clip(-32768, 32767).astype(np.int16)
+    sf.write(output_wav_path, y_16bit, sr, subtype='PCM_16')
+    
+    return y_recovered
+----------------------------------------
+
+Файл: F:\!Evgeny\src\py\au_to_img\encoder.py
+----------------------------------------
+# encoder.py
+import numpy as np
+import librosa
+from PIL import Image
+from pathlib import Path
+
+
+def _find_high_cut_auto(mag_mid_db: np.ndarray, mag_side_db: np.ndarray, freqs: np.ndarray,
+                        threshold_db: float = -80, freq_min: float = 8000, margin_db: float = 10):
+    mean_mag = np.maximum(np.mean(mag_mid_db, axis=1), np.mean(mag_side_db, axis=1))
+    
+    from scipy.ndimage import uniform_filter1d
+    smooth_size = max(3, len(mean_mag) // 20)
+    mean_mag_smooth = uniform_filter1d(mean_mag, size=smooth_size)
+    
+    effective_threshold = threshold_db + margin_db
+    below_threshold = mean_mag_smooth < effective_threshold
+    min_idx = np.searchsorted(freqs, freq_min)
+    
+    cut_bin = len(freqs) - 1
+    for i in range(min_idx, len(freqs) - 5):
+        if np.all(below_threshold[i:i+5]):
+            cut_bin = max(min_idx, i)
+            break
+            
+    print(f"   Автосрез ВЧ: порог {effective_threshold:.0f} dB, частота среза {freqs[cut_bin]:.0f} Гц")
+    return freqs[cut_bin], cut_bin
+
+
+def _check_image_size_limit(img: Image.Image, config: dict) -> tuple:
+    """Проверяет ограничения размера для разных форматов."""
+    fmt = config.get("output_format", "png").lower()
+    
+    # Лимиты для разных форматов
+    if fmt == "webp":
+        MAX_SIZE = 16383
+    elif fmt == "avif":
+        MAX_SIZE = 65535  # AVIF поддерживает очень большие изображения
+    elif fmt in ("jpeg", "jpg"):
+        MAX_SIZE = 65535
+    else:
+        MAX_SIZE = float('inf')
+    
+    width, height = img.size
+    scale = 1.0
+    was_scaled = False
+    
+    if width > MAX_SIZE or height > MAX_SIZE:
+        scale = min(MAX_SIZE / width, MAX_SIZE / height) if max(width, height) > 0 else 1.0
+        new_width = max(1, int(width * scale))
+        new_height = max(1, int(height * scale))
+        
+        print(f"\n   ⚠️  Размер изображения ({width}x{height}) превышает лимит формата {fmt.upper()} ({MAX_SIZE}px)")
+        print(f"   Автоматическое масштабирование: {width}x{height} -> {new_width}x{new_height}")
+        
+        method = _get_scale_method(config.get("scale_method", "lanczos"))
+        img = img.resize((new_width, new_height), method)
+        was_scaled = True
+    
+    return img, was_scaled, scale
+
+
+def _save_image_with_quality(img: Image.Image, image_path: str, config: dict):
+    fmt = config.get("output_format", "png").lower()
+    quality = max(1, min(100, config.get("output_quality", 95)))
+    lossless = config.get("output_lossless", False)
+
+    if fmt == "png":
+        compress_level = max(1, min(9, 9 - int((quality / 100) * 8)))
+        img.save(image_path, 'PNG', compress_level=compress_level)
+        format_str = f"PNG (сжатие: {compress_level}/9)"
+    
+    elif fmt == "webp":
+        width, height = img.size
+        if width > 16383 or height > 16383:
+            scale = min(16383 / width, 16383 / height)
+            img = img.resize((int(width * scale), int(height * scale)), Image.LANCZOS)
+        img.save(image_path, 'WEBP', lossless=lossless, quality=quality, method=6)
+        format_str = f"WEBP {'(lossless)' if lossless else f'(качество: {quality}/100)'}"
+    
+    elif fmt in ("jpeg", "jpg"):
+        if img.mode != 'RGB':
+            background = Image.New('RGB', img.size, (255, 255, 255))
+            background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
+            img = background
+        img.save(image_path, 'JPEG', quality=quality, optimize=True, progressive=True)
+        format_str = f"JPEG (качество: {quality}/100)"
+    
+    elif fmt == "avif":
+        # AVIF поддержка через pillow-avif-plugin или pillow-heif
+        avif_speed = config.get("avif_speed", 6)
+        avif_subsampling = config.get("avif_subsampling", "4:4:4")
+        
+        try:
+            # Пробуем сохранить как AVIF
+            img.save(
+                image_path, 
+                'AVIF', 
+                quality=quality,
+                lossless=lossless,
+                speed=avif_speed,
+                subsampling=avif_subsampling
+            )
+            format_str = f"AVIF {'(lossless)' if lossless else f'(качество: {quality}/100, скорость: {avif_speed})'}"
+        except Exception as e:
+            print(f"   ⚠️  Ошибка сохранения AVIF: {e}")
+            print(f"   Попытка сохранения через pillow-heif...")
+            try:
+                # Альтернативный метод через pillow-heif
+                img.save(image_path, 'AVIF', quality=quality)
+                format_str = f"AVIF (качество: {quality}/100)"
+            except Exception as e2:
+                print(f"   ⚠️  Ошибка: {e2}")
+                print(f"   Сохраняю как PNG вместо AVIF")
+                # Fallback на PNG
+                png_path = str(Path(image_path).with_suffix('.png'))
+                img.save(png_path, 'PNG', compress_level=6)
+                format_str = f"PNG (fallback, сжатие: 6/9)"
+                image_path = png_path
+    
+    else:
+        img.save(image_path, 'PNG', compress_level=9)
+        format_str = "PNG (макс. сжатие)"
+    
+    size_mb = Path(image_path).stat().st_size / (1024 * 1024)
+    print(f"   Формат: {format_str} ({size_mb:.2f} MB)")
+    
+    return image_path
+
+
+def _get_scale_method(method_name: str) -> int:
+    methods = {
+        "lanczos": Image.LANCZOS,
+        "bilinear": Image.BILINEAR,
+        "bicubic": Image.BICUBIC,
+        "nearest": Image.NEAREST,
+    }
+    return methods.get(method_name.lower(), Image.LANCZOS)
+
+
+def audio_to_image(wav_path: str, image_path: str, n_fft: int, hop_length: int, config: dict):
+    target_sr = 44100
+    y, sr = librosa.load(wav_path, sr=target_sr, mono=False)
+    
+    if y.ndim == 1:
+        y = np.vstack([y, np.zeros_like(y)])
+    
+    # --- ОБРЕЗКА ПО ДИАПАЗОНУ ---
+    if config.get("trim_enabled", False):
+        trim_start = config.get("trim_start", 0.0)
+        trim_end = config.get("trim_end", 0.0)
+        
+        start_sample = int(trim_start * sr)
+        end_sample = int(trim_end * sr) if trim_end > 0 else y.shape[1]
+        
+        start_sample = max(0, min(start_sample, y.shape[1]))
+        end_sample = max(start_sample, min(end_sample, y.shape[1]))
+        
+        y = y[:, start_sample:end_sample]
+        duration = y.shape[1] / sr
+        
+        print(f"   Аудио обрезано: {trim_start:.2f}s - {trim_end if trim_end > 0 else duration:.2f}s")
+        print(f"   Длительность фрагмента: {duration:.2f} сек")
+        
+    print(f"   Аудио: {y.shape}, {sr} Гц")
+    
+    # Преобразование в Mid/Side
+    mid = (y[0] + y[1]) * 0.5
+    side = (y[0] - y[1]) * 0.5
+
+    D_mid = librosa.stft(mid, n_fft=n_fft, hop_length=hop_length, window='hann')
+    D_side = librosa.stft(side, n_fft=n_fft, hop_length=hop_length, window='hann')
+    n_freqs_orig, n_frames = D_mid.shape
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+
+    low_cut_bin = 0
+    if config.get("low_cut_enabled", True) and config.get("low_cut_freq", 0) > 0:
+        low_cut_bin = np.searchsorted(freqs, config["low_cut_freq"])
+
+    high_cut_bin = len(freqs)
+    if config.get("high_cut_enabled", True):
+        if config.get("high_cut_mode", "auto") == "auto":
+            mag_mid_db = librosa.amplitude_to_db(np.abs(D_mid), ref=np.max)
+            mag_side_db = librosa.amplitude_to_db(np.abs(D_side), ref=np.max)
+            _, high_cut_bin = _find_high_cut_auto(
+                mag_mid_db, mag_side_db, freqs,
+                config.get("high_cut_auto_threshold_db", -80),
+                config.get("high_cut_auto_freq_min", 8000),
+                config.get("high_cut_auto_margin_db", 10)
+            )
+        else:
+            high_cut_bin = np.searchsorted(freqs, config.get("high_cut_freq", 16000))
+
+    D_mid = D_mid[low_cut_bin:high_cut_bin, :]
+    D_side = D_side[low_cut_bin:high_cut_bin, :]
+    n_freqs = D_mid.shape[0]
+    high_cut_bins_removed = n_freqs_orig - high_cut_bin
+
+    mag_mid, mag_side = np.abs(D_mid), np.abs(D_side)
+    ref_mid, ref_side = np.max(mag_mid), np.max(mag_side)
+    mag_min = -120
+
+    mag_mid_db = librosa.amplitude_to_db(mag_mid, ref=ref_mid)
+    mag_side_db = librosa.amplitude_to_db(mag_side, ref=ref_side)
+    mag_mid_norm = np.clip((mag_mid_db - mag_min) / (-mag_min) * 255, 0, 255).astype(np.uint8)
+    mag_side_norm = np.clip((mag_side_db - mag_min) / (-mag_min) * 255, 0, 255).astype(np.uint8)
+
+    rgb = np.zeros((n_freqs, n_frames, 3), dtype=np.uint8)
+    rgb[:, :, 1] = mag_mid_norm
+    rgb[:, :, 2] = mag_side_norm
+    rgb = np.flipud(rgb)
+    
+    img = Image.fromarray(rgb, 'RGB')
+    
+    # Проверка лимитов размера для lossy форматов
+    fmt = config.get("output_format", "png").lower()
+    if fmt in ("webp", "jpeg", "jpg", "avif"):
+        img, was_auto_scaled, scale_x = _check_image_size_limit(img, config)
+    else:
+        was_auto_scaled = False
+        scale_x = 1.0
+    
+    # Пользовательское масштабирование
+    if config.get("scale_enabled", False):
+        user_scale_x = config.get("scale_x", 1)
+        user_scale_y = config.get("scale_y", 1)
+        new_w = max(1, img.width // user_scale_x)
+        new_h = max(1, img.height // user_scale_y)
+        method = _get_scale_method(config.get("scale_method", "lanczos"))
+
+        print(f"\n   Масштабирование изображения:")
+        print(f"   Размер ДО: {img.width}x{img.height}")
+        print(f"   Размер ПОСЛЕ: {new_w}x{new_h}")
+        print(f"   Масштаб: 1/{user_scale_x} по ширине, 1/{user_scale_y} по высоте")
+        print(f"   Метод интерполяции: {config.get('scale_method', 'lanczos')}")
+
+        img = img.resize((new_w, new_h), method)
+    
+    # Сохраняем изображение и получаем актуальный путь (может измениться при fallback)
+    saved_image_path = _save_image_with_quality(img, image_path, config)
+
+    # Всегда используем генерацию фазы
+    gl_iterations = config.get("phase_generate_iterations", 100)
+    gl_random_seed = config.get("phase_generate_random_seed", 5)
+    gl_mode = config.get("griffin_lim_mode", "standard")
+    gl_parallel = config.get("griffin_lim_parallel", True)
+    
+    print(f"   Фаза будет сгенерирована при декодировании")
+    print(f"   Режим Griffin-Lim: {gl_mode}")
+    print(f"   Итераций: {gl_iterations}")
+    print(f"   Random seed: {gl_random_seed}")
+    
+    if config.get("early_stop_enabled", True):
+        print(f"   Ранняя остановка: ВКЛ. Порог: {config.get('early_stop_threshold', 0.0001)}")
+    
+    if gl_mode == "multi_scale":
+        ms_factor = config.get("multi_scale_factor", 4)
+        ms_coarse = config.get("multi_scale_coarse_iterations", -1)
+        ms_fine = config.get("multi_scale_fine_iterations", -1)
+        
+        print(f"   Multi-scale factor: {ms_factor}")
+        print(f"   Coarse iterations: {'all' if ms_coarse == -1 else ms_coarse}")
+        print(f"   Fine iterations: {'half' if ms_fine == -1 else ms_fine}")
+        
+        if gl_parallel:
+            print(f"   Параллельно: да")
+    else:
+        ms_factor = 4
+        ms_coarse = -1
+        ms_fine = -1
+        
+        if gl_parallel:
+            print(f"   Параллельно: да")
+
+    result_metadata = {
+        'shape': (n_freqs, n_frames),
+        'shape_original': (n_freqs_orig, n_frames),
+        'low_cut_bin': low_cut_bin,
+        'high_cut_bin': high_cut_bin,
+        'high_cut_bins_removed': high_cut_bins_removed,
+        'sr': sr,
+        'n_fft': n_fft,
+        'hop_length': hop_length,
+        'original_length': len(mid),
+        'n_channels': y.shape[0],
+        'mag_min': mag_min,
+        'ref_mid': float(ref_mid),
+        'ref_side': float(ref_side),
+        'phase_method': 'generate',
+        'flipped': True,
+        'auto_scaled': was_auto_scaled,
+        'auto_scale_x': scale_x,
+        'phase_generate_iterations': gl_iterations,
+        'phase_generate_random_seed': gl_random_seed,
+        'griffin_lim_mode': gl_mode,
+        'griffin_lim_parallel': gl_parallel,
+        'early_stop_threshold': config.get("early_stop_threshold", 0.0001),
+        'early_stop_patience': config.get("early_stop_patience", 15),
+        'multi_scale_factor': ms_factor,
+        'multi_scale_coarse_iterations': ms_coarse,
+        'multi_scale_fine_iterations': ms_fine,
+    }
+    
+    return result_metadata, saved_image_path
+----------------------------------------
+
+Файл: F:\!Evgeny\src\py\au_to_img\main.py
+----------------------------------------
+# main.py
+import os
+import time
+import numpy as np
+import librosa
+from pathlib import Path
+from pydub import AudioSegment
+from config import PRESETS, DEFAULT_CONFIG
+from encoder import audio_to_image
+from decoder import image_to_audio
+from utils import metadata_to_json, file_size_kb, file_size_mb, clean_temp_files, ensure_dir
+
+
+def mp3_to_wav(mp3_path: str, wav_path: str) -> str:
+    """Конвертирует MP3 в WAV для обработки."""
+    print(f"   Конвертация MP3: {Path(mp3_path).name}")
+    audio = AudioSegment.from_mp3(mp3_path)
+    audio.export(wav_path, format="wav")
+    size_mb = Path(wav_path).stat().st_size / (1024 * 1024)
+    print(f"   Готово ({size_mb:.1f} MB)")
+    return wav_path
+
+
+def full_pipeline(config: dict):
+    """Полный цикл: аудио -> изображение -> аудио (с генерацией фазы)."""
+    preset = PRESETS[config["active_preset"]]
+    n_fft = preset["N_FFT"]
+    hop_length = preset["HOP_LENGTH"]
+    data_dir = config.get("data_dir", "data")
+    ensure_dir(data_dir)
+
+    # --- Информация о параметрах ---
+    print(f"Параметры: FFT={n_fft}, HOP={hop_length}, SR=44100")
+    
+    if config.get("trim_enabled", False):
+        trim_end_str = f"{config.get('trim_end', 0)}s" if config.get('trim_end', 0) > 0 else "конец"
+        print(f"Диапазон обработки: {config.get('trim_start', 0)}s - {trim_end_str}")
+
+    wav_temp = Path(data_dir) / "temp_stereo.wav"
+
+    # Шаг 1: Конвертация
+    print("\n[1/3] Конвертация MP3 -> WAV")
+    mp3_to_wav(config["mp3_file"], str(wav_temp))
+    y_orig, sr_orig = librosa.load(wav_temp, sr=None, mono=False)
+    duration = len(y_orig.T if y_orig.ndim > 1 else y_orig) / sr_orig
+    print(f"   Длительность: {duration:.2f} сек")
+
+    # Шаг 2: Кодирование
+    print("\n[2/3] Кодирование в изображение")
+    
+    fmt = config.get("output_format", "png").lower()
+    ext = "jpg" if fmt == "jpeg" else fmt
+    image_path = str(Path(data_dir) / f"spectrogram.{ext}")
+
+    t_encode = time.time()
+    metadata, _ = audio_to_image(wav_temp, image_path, n_fft, hop_length, config)
+    encode_time = time.time() - t_encode
+
+    metadata_path = str(Path(data_dir) / "metadata.json")
+    metadata_to_json(metadata, metadata_path)
+
+    # Шаг 3: Декодирование
+    print("\n[3/3] Восстановление аудио")
+    recovered_path = str(Path(data_dir) / "recovered.wav")
+    t_decode = time.time()
+    audio_recovered = image_to_audio(image_path, recovered_path, metadata)
+    decode_time = time.time() - t_decode
+
+    # Итоговая статистика
+    print("\n" + "="*60)
+    print("ИТОГОВАЯ СТАТИСТИКА")
+    print("="*60)
+    
+    input_size_mb = file_size_mb(config["mp3_file"])
+    image_size_kb = file_size_kb(image_path)
+    wav_size_mb = file_size_mb(recovered_path)
+    
+    print(f"   Входной MP3: {input_size_mb:.1f} MB")
+    print(f"   Выходное изображение: {image_size_kb:.0f} KB")
+    
+    if config.get("trim_enabled", False):
+        trim_end = config.get("trim_end", 0) if config.get("trim_end", 0) > 0 else duration
+        fragment_duration = trim_end - config.get("trim_start", 0)
+        original_total = input_size_mb
+        fragment_ratio = fragment_duration / duration
+        effective_input = original_total * fragment_ratio
+        print(f"   Обработанный фрагмент: {fragment_duration:.1f} сек из {duration:.1f} сек")
+    else:
+        effective_input = input_size_mb
+    
+    image_size_mb = image_size_kb / 1024
+    compression_ratio = effective_input / image_size_mb if image_size_mb > 0 else 0
+    print(f"   Степень сжатия: {compression_ratio:.1f}:1 (MP3:{effective_input:.1f}MB -> Изобр:{image_size_mb:.2f}MB)")
+    print(f"   Восстановленный WAV: {wav_size_mb:.1f} MB")
+    print(f"   Время кодирования: {encode_time:.1f} сек")
+    print(f"   Время декодирования: {decode_time:.1f} сек")
+    
+    clean_temp_files(str(wav_temp))
+    return audio_recovered
+
+
+if __name__ == "__main__":
+    full_pipeline(DEFAULT_CONFIG)
+----------------------------------------
+
+Файл: F:\!Evgeny\src\py\au_to_img\transforms.py
+----------------------------------------
+# transforms.py
+import numpy as np
+
+def lr_to_ms(left: np.ndarray, right: np.ndarray):
+    """Преобразование Left/Right -> Mid/Side во временной области."""
+    mid = (left + right) * 0.5
+    side = (left - right) * 0.5
+    return mid, side
+
+def ms_to_lr(mid: np.ndarray, side: np.ndarray):
+    """Преобразование Mid/Side -> Left/Right во временной области."""
+    left = mid + side
+    right = mid - side
+    return left, right
+----------------------------------------
+
+Файл: F:\!Evgeny\src\py\au_to_img\utils.py
+----------------------------------------
+# utils.py
+import os
+import json
+import numpy as np
+
+def metadata_to_json(metadata: dict, path: str = "metadata.json"):
+    """Сохраняет метаданные в JSON-файл, конвертируя типы NumPy."""
+    json_data = {}
+    for k, v in metadata.items():
+        if isinstance(v, (np.integer, np.int64, np.int32)):
+            json_data[k] = int(v)
+        elif isinstance(v, (np.floating, np.float64, np.float32)):
+            json_data[k] = float(v)
+        elif isinstance(v, tuple):
+            json_data[k] = [int(x) for x in v]
+        elif isinstance(v, np.bool_):
+            json_data[k] = bool(v)
+        elif isinstance(v, np.ndarray):
+            json_data[k] = v.tolist()
+        else:
+            json_data[k] = v
+    
+    with open(path, "w", encoding='utf-8') as f:
+        json.dump(json_data, f, indent=2, ensure_ascii=False)
+
+def file_size_kb(path: str) -> float:
+    return os.path.getsize(path) / 1024.0
+
+def file_size_mb(path: str) -> float:
+    return os.path.getsize(path) / (1024.0 * 1024.0)
+
+def clean_temp_files(*paths: str):
+    for path in paths:
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError as e:
+                print(f"   Ошибка при удалении {path}: {e}")
+
+def ensure_dir(directory: str):
+    if not os.path.exists(directory):
+        os.makedirs(directory, exist_ok=True)
+
+def metadata_from_json(path: str) -> dict:
+    """Загружает метаданные из JSON-файла."""
+    import json
+    with open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+----------------------------------------
+
+================================================================================
