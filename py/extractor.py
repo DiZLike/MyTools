@@ -3,7 +3,7 @@ import os
 
 output_file_base = "output"
 output_file_ext = ".txt"
-max_lines_per_file = 1000
+max_lines_per_file = 1000  # СТРОГИЙ лимит строк КОНТЕНТА
 
 def is_binary(filepath, chunk_size=1024):
     """Проверяет, является ли файл бинарным"""
@@ -12,7 +12,6 @@ def is_binary(filepath, chunk_size=1024):
             chunk = f.read(chunk_size)
             if b'\x00' in chunk:
                 return True
-            # Проверяем, что это текст (декодируется как utf-8)
             try:
                 chunk.decode('utf-8')
                 return False
@@ -21,9 +20,9 @@ def is_binary(filepath, chunk_size=1024):
     except:
         return True
 
-def get_output_filename(base, ext, counter=None):
-    """Генерирует имя выходного файла с учетом счетчика"""
-    if counter is None or counter == 0:
+def get_output_filename(base, ext, counter):
+    """Генерирует имя выходного файла"""
+    if counter == 0:
         return f"{base}{ext}"
     else:
         return f"{base}_{counter}{ext}"
@@ -35,6 +34,14 @@ def count_lines_in_file(filepath):
             return sum(1 for _ in f)
     except:
         return 0
+
+def read_file_lines(filepath):
+    """Читает файл и возвращает список строк"""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return f.readlines()
+    except:
+        return []
 
 def process_path(path):
     """Обрабатывает файл или директорию"""
@@ -51,6 +58,63 @@ def process_path(path):
         return files
     return []
 
+def count_content_lines_in_output(filepath):
+    """Подсчитывает строки КОНТЕНТА в выходном файле (исключая разделители и заголовки)"""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Разделяем по разделителям файлов
+        parts = content.split("=" * 80)
+        total_content_lines = 0
+        
+        for part in parts:
+            if not part.strip():
+                continue
+            
+            lines = part.strip().split('\n')
+            # Пропускаем первые 3 строки: "Файл: ...", "-"*40, и последние 2: "-"*40, пустая строка
+            content_lines = lines[2:-2] if len(lines) > 4 else []
+            total_content_lines += len(content_lines)
+        
+        return total_content_lines
+    except:
+        return 0
+
+def find_last_output_file():
+    """Находит последний существующий выходной файл"""
+    counter = 0
+    last_counter = -1
+    
+    while True:
+        filename = get_output_filename(output_file_base, output_file_ext, counter)
+        if os.path.exists(filename):
+            last_counter = counter
+            counter += 1
+        else:
+            if counter == 0:
+                counter = 1
+                continue
+            break
+    
+    return last_counter
+
+def get_output_files():
+    """Возвращает список всех существующих выходных файлов"""
+    files = []
+    counter = 0
+    while True:
+        filename = get_output_filename(output_file_base, output_file_ext, counter)
+        if os.path.exists(filename):
+            files.append(filename)
+            counter += 1
+        else:
+            if counter == 0:
+                counter = 1
+                continue
+            break
+    return files
+
 if len(sys.argv) < 2:
     print("Перетащите файл или папку на скрипт")
     input("Нажмите Enter для выхода...")
@@ -62,99 +126,157 @@ all_files = []
 for path in paths_to_process:
     all_files.extend(process_path(path))
 
-# Определяем текущий выходной файл
-current_counter = 0
-current_output = get_output_filename(output_file_base, output_file_ext)
+if not all_files:
+    print("Не найдено текстовых файлов для обработки")
+    input("Нажмите Enter для выхода...")
+    sys.exit(0)
 
-# Проверяем существующие файлы и находим последний
-while os.path.exists(current_output):
-    current_counter += 1
-    current_output = get_output_filename(output_file_base, output_file_ext, current_counter)
+print(f"ЛИМИТ СТРОК НА ФАЙЛ: {max_lines_per_file}")
+print(f"Найдено файлов для обработки: {len(all_files)}")
 
-# Возвращаемся к последнему существующему или начинаем с первого
-if current_counter > 0:
-    current_counter -= 1
-    current_output = get_output_filename(output_file_base, output_file_ext, current_counter if current_counter > 0 else None)
+# Проверяем, не обработаны ли уже эти файлы
+output_files = get_output_files()
+processed_files = set()
 
-# Функция для подготовки содержимого одного файла
-def prepare_file_content(filepath):
-    """Подготавливает строки содержимого для одного файла"""
-    lines = []
-    lines.append(f"Файл: {filepath}")
-    lines.append("-" * 40)
-    
+for out_file in output_files:
     try:
-        with open(filepath, 'r', encoding='utf-8') as source_file:
-            content = source_file.read()
-        lines.append(content.rstrip('\n'))
-    except Exception as e:
-        lines.append(f"Ошибка при чтении: {str(e)}")
-    
-    lines.append("-" * 40)
-    lines.append("")  # пустая строка
-    return lines
+        with open(out_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+            for filepath in all_files:
+                if f"Файл: {filepath}" in content:
+                    processed_files.add(filepath)
+    except:
+        pass
 
-# Обрабатываем каждый файл и пишем в выходные файлы
-current_file_lines = count_lines_in_file(current_output)
-file_counter = 0  # счетчик для имени файла
-
-# Ищем номер для нового файла
-temp_counter = 0
-while os.path.exists(get_output_filename(output_file_base, output_file_ext, temp_counter if temp_counter > 0 else None)):
-    temp_counter += 1
-file_counter = temp_counter
-
-# Начинаем запись
-output_lines = []
-separator_lines = ["=" * 80]
-
-# Если начинаем новый файл, добавляем разделитель
-if current_file_lines == 0 or not os.path.exists(current_output):
-    output_lines = separator_lines.copy()
-    current_file_lines = 1
+new_files = [f for f in all_files if f not in processed_files]
 
 for filepath in all_files:
-    file_content_lines = prepare_file_content(filepath)
-    
-    # Проверяем, не превысит ли добавление лимит строк
-    if current_file_lines + len(file_content_lines) > max_lines_per_file:
-        # Добавляем завершающий разделитель в текущий файл
-        output_lines.extend(separator_lines)
-        
-        # Записываем текущий файл
-        current_output = get_output_filename(output_file_base, output_file_ext, file_counter if file_counter > 0 else None)
-        mode = 'w' if not os.path.exists(current_output) or current_file_lines == len(separator_lines) else 'a'
-        
-        with open(current_output, mode, encoding='utf-8') as f:
-            f.write('\n'.join(output_lines) + '\n')
-        
-        # Создаем новый файл
-        file_counter += 1
-        output_lines = separator_lines.copy()
-        current_file_lines = 1
-    
-    # Добавляем содержимое файла
-    output_lines.extend(file_content_lines)
-    current_file_lines += len(file_content_lines)
+    if filepath in processed_files:
+        print(f"  ПРОПУЩЕН (уже обработан): {filepath}")
+    else:
+        print(f"  НОВЫЙ: {filepath}")
 
-# Записываем оставшиеся данные
-if output_lines and output_lines != separator_lines:
-    output_lines.extend(separator_lines)
-    current_output = get_output_filename(output_file_base, output_file_ext, file_counter if file_counter > 0 else None)
-    mode = 'a' if os.path.exists(current_output) else 'w'
+if not new_files:
+    print("\nНет новых файлов для обработки")
+    input("\nНажмите Enter для выхода...")
+    sys.exit(0)
+
+# Находим последний выходной файл
+last_file_num = find_last_output_file()
+
+if last_file_num == -1:
+    # Нет выходных файлов - создаём первый
+    current_file_num = 0
+    current_output_file = get_output_filename(output_file_base, output_file_ext, current_file_num)
+    # Создаём пустой файл
+    with open(current_output_file, 'w', encoding='utf-8') as f:
+        pass
+    print(f"Создан новый файл: {current_output_file}")
+else:
+    current_file_num = last_file_num
+
+# Обрабатываем каждый новый файл
+for filepath in new_files:
+    print(f"\nОбработка файла: {filepath}")
     
-    with open(current_output, mode, encoding='utf-8') as f:
-        f.write('\n'.join(output_lines) + '\n')
+    # Читаем содержимое входного файла
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+        input_lines = content.split('\n')
+    except Exception as e:
+        print(f"  Ошибка чтения: {e}")
+        continue
+    
+    print(f"  Строк во входном файле: {len(input_lines)}")
+    
+    # Если входной файл больше лимита, разбиваем его на части
+    if len(input_lines) > max_lines_per_file:
+        print(f"  Входной файл превышает лимит. Разбиваем на части по {max_lines_per_file} строк.")
+        
+        for i in range(0, len(input_lines), max_lines_per_file):
+            chunk = input_lines[i:i + max_lines_per_file]
+            
+            # Проверяем текущий выходной файл
+            current_output_file = get_output_filename(output_file_base, output_file_ext, current_file_num)
+            
+            if os.path.exists(current_output_file):
+                current_content_lines = count_content_lines_in_output(current_output_file)
+            else:
+                current_content_lines = 0
+            
+            # Если в текущем файле уже есть содержимое и нет места для новой части
+            if current_content_lines > 0 and current_content_lines + len(chunk) > max_lines_per_file:
+                current_file_num += 1
+                current_output_file = get_output_filename(output_file_base, output_file_ext, current_file_num)
+                print(f"  Создан новый выходной файл: {current_output_file}")
+            
+            # Записываем часть в выходной файл
+            with open(current_output_file, 'a', encoding='utf-8') as out_f:
+                # Если файл пустой, не добавляем разделитель перед первым блоком
+                if os.path.getsize(current_output_file) > 0:
+                    out_f.write("=" * 80 + "\n")
+                
+                out_f.write(f"Файл: {filepath} (часть {i//max_lines_per_file + 1})\n")
+                out_f.write("-" * 40 + "\n")
+                out_f.write('\n'.join(chunk) + '\n')
+                out_f.write("-" * 40 + "\n\n")
+            
+            print(f"  Записана часть {i//max_lines_per_file + 1}: {len(chunk)} строк в {current_output_file}")
+    
+    else:
+        # Файл помещается в лимит
+        current_output_file = get_output_filename(output_file_base, output_file_ext, current_file_num)
+        
+        if os.path.exists(current_output_file):
+            current_content_lines = count_content_lines_in_output(current_output_file)
+        else:
+            current_content_lines = 0
+        
+        # Проверяем, поместится ли файл в текущий выходной файл
+        if current_content_lines > 0 and current_content_lines + len(input_lines) > max_lines_per_file:
+            current_file_num += 1
+            current_output_file = get_output_filename(output_file_base, output_file_ext, current_file_num)
+            print(f"  Создан новый выходной файл: {current_output_file}")
+        
+        # Записываем файл в выходной файл
+        with open(current_output_file, 'a', encoding='utf-8') as out_f:
+            if os.path.getsize(current_output_file) > 0:
+                out_f.write("=" * 80 + "\n")
+            
+            out_f.write(f"Файл: {filepath}\n")
+            out_f.write("-" * 40 + "\n")
+            out_f.write('\n'.join(input_lines) + '\n')
+            out_f.write("-" * 40 + "\n\n")
+        
+        print(f"  Записан файл: {len(input_lines)} строк в {current_output_file}")
 
-# Выводим информацию о созданных файлах
-created_files = []
-for i in range(file_counter + 1):
-    filename = get_output_filename(output_file_base, output_file_ext, i if i > 0 else None)
-    if os.path.exists(filename):
-        created_files.append(filename)
+# Финальная проверка
+print(f"\n{'='*50}")
+print("ПРОВЕРКА ВСЕХ ВЫХОДНЫХ ФАЙЛОВ:")
+print(f"Лимит строк контента на файл: {max_lines_per_file}")
 
-print(f"Обработано {len(all_files)} файлов")
-print(f"Создано/обновлено выходных файлов: {len(created_files)}")
-for f in created_files:
-    lines = count_lines_in_file(f)
-    print(f"  {f}: {lines} строк")
+output_files = get_output_files()
+total_content_lines = 0
+files_over_limit = 0
+
+for out_file in output_files:
+    content_lines = count_content_lines_in_output(out_file)
+    total_content_lines += content_lines
+    total_lines_in_file = count_lines_in_file(out_file)
+    
+    if content_lines > max_lines_per_file:
+        print(f"  ⚠ {out_file}: {content_lines} строк контента - ПРЕВЫШЕНИЕ на {content_lines - max_lines_per_file}!")
+        files_over_limit += 1
+    else:
+        print(f"  ✓ {out_file}: {content_lines} строк контента (всего {total_lines_in_file} строк)")
+
+print(f"\nВсего выходных файлов: {len(output_files)}")
+print(f"Всего строк контента: {total_content_lines}")
+
+if files_over_limit > 0:
+    print(f"⚠ ВНИМАНИЕ: {files_over_limit} файлов превышают лимит!")
+else:
+    print("✓ Все файлы в пределах лимита!")
+
+input("\nНажмите Enter для выхода...")

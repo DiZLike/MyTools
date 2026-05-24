@@ -1,790 +1,844 @@
-================================================================================
-Файл: F:\!Evgeny\src\py\au_to_img\config.py
+Файл: F:\!Evgeny\git\MyTools\csharp\AudioFill\AudioFill\Audio\AnalysisResult.cs
 ----------------------------------------
-# config.py
+﻿namespace AudioFill.Audio
+{
+    public class AnalysisResult
+    {
+        public string FilePath { get; set; }
+        public int SampleRate { get; set; }
+        public int BitsPerSample { get; set; }
+        public int Channels { get; set; }
+        public double DurationSec { get; set; }
 
-PRESETS = {
-    # --- СТАНДАРТНЫЕ ПРЕСЕТЫ ---
-    # 75% перекрытие (hop = N_FFT / 4)
-    "75p_n512":   {"N_FFT": 512,  "HOP_LENGTH": 128},
-    "75p_n1024":  {"N_FFT": 1024, "HOP_LENGTH": 256},
-    "75p_n2048":  {"N_FFT": 2048, "HOP_LENGTH": 512},
-    "75p_n4096":  {"N_FFT": 4096, "HOP_LENGTH": 1024},
-    "75p_n8192":  {"N_FFT": 8192, "HOP_LENGTH": 2048},
+        public double[] AvgSpectrumDb { get; set; }
+        public List<double[]> SpectrogramLines { get; set; }
 
-    # 87.5% перекрытие (hop = N_FFT / 8)
-    "87p_n256":   {"N_FFT": 256,  "HOP_LENGTH": 32},
-    "87p_n512":   {"N_FFT": 512,  "HOP_LENGTH": 64},
-    "87p_n1024":  {"N_FFT": 1024, "HOP_LENGTH": 128},
-    "87p_n2048":  {"N_FFT": 2048, "HOP_LENGTH": 256},
-    "87p_n4096":  {"N_FFT": 4096, "HOP_LENGTH": 512},
+        public double CutoffFrequencyHz { get; set; } = -1;
+        public double CutoffLevelDb { get; set; }
+        public double ReferenceLevelDb { get; set; }
+        public double ReferenceFrequencyHz { get; set; }
 
-    # --- ПРЕСЕТЫ ДЛЯ JPEG-СЖАТИЯ ---
-    "jpeg_n256_75p":  {"N_FFT": 256,  "HOP_LENGTH": 64},
-    "jpeg_n512_75p":  {"N_FFT": 512,  "HOP_LENGTH": 128},
-    "jpeg_n512_87p":  {"N_FFT": 512,  "HOP_LENGTH": 64},
-    "jpeg_n1024_87p": {"N_FFT": 1024, "HOP_LENGTH": 128},
+        public bool CutoffDetected => CutoffFrequencyHz > 0;
 
-    # --- ПРЕСЕТЫ ДЛЯ WebP-СЖАТИЯ ---
-    "webp_n128_75p":  {"N_FFT": 128,  "HOP_LENGTH": 32},
-    "webp_n128_87p":  {"N_FFT": 128,  "HOP_LENGTH": 16},
-    "webp_n256_75p":  {"N_FFT": 256,  "HOP_LENGTH": 64},
-    "webp_n256_87p":  {"N_FFT": 256,  "HOP_LENGTH": 32},
-    "webp_n512_87p":  {"N_FFT": 512,  "HOP_LENGTH": 64},
+        // Наклон спектра перед срезом (дБ/октава)
+        public double SpectralSlopeDbPerOctave { get; set; }
 
-    # --- ПРЕСЕТЫ ДЛЯ AVIF-СЖАТИЯ ---
-    "avif_n128_75p":  {"N_FFT": 128,  "HOP_LENGTH": 32},
-    "avif_n128_87p":  {"N_FFT": 128,  "HOP_LENGTH": 16},
-    "avif_n256_75p":  {"N_FFT": 256,  "HOP_LENGTH": 64},
-    "avif_n256_87p":  {"N_FFT": 256,  "HOP_LENGTH": 32},
-    "avif_n512_87p":  {"N_FFT": 512,  "HOP_LENGTH": 64},
-
-    # --- ПРЕСЕТЫ ДЛЯ ВИДЕО-СЖАТИЯ ---
-    # Оптимизированы под высокую временную избыточность (87.5% перекрытие)
-    "video_n1024_87p": {"N_FFT": 1024, "HOP_LENGTH": 128},
-    "video_n2048_87p": {"N_FFT": 2048, "HOP_LENGTH": 256},
-    "video_n4096_87p": {"N_FFT": 4096, "HOP_LENGTH": 512},
-    
-    # 93.75% перекрытие — максимальная временная избыточность
-    "video_n1024_93p": {"N_FFT": 1024, "HOP_LENGTH": 64},
-    "video_n2048_93p": {"N_FFT": 2048, "HOP_LENGTH": 128},
-
-    "custom":  {"N_FFT": 4096, "HOP_LENGTH": 2048},
-}
-
-DEFAULT_CONFIG = {
-    # --- ФАЙЛЫ ---
-    "mp3_file": "track.mp3",          # Входной аудиофайл (MP3 или WAV)
-    "active_preset": "75p_n4096",     # Пресет из PRESETS: размер FFT и длина хопа
-    
-    # --- ДИАПАЗОН ОБРАБОТКИ ---
-    "trim_enabled": True,             # Включить обрезку трека по времени
-    "trim_start": 60.0,                 # Начало обрабатываемого фрагмента в секундах
-    "trim_end": 130.0,                   # Конец обрабатываемого фрагмента (0 = до конца трека)
-    
-    # --- НАСТРОЙКИ ФОРМАТА ИЗОБРАЖЕНИЯ ---
-    "output_format": "jpeg",          # Формат: "png", "webp", "jpeg"/"jpg", "avif"
-    "output_quality": 5,              # Качество для webp/jpeg/avif (1-100). Для PNG: уровень сжатия (1-9)
-    "output_lossless": False,         # Lossless-режим для webp и avif
-
-    # --- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ AVIF ---
-    "avif_speed": 0,                    # Скорость кодирования AVIF (0-10, 0 = лучшее сжатие)
-    "avif_subsampling": "4:2:0",        # Цветовая субдискретизация: "4:4:4", "4:2:2", "4:2:0"
-    
-    # --- МАСШТАБИРОВАНИЕ ИЗОБРАЖЕНИЯ ---
-    "scale_enabled": False,           # Включить масштабирование спектрограммы
-    "scale_x": 2,                     # Масштаб по ширине (деление: 2 = в 2 раза уже)
-    "scale_y": 1,                     # Масштаб по высоте (деление: 2 = в 2 раза ниже)
-    "scale_method": "lanczos",        # Метод интерполяции: "lanczos", "bilinear", "bicubic", "nearest"
-    
-    # --- ПАРАМЕТРЫ ГЕНЕРАЦИИ ФАЗЫ ---
-    "phase_generate_iterations": 5000,   # Число итераций Griffin-Lim (больше = точнее, но медленнее)
-    "phase_generate_random_seed": 454,    # Seed для воспроизводимости (-1 = случайный)
-    "griffin_lim_mode": "fast",     # Режим Griffin-Lim: "standard", "fast", "multi_scale"
-    "griffin_lim_parallel": True,       # Параллельная обработка Mid/Side (ускорение ~2x)
-    
-    # --- РАННЯЯ ОСТАНОВКА (early stopping) ---
-    "early_stop_enabled": True,         # Включить раннюю остановку
-    "early_stop_threshold": 0.0001,     # Минимальное улучшение ошибки для продолжения
-    "early_stop_patience": 10,          # Сколько итераций ждать улучшения перед остановкой
-    
-    # --- ПАРАМЕТРЫ MULTI-SCALE РЕЖИМА ---
-    "multi_scale_factor": 2,            # Фактор уменьшения для грубого этапа (2, 4, 8)
-    "multi_scale_coarse_iterations": -1, # Итераций на грубом этапе (-1 = все итерации)
-    "multi_scale_fine_iterations": 400,   # Итераций на точном этапе (-1 = половина от общего)
-    
-    # --- ОБРЕЗКА НИЗКИХ ЧАСТОТ (убирает инфразвук и DC) ---
-    "low_cut_enabled": True,            # Включить обрезку низких частот
-    "low_cut_freq": 0,                 # Частота среза снизу в Гц (рекомендуется 20-100)
-    
-    # --- ОБРЕЗКА ВЫСОКИХ ЧАСТОТ (экономия места) ---
-    "high_cut_enabled": True,           # Включить обрезку высоких частот
-    "high_cut_mode": "auto",            # "auto" - автоматический срез по спаду энергии
-                                        # "manual" - ручная установка частоты
-    "high_cut_freq": 16000,             # Частота среза сверху в Гц (для manual режима)
-    "high_cut_auto_threshold_db": -80,  # Порог энергии для автосреза (тише этого = обрезаем)
-    "high_cut_auto_freq_min": 8000,     # Минимальная частота, выше которой ищем спад
-    "high_cut_auto_margin_db": 10,      # Запас над порогом для надёжности среза
-
-        # --- НАСТРОЙКИ ВИДЕО-КОДИРОВАНИЯ (базовые) ---
-    "video_codec": "h265",              # Кодек: "h265"
-    "video_crf": 16,                    # Качество (0 = lossless, 51 = ужас, 16-28 разумно)
-    "video_preset": "veryslow",         # Скорость: "fast", "medium", "slow", "veryslow"
-    "video_fps": 30,                    # Частота кадров (не влияет на качество, только метаданные)
-    "video_columns_per_frame": 128,     # Размер кадра: сколько столбцов спектрограммы в кадре
-    "video_pixel_format": "yuv420p",    # Цветность: "yuv420p" или "yuv444p"
-
-    "data_dir": "data",                 # Папка для выходных файлов
+        // Сырые сэмплы для реставрации
+        public float[]? OriginalLeft { get; set; }
+        public float[]? OriginalRight { get; set; }
+    }
 }
 ----------------------------------------
 
-Файл: F:\!Evgeny\src\py\au_to_img\decoder.py
+================================================================================
+Файл: F:\!Evgeny\git\MyTools\csharp\AudioFill\AudioFill\Audio\AudioAnalyzer.cs
 ----------------------------------------
-# decoder.py
-import time
-import numpy as np
-import librosa
-import soundfile as sf
-from PIL import Image
-from transforms import ms_to_lr
-from phase_generator import (griffin_lim, griffin_lim_fast, 
-                             griffin_lim_multi_scale, griffin_lim_stereo_parallel)
+﻿using NAudio.Wave;
+using NAudio.Dsp;
+using Complex = NAudio.Dsp.Complex;
 
+namespace AudioFill.Audio
+{
+    public class AudioAnalyzer
+    {
+        private readonly int _fftSize;
+        private readonly double _overlap;
+        private readonly int _windowType;
+        private readonly double _cutoffThresholdDb;
+        private readonly int _cutoffPersistence;
 
-def _pad_spectrum(data: np.ndarray, low_pad: int, high_pad: int) -> np.ndarray:
-    if low_pad > 0:
-        data = np.vstack([np.zeros((low_pad, data.shape[1]), dtype=data.dtype), data])
-    if high_pad > 0:
-        data = np.vstack([data, np.zeros((high_pad, data.shape[1]), dtype=data.dtype)])
-    return data
+        public AudioAnalyzer(int fftSize = 4096, double overlap = 0.5, int windowType = 0,
+                             double cutoffThresholdDb = -40, int cutoffPersistence = 5)
+        {
+            _fftSize = fftSize;
+            _overlap = Math.Clamp(overlap, 0, 0.75);
+            _windowType = windowType;
+            _cutoffThresholdDb = cutoffThresholdDb;
+            _cutoffPersistence = cutoffPersistence;
+        }
 
+        public AnalysisResult Analyze(string filePath, Action<int>? progressCallback = null)
+        {
+            using var reader = new MediaFoundationReader(filePath);
+            var result = new AnalysisResult
+            {
+                FilePath = filePath,
+                SampleRate = reader.WaveFormat.SampleRate,
+                BitsPerSample = reader.WaveFormat.BitsPerSample,
+                Channels = reader.WaveFormat.Channels,
+                DurationSec = reader.TotalTime.TotalSeconds
+            };
 
-def image_to_audio(image_path: str, output_wav_path: str, metadata: dict) -> np.ndarray:
-    n_freqs, n_frames = metadata['shape']
-    n_freqs_original = metadata['shape_original'][0]
-    low_cut_bin = metadata.get('low_cut_bin', 0)
-    high_cut_bins_removed = metadata.get('high_cut_bins_removed', 0)
-    flipped = metadata.get('flipped', False)
-    
-    sr = metadata['sr']
-    n_fft = metadata['n_fft']
-    hop_length = metadata['hop_length']
-    original_length = metadata['original_length']
-    mag_min = metadata.get('mag_min', -120)
-    ref_mid = metadata.get('ref_mid', 1.0)
-    ref_side = metadata.get('ref_side', 1.0)
+            int channels = reader.WaveFormat.Channels;
+            var provider = reader.ToSampleProvider();
 
-    img = Image.open(image_path).convert('RGB')
-    
-    target_size = (n_frames, n_freqs)
-    if img.size != target_size:
-        img = img.resize(target_size, Image.LANCZOS)
-    
-    arr = np.array(img, dtype=np.float32)
-    if flipped:
-        arr = np.flipud(arr)
+            int fftBins = _fftSize / 2;
+            double[] sumSpectrum = new double[fftBins];
+            var spectrogram = new List<double[]>();
+            int totalSamples = (int)(result.DurationSec * result.SampleRate);
+            int hopSize = (int)(_fftSize * (1 - _overlap));
+            if (hopSize <= 0) hopSize = _fftSize;
+            int totalSteps = totalSamples / hopSize;
+            int processedSteps = 0;
 
-    mag_mid_norm = arr[:, :, 1] / 255.0
-    mag_side_norm = arr[:, :, 2] / 255.0
-    mag_mid_db = mag_mid_norm * (-mag_min) + mag_min
-    mag_side_db = mag_side_norm * (-mag_min) + mag_min
-    mag_mid = librosa.db_to_amplitude(mag_mid_db, ref=ref_mid)
-    mag_side = librosa.db_to_amplitude(mag_side_db, ref=ref_side)
+            var interleavedBuffer = new float[_fftSize * channels];
+            var monoBuffer = new float[_fftSize];
+            var fftBuffer = new Complex[_fftSize];
+            var window = CreateWindow();
 
-    mag_mid = _pad_spectrum(mag_mid, low_cut_bin, high_cut_bins_removed)
-    mag_side = _pad_spectrum(mag_side, low_cut_bin, high_cut_bins_removed)
+            while (true)
+            {
+                int read = provider.Read(interleavedBuffer, 0, _fftSize * channels);
+                int framesRead = read / channels;
 
-    t_start = time.time()
-    
-    # Всегда генерируем фазу
-    iterations = metadata.get('phase_generate_iterations', 100)
-    random_seed = metadata.get('phase_generate_random_seed', 5)
-    if random_seed == -1:
-        random_seed = None
-    
-    gl_mode = metadata.get('griffin_lim_mode', 'standard')
-    parallel = metadata.get('griffin_lim_parallel', True)
-    
-    early_stop_threshold = metadata.get('early_stop_threshold', 0.0001)
-    early_stop_patience = metadata.get('early_stop_patience', 15)
-    
-    if parallel and gl_mode in ('standard', 'fast', 'multi_scale'):
-        print(f"\nГенерация фазы через Griffin-Lim ({gl_mode}, {iterations} итераций, параллельно)")
-        
-        if gl_mode == 'multi_scale':
-            scale_factor = metadata.get('multi_scale_factor', 4)
-            coarse_iter = metadata.get('multi_scale_coarse_iterations', -1)
-            fine_iter = metadata.get('multi_scale_fine_iterations', -1)
-            
-            if coarse_iter == -1:
-                coarse_iter = None
-            if fine_iter == -1:
-                fine_iter = None
-        else:
-            scale_factor = 4
-            coarse_iter = None
-            fine_iter = None
-        
-        phase_mid, phase_side = griffin_lim_stereo_parallel(
-            mag_mid, mag_side, n_fft, hop_length,
-            iterations=iterations,
-            random_seed=random_seed,
-            mode=gl_mode,
-            scale_factor=scale_factor,
-            coarse_iterations=coarse_iter,
-            fine_iterations=fine_iter,
-            early_stop_threshold=early_stop_threshold,
-            early_stop_patience=early_stop_patience,
-            num_workers=2,
-            verbose=True
-        )
-    else:
-        print(f"\nГенерация фазы через Griffin-Lim ({gl_mode}, {iterations} итераций)...")
-        
-        if gl_mode == 'fast':
-            phase_mid = griffin_lim_fast(mag_mid, n_fft, hop_length, 
-                                         iterations=iterations, 
-                                         random_seed=random_seed,
-                                         early_stop_threshold=early_stop_threshold,
-                                         early_stop_patience=early_stop_patience)
-            phase_side = griffin_lim_fast(mag_side, n_fft, hop_length, 
-                                          iterations=iterations, 
-                                          random_seed=random_seed + 1 if random_seed else None,
-                                          early_stop_threshold=early_stop_threshold,
-                                          early_stop_patience=early_stop_patience)
-        elif gl_mode == 'multi_scale':
-            scale_factor = metadata.get('multi_scale_factor', 4)
-            coarse_iter = metadata.get('multi_scale_coarse_iterations', -1)
-            fine_iter = metadata.get('multi_scale_fine_iterations', -1)
-            
-            if coarse_iter == -1:
-                coarse_iter = None
-            if fine_iter == -1:
-                fine_iter = None
-            
-            phase_mid = griffin_lim_multi_scale(mag_mid, n_fft, hop_length, 
-                                                iterations=iterations, 
-                                                random_seed=random_seed,
-                                                scale_factor=scale_factor,
-                                                coarse_iterations=coarse_iter,
-                                                fine_iterations=fine_iter,
-                                                early_stop_threshold=early_stop_threshold,
-                                                early_stop_patience=early_stop_patience)
-            phase_side = griffin_lim_multi_scale(mag_side, n_fft, hop_length, 
-                                                 iterations=iterations, 
-                                                 random_seed=random_seed + 1 if random_seed else None,
-                                                 scale_factor=scale_factor,
-                                                 coarse_iterations=coarse_iter,
-                                                 fine_iterations=fine_iter,
-                                                 early_stop_threshold=early_stop_threshold,
-                                                 early_stop_patience=early_stop_patience)
-        else:
-            phase_mid = griffin_lim(mag_mid, n_fft, hop_length, 
-                                    iterations=iterations, 
-                                    random_seed=random_seed,
-                                    early_stop_threshold=early_stop_threshold,
-                                    early_stop_patience=early_stop_patience)
-            phase_side = griffin_lim(mag_side, n_fft, hop_length, 
-                                     iterations=iterations, 
-                                     random_seed=random_seed + 1 if random_seed else None,
-                                     early_stop_threshold=early_stop_threshold,
-                                     early_stop_patience=early_stop_patience)
+                if (framesRead == 0 && processedSteps > 0) break;
 
-    # Проверки на NaN и некорректные значения
-    for name, ph in [("Mid", phase_mid), ("Side", phase_side)]:
-        if np.any(np.isnan(ph)):
-            np.nan_to_num(ph, copy=False, nan=0.0)
-        if np.abs(ph).max() > np.pi * 1.1:
-            np.clip(ph, -np.pi, np.pi, out=ph)
+                Array.Clear(monoBuffer, 0, _fftSize);
+                for (int i = 0; i < framesRead; i++)
+                {
+                    double sum = 0;
+                    for (int ch = 0; ch < channels; ch++)
+                        sum += interleavedBuffer[i * channels + ch];
+                    monoBuffer[i] = (float)(sum / channels);
+                }
 
-    print("Восстановление комплексных спектров...")
-    D_mid = mag_mid.astype(np.complex64) * np.exp(1j * phase_mid.astype(np.float32))
-    D_side = mag_side.astype(np.complex64) * np.exp(1j * phase_side.astype(np.float32))
+                if (framesRead < _fftSize)
+                    Array.Clear(monoBuffer, framesRead, _fftSize - framesRead);
 
-    print("Обратное STFT...")
-    y_mid = librosa.istft(D_mid, hop_length=hop_length, length=original_length, window='hann')
-    y_side = librosa.istft(D_side, hop_length=hop_length, length=original_length, window='hann')
+                for (int i = 0; i < _fftSize; i++)
+                {
+                    fftBuffer[i].X = monoBuffer[i] * window[i];
+                    fftBuffer[i].Y = 0;
+                }
 
-    y_left, y_right = ms_to_lr(y_mid, y_side)
-    
-    y_recovered = np.stack([y_left, y_right], axis=1)
-    max_val = np.max(np.abs(y_recovered))
-    if max_val > 0:
-        y_recovered = y_recovered / max_val * 0.95
+                FastFourierTransform.FFT(true, (int)Math.Log2(_fftSize), fftBuffer);
 
-    duration = y_recovered.shape[0] / sr
-    elapsed = time.time() - t_start
-    print(f"Сохранение: {output_wav_path} ({duration:.2f} сек, {elapsed:.1f} сек)")
-    
-    y_16bit = (y_recovered * 32767).clip(-32768, 32767).astype(np.int16)
-    sf.write(output_wav_path, y_16bit, sr, subtype='PCM_16')
-    
-    return y_recovered
-----------------------------------------
+                var lineSpectrum = new double[fftBins];
+                for (int i = 0; i < fftBins; i++)
+                {
+                    double magnitude = Math.Sqrt(fftBuffer[i].X * fftBuffer[i].X + fftBuffer[i].Y * fftBuffer[i].Y);
+                    double db = 20 * Math.Log10(Math.Max(magnitude, 1e-10));
+                    lineSpectrum[i] = db;
+                    sumSpectrum[i] += db;
+                }
 
-Файл: F:\!Evgeny\src\py\au_to_img\encoder.py
-----------------------------------------
-# encoder.py
-import numpy as np
-import librosa
-from PIL import Image
-from pathlib import Path
+                spectrogram.Add(lineSpectrum);
+                processedSteps++;
 
+                if (framesRead < _fftSize) break;
 
-def _find_high_cut_auto(mag_mid_db: np.ndarray, mag_side_db: np.ndarray, freqs: np.ndarray,
-                        threshold_db: float = -80, freq_min: float = 8000, margin_db: float = 10):
-    mean_mag = np.maximum(np.mean(mag_mid_db, axis=1), np.mean(mag_side_db, axis=1))
-    
-    from scipy.ndimage import uniform_filter1d
-    smooth_size = max(3, len(mean_mag) // 20)
-    mean_mag_smooth = uniform_filter1d(mean_mag, size=smooth_size)
-    
-    effective_threshold = threshold_db + margin_db
-    below_threshold = mean_mag_smooth < effective_threshold
-    min_idx = np.searchsorted(freqs, freq_min)
-    
-    cut_bin = len(freqs) - 1
-    for i in range(min_idx, len(freqs) - 5):
-        if np.all(below_threshold[i:i+5]):
-            cut_bin = max(min_idx, i)
-            break
-            
-    print(f"   Автосрез ВЧ: порог {effective_threshold:.0f} dB, частота среза {freqs[cut_bin]:.0f} Гц")
-    return freqs[cut_bin], cut_bin
+                progressCallback?.Invoke((int)(processedSteps * 100.0 / totalSteps));
+            }
 
+            int lineCount = spectrogram.Count;
+            for (int i = 0; i < fftBins; i++)
+                sumSpectrum[i] /= lineCount;
+            result.AvgSpectrumDb = sumSpectrum;
+            result.SpectrogramLines = spectrogram;
 
-def _check_image_size_limit(img: Image.Image, config: dict) -> tuple:
-    """Проверяет ограничения размера для разных форматов."""
-    fmt = config.get("output_format", "png").lower()
-    
-    # Лимиты для разных форматов
-    if fmt == "webp":
-        MAX_SIZE = 16383
-    elif fmt == "avif":
-        MAX_SIZE = 65535  # AVIF поддерживает очень большие изображения
-    elif fmt in ("jpeg", "jpg"):
-        MAX_SIZE = 65535
-    else:
-        MAX_SIZE = float('inf')
-    
-    width, height = img.size
-    scale = 1.0
-    was_scaled = False
-    
-    if width > MAX_SIZE or height > MAX_SIZE:
-        scale = min(MAX_SIZE / width, MAX_SIZE / height) if max(width, height) > 0 else 1.0
-        new_width = max(1, int(width * scale))
-        new_height = max(1, int(height * scale))
-        
-        print(f"\n   ⚠️  Размер изображения ({width}x{height}) превышает лимит формата {fmt.upper()} ({MAX_SIZE}px)")
-        print(f"   Автоматическое масштабирование: {width}x{height} -> {new_width}x{new_height}")
-        
-        method = _get_scale_method(config.get("scale_method", "lanczos"))
-        img = img.resize((new_width, new_height), method)
-        was_scaled = True
-    
-    return img, was_scaled, scale
+            FindHighFrequencyCutoff(result);
 
+            return result;
+        }
 
-def _save_image_with_quality(img: Image.Image, image_path: str, config: dict):
-    fmt = config.get("output_format", "png").lower()
-    quality = max(1, min(100, config.get("output_quality", 95)))
-    lossless = config.get("output_lossless", False)
+        private float[] CreateWindow()
+        {
+            var w = new float[_fftSize];
+            for (int i = 0; i < _fftSize; i++)
+            {
+                double ratio = i / (double)(_fftSize - 1);
+                w[i] = _windowType switch
+                {
+                    1 => (float)(0.54 - 0.46 * Math.Cos(2 * Math.PI * ratio)),
+                    2 => (float)(0.42 - 0.5 * Math.Cos(2 * Math.PI * ratio) + 0.08 * Math.Cos(4 * Math.PI * ratio)),
+                    3 => 1f,
+                    _ => (float)(0.5 - 0.5 * Math.Cos(2 * Math.PI * ratio))
+                };
+            }
+            return w;
+        }
 
-    if fmt == "png":
-        compress_level = max(1, min(9, 9 - int((quality / 100) * 8)))
-        img.save(image_path, 'PNG', compress_level=compress_level)
-        format_str = f"PNG (сжатие: {compress_level}/9)"
-    
-    elif fmt == "webp":
-        width, height = img.size
-        if width > 16383 or height > 16383:
-            scale = min(16383 / width, 16383 / height)
-            img = img.resize((int(width * scale), int(height * scale)), Image.LANCZOS)
-        img.save(image_path, 'WEBP', lossless=lossless, quality=quality, method=6)
-        format_str = f"WEBP {'(lossless)' if lossless else f'(качество: {quality}/100)'}"
-    
-    elif fmt in ("jpeg", "jpg"):
-        if img.mode != 'RGB':
-            background = Image.New('RGB', img.size, (255, 255, 255))
-            background.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
-            img = background
-        img.save(image_path, 'JPEG', quality=quality, optimize=True, progressive=True)
-        format_str = f"JPEG (качество: {quality}/100)"
-    
-    elif fmt == "avif":
-        # AVIF поддержка через pillow-avif-plugin или pillow-heif
-        avif_speed = config.get("avif_speed", 6)
-        avif_subsampling = config.get("avif_subsampling", "4:4:4")
-        
-        try:
-            # Пробуем сохранить как AVIF
-            img.save(
-                image_path, 
-                'AVIF', 
-                quality=quality,
-                lossless=lossless,
-                speed=avif_speed,
-                subsampling=avif_subsampling
-            )
-            format_str = f"AVIF {'(lossless)' if lossless else f'(качество: {quality}/100, скорость: {avif_speed})'}"
-        except Exception as e:
-            print(f"   ⚠️  Ошибка сохранения AVIF: {e}")
-            print(f"   Попытка сохранения через pillow-heif...")
-            try:
-                # Альтернативный метод через pillow-heif
-                img.save(image_path, 'AVIF', quality=quality)
-                format_str = f"AVIF (качество: {quality}/100)"
-            except Exception as e2:
-                print(f"   ⚠️  Ошибка: {e2}")
-                print(f"   Сохраняю как PNG вместо AVIF")
-                # Fallback на PNG
-                png_path = str(Path(image_path).with_suffix('.png'))
-                img.save(png_path, 'PNG', compress_level=6)
-                format_str = f"PNG (fallback, сжатие: 6/9)"
-                image_path = png_path
-    
-    else:
-        img.save(image_path, 'PNG', compress_level=9)
-        format_str = "PNG (макс. сжатие)"
-    
-    size_mb = Path(image_path).stat().st_size / (1024 * 1024)
-    print(f"   Формат: {format_str} ({size_mb:.2f} MB)")
-    
-    return image_path
+        private void FindHighFrequencyCutoff(AnalysisResult result)
+        {
+            RecalculateCutoff(result, _cutoffThresholdDb, _cutoffPersistence);
 
+            if (result.CutoffDetected)
+                EstimateSpectralSlope(result);
+        }
 
-def _get_scale_method(method_name: str) -> int:
-    methods = {
-        "lanczos": Image.LANCZOS,
-        "bilinear": Image.BILINEAR,
-        "bicubic": Image.BICUBIC,
-        "nearest": Image.NEAREST,
+        public static void RecalculateCutoff(AnalysisResult result, double cutoffThresholdDb, int cutoffPersistence = 5)
+        {
+            int fftBins = result.AvgSpectrumDb.Length;
+            double[] spectrum = result.AvgSpectrumDb;
+            int sampleRate = result.SampleRate;
+            int fftSize = fftBins * 2;
+
+            int refLimitBin = (int)(2000.0 * fftSize / sampleRate);
+            refLimitBin = Math.Min(refLimitBin, fftBins - 1);
+            double refLevel = double.MinValue;
+            int refBin = 0;
+
+            for (int i = 0; i <= refLimitBin; i++)
+            {
+                if (spectrum[i] > refLevel)
+                {
+                    refLevel = spectrum[i];
+                    refBin = i;
+                }
+            }
+
+            result.ReferenceLevelDb = Math.Round(refLevel, 2);
+            result.ReferenceFrequencyHz = Math.Round(refBin * sampleRate / (double)fftSize, 1);
+
+            double threshold = refLevel + cutoffThresholdDb;
+            int belowCount = 0;
+            int cutoffBin = -1;
+
+            for (int i = refBin + 1; i < fftBins; i++)
+            {
+                if (spectrum[i] < threshold)
+                {
+                    belowCount++;
+                    if (belowCount >= cutoffPersistence && cutoffBin < 0)
+                        cutoffBin = i - belowCount + 1;
+                }
+                else
+                {
+                    belowCount = 0;
+                    cutoffBin = -1;
+                }
+            }
+
+            if (cutoffBin > 0)
+            {
+                result.CutoffFrequencyHz = Math.Round(cutoffBin * sampleRate / (double)fftSize, 1);
+                result.CutoffLevelDb = Math.Round(spectrum[cutoffBin], 2);
+            }
+            else
+            {
+                result.CutoffFrequencyHz = -1;
+                result.CutoffLevelDb = 0;
+            }
+        }
+
+        private static void EstimateSpectralSlope(AnalysisResult result)
+        {
+            int fftBins = result.AvgSpectrumDb.Length;
+            int fftSize = fftBins * 2;
+            double fCut = result.CutoffFrequencyHz;
+
+            // Берём диапазон 50-95% от частоты среза
+            double analysisLow = fCut * 0.5;
+            double analysisHigh = fCut * 0.95;
+
+            int binLow = (int)(analysisLow * fftSize / result.SampleRate);
+            int binHigh = (int)(analysisHigh * fftSize / result.SampleRate);
+
+            binLow = Math.Max(1, binLow);
+            binHigh = Math.Min(fftBins - 1, binHigh);
+
+            if (binHigh - binLow < 4)
+            {
+                result.SpectralSlopeDbPerOctave = -6.0; // дефолтный спад
+                return;
+            }
+
+            // Линейная регрессия dB vs log2(freq)
+            double sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+            int n = 0;
+
+            for (int i = binLow; i <= binHigh; i++)
+            {
+                double freq = i * result.SampleRate / (double)fftSize;
+                double logFreq = Math.Log2(freq / 1000.0); // относительно 1 кГц
+                double db = result.AvgSpectrumDb[i];
+
+                sumX += logFreq;
+                sumY += db;
+                sumXY += logFreq * db;
+                sumX2 += logFreq * logFreq;
+                n++;
+            }
+
+            if (n < 4)
+            {
+                result.SpectralSlopeDbPerOctave = -6.0;
+                return;
+            }
+
+            double slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+            result.SpectralSlopeDbPerOctave = Math.Round(slope, 2);
+        }
     }
-    return methods.get(method_name.lower(), Image.LANCZOS)
-
-
-def audio_to_image(wav_path: str, image_path: str, n_fft: int, hop_length: int, config: dict):
-    target_sr = 44100
-    y, sr = librosa.load(wav_path, sr=target_sr, mono=False)
-    
-    if y.ndim == 1:
-        y = np.vstack([y, np.zeros_like(y)])
-    
-    # --- ОБРЕЗКА ПО ДИАПАЗОНУ ---
-    if config.get("trim_enabled", False):
-        trim_start = config.get("trim_start", 0.0)
-        trim_end = config.get("trim_end", 0.0)
-        
-        start_sample = int(trim_start * sr)
-        end_sample = int(trim_end * sr) if trim_end > 0 else y.shape[1]
-        
-        start_sample = max(0, min(start_sample, y.shape[1]))
-        end_sample = max(start_sample, min(end_sample, y.shape[1]))
-        
-        y = y[:, start_sample:end_sample]
-        duration = y.shape[1] / sr
-        
-        print(f"   Аудио обрезано: {trim_start:.2f}s - {trim_end if trim_end > 0 else duration:.2f}s")
-        print(f"   Длительность фрагмента: {duration:.2f} сек")
-        
-    print(f"   Аудио: {y.shape}, {sr} Гц")
-    
-    # Преобразование в Mid/Side
-    mid = (y[0] + y[1]) * 0.5
-    side = (y[0] - y[1]) * 0.5
-
-    D_mid = librosa.stft(mid, n_fft=n_fft, hop_length=hop_length, window='hann')
-    D_side = librosa.stft(side, n_fft=n_fft, hop_length=hop_length, window='hann')
-    n_freqs_orig, n_frames = D_mid.shape
-    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
-
-    low_cut_bin = 0
-    if config.get("low_cut_enabled", True) and config.get("low_cut_freq", 0) > 0:
-        low_cut_bin = np.searchsorted(freqs, config["low_cut_freq"])
-
-    high_cut_bin = len(freqs)
-    if config.get("high_cut_enabled", True):
-        if config.get("high_cut_mode", "auto") == "auto":
-            mag_mid_db = librosa.amplitude_to_db(np.abs(D_mid), ref=np.max)
-            mag_side_db = librosa.amplitude_to_db(np.abs(D_side), ref=np.max)
-            _, high_cut_bin = _find_high_cut_auto(
-                mag_mid_db, mag_side_db, freqs,
-                config.get("high_cut_auto_threshold_db", -80),
-                config.get("high_cut_auto_freq_min", 8000),
-                config.get("high_cut_auto_margin_db", 10)
-            )
-        else:
-            high_cut_bin = np.searchsorted(freqs, config.get("high_cut_freq", 16000))
-
-    D_mid = D_mid[low_cut_bin:high_cut_bin, :]
-    D_side = D_side[low_cut_bin:high_cut_bin, :]
-    n_freqs = D_mid.shape[0]
-    high_cut_bins_removed = n_freqs_orig - high_cut_bin
-
-    mag_mid, mag_side = np.abs(D_mid), np.abs(D_side)
-    ref_mid, ref_side = np.max(mag_mid), np.max(mag_side)
-    mag_min = -120
-
-    mag_mid_db = librosa.amplitude_to_db(mag_mid, ref=ref_mid)
-    mag_side_db = librosa.amplitude_to_db(mag_side, ref=ref_side)
-    mag_mid_norm = np.clip((mag_mid_db - mag_min) / (-mag_min) * 255, 0, 255).astype(np.uint8)
-    mag_side_norm = np.clip((mag_side_db - mag_min) / (-mag_min) * 255, 0, 255).astype(np.uint8)
-
-    rgb = np.zeros((n_freqs, n_frames, 3), dtype=np.uint8)
-    rgb[:, :, 1] = mag_mid_norm
-    rgb[:, :, 2] = mag_side_norm
-    rgb = np.flipud(rgb)
-    
-    img = Image.fromarray(rgb, 'RGB')
-    
-    # Проверка лимитов размера для lossy форматов
-    fmt = config.get("output_format", "png").lower()
-    if fmt in ("webp", "jpeg", "jpg", "avif"):
-        img, was_auto_scaled, scale_x = _check_image_size_limit(img, config)
-    else:
-        was_auto_scaled = False
-        scale_x = 1.0
-    
-    # Пользовательское масштабирование
-    if config.get("scale_enabled", False):
-        user_scale_x = config.get("scale_x", 1)
-        user_scale_y = config.get("scale_y", 1)
-        new_w = max(1, img.width // user_scale_x)
-        new_h = max(1, img.height // user_scale_y)
-        method = _get_scale_method(config.get("scale_method", "lanczos"))
-
-        print(f"\n   Масштабирование изображения:")
-        print(f"   Размер ДО: {img.width}x{img.height}")
-        print(f"   Размер ПОСЛЕ: {new_w}x{new_h}")
-        print(f"   Масштаб: 1/{user_scale_x} по ширине, 1/{user_scale_y} по высоте")
-        print(f"   Метод интерполяции: {config.get('scale_method', 'lanczos')}")
-
-        img = img.resize((new_w, new_h), method)
-    
-    # Сохраняем изображение и получаем актуальный путь (может измениться при fallback)
-    saved_image_path = _save_image_with_quality(img, image_path, config)
-
-    # Всегда используем генерацию фазы
-    gl_iterations = config.get("phase_generate_iterations", 100)
-    gl_random_seed = config.get("phase_generate_random_seed", 5)
-    gl_mode = config.get("griffin_lim_mode", "standard")
-    gl_parallel = config.get("griffin_lim_parallel", True)
-    
-    print(f"   Фаза будет сгенерирована при декодировании")
-    print(f"   Режим Griffin-Lim: {gl_mode}")
-    print(f"   Итераций: {gl_iterations}")
-    print(f"   Random seed: {gl_random_seed}")
-    
-    if config.get("early_stop_enabled", True):
-        print(f"   Ранняя остановка: ВКЛ. Порог: {config.get('early_stop_threshold', 0.0001)}")
-    
-    if gl_mode == "multi_scale":
-        ms_factor = config.get("multi_scale_factor", 4)
-        ms_coarse = config.get("multi_scale_coarse_iterations", -1)
-        ms_fine = config.get("multi_scale_fine_iterations", -1)
-        
-        print(f"   Multi-scale factor: {ms_factor}")
-        print(f"   Coarse iterations: {'all' if ms_coarse == -1 else ms_coarse}")
-        print(f"   Fine iterations: {'half' if ms_fine == -1 else ms_fine}")
-        
-        if gl_parallel:
-            print(f"   Параллельно: да")
-    else:
-        ms_factor = 4
-        ms_coarse = -1
-        ms_fine = -1
-        
-        if gl_parallel:
-            print(f"   Параллельно: да")
-
-    result_metadata = {
-        'shape': (n_freqs, n_frames),
-        'shape_original': (n_freqs_orig, n_frames),
-        'low_cut_bin': low_cut_bin,
-        'high_cut_bin': high_cut_bin,
-        'high_cut_bins_removed': high_cut_bins_removed,
-        'sr': sr,
-        'n_fft': n_fft,
-        'hop_length': hop_length,
-        'original_length': len(mid),
-        'n_channels': y.shape[0],
-        'mag_min': mag_min,
-        'ref_mid': float(ref_mid),
-        'ref_side': float(ref_side),
-        'phase_method': 'generate',
-        'flipped': True,
-        'auto_scaled': was_auto_scaled,
-        'auto_scale_x': scale_x,
-        'phase_generate_iterations': gl_iterations,
-        'phase_generate_random_seed': gl_random_seed,
-        'griffin_lim_mode': gl_mode,
-        'griffin_lim_parallel': gl_parallel,
-        'early_stop_threshold': config.get("early_stop_threshold", 0.0001),
-        'early_stop_patience': config.get("early_stop_patience", 15),
-        'multi_scale_factor': ms_factor,
-        'multi_scale_coarse_iterations': ms_coarse,
-        'multi_scale_fine_iterations': ms_fine,
-    }
-    
-    return result_metadata, saved_image_path
-----------------------------------------
-
-Файл: F:\!Evgeny\src\py\au_to_img\main.py
-----------------------------------------
-# main.py
-import os
-import time
-import numpy as np
-import librosa
-from pathlib import Path
-from pydub import AudioSegment
-from config import PRESETS, DEFAULT_CONFIG
-from encoder import audio_to_image
-from decoder import image_to_audio
-from utils import metadata_to_json, file_size_kb, file_size_mb, clean_temp_files, ensure_dir
-
-
-def mp3_to_wav(mp3_path: str, wav_path: str) -> str:
-    """Конвертирует MP3 в WAV для обработки."""
-    print(f"   Конвертация MP3: {Path(mp3_path).name}")
-    audio = AudioSegment.from_mp3(mp3_path)
-    audio.export(wav_path, format="wav")
-    size_mb = Path(wav_path).stat().st_size / (1024 * 1024)
-    print(f"   Готово ({size_mb:.1f} MB)")
-    return wav_path
-
-
-def full_pipeline(config: dict):
-    """Полный цикл: аудио -> изображение -> аудио (с генерацией фазы)."""
-    preset = PRESETS[config["active_preset"]]
-    n_fft = preset["N_FFT"]
-    hop_length = preset["HOP_LENGTH"]
-    data_dir = config.get("data_dir", "data")
-    ensure_dir(data_dir)
-
-    # --- Информация о параметрах ---
-    print(f"Параметры: FFT={n_fft}, HOP={hop_length}, SR=44100")
-    
-    if config.get("trim_enabled", False):
-        trim_end_str = f"{config.get('trim_end', 0)}s" if config.get('trim_end', 0) > 0 else "конец"
-        print(f"Диапазон обработки: {config.get('trim_start', 0)}s - {trim_end_str}")
-
-    wav_temp = Path(data_dir) / "temp_stereo.wav"
-
-    # Шаг 1: Конвертация
-    print("\n[1/3] Конвертация MP3 -> WAV")
-    mp3_to_wav(config["mp3_file"], str(wav_temp))
-    y_orig, sr_orig = librosa.load(wav_temp, sr=None, mono=False)
-    duration = len(y_orig.T if y_orig.ndim > 1 else y_orig) / sr_orig
-    print(f"   Длительность: {duration:.2f} сек")
-
-    # Шаг 2: Кодирование
-    print("\n[2/3] Кодирование в изображение")
-    
-    fmt = config.get("output_format", "png").lower()
-    ext = "jpg" if fmt == "jpeg" else fmt
-    image_path = str(Path(data_dir) / f"spectrogram.{ext}")
-
-    t_encode = time.time()
-    metadata, _ = audio_to_image(wav_temp, image_path, n_fft, hop_length, config)
-    encode_time = time.time() - t_encode
-
-    metadata_path = str(Path(data_dir) / "metadata.json")
-    metadata_to_json(metadata, metadata_path)
-
-    # Шаг 3: Декодирование
-    print("\n[3/3] Восстановление аудио")
-    recovered_path = str(Path(data_dir) / "recovered.wav")
-    t_decode = time.time()
-    audio_recovered = image_to_audio(image_path, recovered_path, metadata)
-    decode_time = time.time() - t_decode
-
-    # Итоговая статистика
-    print("\n" + "="*60)
-    print("ИТОГОВАЯ СТАТИСТИКА")
-    print("="*60)
-    
-    input_size_mb = file_size_mb(config["mp3_file"])
-    image_size_kb = file_size_kb(image_path)
-    wav_size_mb = file_size_mb(recovered_path)
-    
-    print(f"   Входной MP3: {input_size_mb:.1f} MB")
-    print(f"   Выходное изображение: {image_size_kb:.0f} KB")
-    
-    if config.get("trim_enabled", False):
-        trim_end = config.get("trim_end", 0) if config.get("trim_end", 0) > 0 else duration
-        fragment_duration = trim_end - config.get("trim_start", 0)
-        original_total = input_size_mb
-        fragment_ratio = fragment_duration / duration
-        effective_input = original_total * fragment_ratio
-        print(f"   Обработанный фрагмент: {fragment_duration:.1f} сек из {duration:.1f} сек")
-    else:
-        effective_input = input_size_mb
-    
-    image_size_mb = image_size_kb / 1024
-    compression_ratio = effective_input / image_size_mb if image_size_mb > 0 else 0
-    print(f"   Степень сжатия: {compression_ratio:.1f}:1 (MP3:{effective_input:.1f}MB -> Изобр:{image_size_mb:.2f}MB)")
-    print(f"   Восстановленный WAV: {wav_size_mb:.1f} MB")
-    print(f"   Время кодирования: {encode_time:.1f} сек")
-    print(f"   Время декодирования: {decode_time:.1f} сек")
-    
-    clean_temp_files(str(wav_temp))
-    return audio_recovered
-
-
-if __name__ == "__main__":
-    full_pipeline(DEFAULT_CONFIG)
-----------------------------------------
-
-Файл: F:\!Evgeny\src\py\au_to_img\transforms.py
-----------------------------------------
-# transforms.py
-import numpy as np
-
-def lr_to_ms(left: np.ndarray, right: np.ndarray):
-    """Преобразование Left/Right -> Mid/Side во временной области."""
-    mid = (left + right) * 0.5
-    side = (left - right) * 0.5
-    return mid, side
-
-def ms_to_lr(mid: np.ndarray, side: np.ndarray):
-    """Преобразование Mid/Side -> Left/Right во временной области."""
-    left = mid + side
-    right = mid - side
-    return left, right
-----------------------------------------
-
-Файл: F:\!Evgeny\src\py\au_to_img\utils.py
-----------------------------------------
-# utils.py
-import os
-import json
-import numpy as np
-
-def metadata_to_json(metadata: dict, path: str = "metadata.json"):
-    """Сохраняет метаданные в JSON-файл, конвертируя типы NumPy."""
-    json_data = {}
-    for k, v in metadata.items():
-        if isinstance(v, (np.integer, np.int64, np.int32)):
-            json_data[k] = int(v)
-        elif isinstance(v, (np.floating, np.float64, np.float32)):
-            json_data[k] = float(v)
-        elif isinstance(v, tuple):
-            json_data[k] = [int(x) for x in v]
-        elif isinstance(v, np.bool_):
-            json_data[k] = bool(v)
-        elif isinstance(v, np.ndarray):
-            json_data[k] = v.tolist()
-        else:
-            json_data[k] = v
-    
-    with open(path, "w", encoding='utf-8') as f:
-        json.dump(json_data, f, indent=2, ensure_ascii=False)
-
-def file_size_kb(path: str) -> float:
-    return os.path.getsize(path) / 1024.0
-
-def file_size_mb(path: str) -> float:
-    return os.path.getsize(path) / (1024.0 * 1024.0)
-
-def clean_temp_files(*paths: str):
-    for path in paths:
-        if os.path.exists(path):
-            try:
-                os.remove(path)
-            except OSError as e:
-                print(f"   Ошибка при удалении {path}: {e}")
-
-def ensure_dir(directory: str):
-    if not os.path.exists(directory):
-        os.makedirs(directory, exist_ok=True)
-
-def metadata_from_json(path: str) -> dict:
-    """Загружает метаданные из JSON-файла."""
-    import json
-    with open(path, 'r', encoding='utf-8') as f:
-        return json.load(f)
+}
 ----------------------------------------
 
 ================================================================================
+Файл: F:\!Evgeny\git\MyTools\csharp\AudioFill\AudioFill\Audio\AudioRestorer.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using AudioFill.Audio.Restore;
+
+namespace AudioFill.Audio
+{
+    public class AudioRestorer
+    {
+        private readonly int _sampleRate;
+        private readonly double _cutoffFrequency;
+        private readonly AnalysisResult _analysisResult;
+
+        public double EnvelopeLevel { get; set; } = 1.0;
+        public double NoiseAmount { get; set; } = 0.15;
+        public double CutoffLevelDb { get; set; } = -60;
+        public IRestoreStrategy Strategy { get; set; } = new GriffinLimStrategy();
+
+        public List<string> DebugLog { get; } = new List<string>();
+
+        public AudioRestorer(int sampleRate, double cutoffFrequency, AnalysisResult analysisResult)
+        {
+            _sampleRate = sampleRate;
+            _cutoffFrequency = cutoffFrequency;
+            _analysisResult = analysisResult;
+        }
+
+        private void Log(string msg) => DebugLog.Add($"[{DateTime.Now:HH:mm:ss.fff}] {msg}");
+
+        public float[] Restore(float[] samples, IProgress<RestoreProgress>? progress = null)
+        {
+            var (left, _) = RestoreStereo(samples, null, progress);
+            return left;
+        }
+
+        public (float[] left, float[] right) RestoreStereo(
+            float[] leftChannel,
+            float[]? rightChannel,
+            IProgress<RestoreProgress>? progress = null)
+        {
+            DebugLog.Clear();
+
+            bool isStereo = rightChannel != null && rightChannel.Length == leftChannel.Length;
+            Log($"=== {(isStereo ? "Stereo" : "Mono")} Restore Start ===");
+            Log($"SampleRate: {_sampleRate}, Cutoff: {_cutoffFrequency:F1} Hz");
+            Log($"Spectral slope: {_analysisResult.SpectralSlopeDbPerOctave:F1} dB/oct");
+            Log($"Input L RMS: {Rms(leftChannel):F4}" + (isStereo ? $", R: {Rms(rightChannel!):F4}" : ""));
+
+            if (_cutoffFrequency <= 0 || _cutoffFrequency >= _sampleRate / 2.0)
+            {
+                Log("No cutoff detected, returning original");
+                progress?.Report(new RestoreProgress { Percent = 100, Step = "Срез не обнаружен" });
+                return (leftChannel, rightChannel ?? leftChannel);
+            }
+
+            Log("--- Generating Fill ---");
+            float[] leftFill, rightFill;
+
+            if (isStereo)
+            {
+                var rightLog = new List<string>();
+                float[]? leftResult = null, rightResult = null;
+
+                Parallel.Invoke(
+                    () => leftResult = Strategy.GenerateFill(leftChannel, _sampleRate, _cutoffFrequency, CutoffLevelDb, _analysisResult, progress, DebugLog),
+                    () => rightResult = Strategy.GenerateFill(rightChannel!, _sampleRate, _cutoffFrequency, CutoffLevelDb, _analysisResult, null, rightLog)
+                );
+
+                leftFill = leftResult!;
+                rightFill = rightResult!;
+
+                lock (DebugLog)
+                {
+                    foreach (var line in rightLog)
+                        DebugLog.Add(line.Replace("[", "[R]["));
+                }
+            }
+            else
+            {
+                leftFill = Strategy.GenerateFill(leftChannel, _sampleRate, _cutoffFrequency, CutoffLevelDb, _analysisResult, progress, DebugLog);
+                rightFill = leftFill;
+            }
+
+            Log($"Fill L RMS: {Rms(leftFill):F6}");
+
+            var resultLeft = new float[leftChannel.Length];
+            var resultRight = new float[leftChannel.Length];
+
+            for (int i = 0; i < leftChannel.Length; i++)
+            {
+                resultLeft[i] = leftChannel[i] + leftFill[i] * (float)EnvelopeLevel;
+                resultRight[i] = (isStereo ? rightChannel![i] : leftChannel[i]) + rightFill[i] * (float)EnvelopeLevel;
+            }
+
+            Log($"Result L RMS: {Rms(resultLeft):F4}");
+
+            SoftLimit(resultLeft, resultRight);
+
+            Log($"=== Final L RMS: {Rms(resultLeft):F4} ===");
+
+            progress?.Report(new RestoreProgress { Percent = 100, Step = "Готово" });
+            return (resultLeft, resultRight);
+        }
+
+        private void SoftLimit(float[] left, float[] right)
+        {
+            float maxVal = 0;
+            for (int i = 0; i < left.Length; i++)
+            {
+                float absL = Math.Abs(left[i]);
+                float absR = Math.Abs(right[i]);
+                if (absL > maxVal) maxVal = absL;
+                if (absR > maxVal) maxVal = absR;
+            }
+            if (maxVal <= 0.95f) return;
+
+            float scale = 0.95f / maxVal;
+            for (int i = 0; i < left.Length; i++)
+            {
+                left[i] *= scale;
+                right[i] *= scale;
+            }
+        }
+
+        private static float Rms(float[] s)
+        {
+            if (s == null || s.Length == 0) return 0;
+            double sum = 0;
+            for (int i = 0; i < s.Length; i++) sum += (double)s[i] * s[i];
+            return (float)Math.Sqrt(sum / s.Length);
+        }
+    }
+}
+----------------------------------------
+
+================================================================================
+Файл: F:\!Evgeny\git\MyTools\csharp\AudioFill\AudioFill\Audio\GriffinLimStrategy.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using NAudio.Dsp;
+using Complex = NAudio.Dsp.Complex;
+
+namespace AudioFill.Audio.Restore
+{
+    public class GriffinLimStrategy : IRestoreStrategy
+    {
+        public string Name => "Musical Noise Synthesis";
+        public int FftSize { get; set; } = 2048;
+        public int OverlapFactor { get; set; } = 4;
+        public int Iterations { get; set; } = 5;
+
+        private List<string> _log = null!;
+
+        public float[] GenerateFill(float[] signal, int sampleRate, double cutoffFrequency, double cutoffLevelDb,
+                                    AnalysisResult analysisResult,
+                                    IProgress<RestoreProgress>? progress, List<string> debugLog)
+        {
+            _log = debugLog;
+            var startTime = DateTime.Now;
+
+            void Report(int percent, string step, string? details = null)
+            {
+                if (progress == null) return;
+                var elapsed = DateTime.Now - startTime;
+                var remaining = percent > 0 ? elapsed * (100 - percent) / percent : TimeSpan.Zero;
+                progress.Report(new RestoreProgress
+                {
+                    Percent = percent,
+                    Step = details != null ? $"{step} ({details})" : step,
+                    Elapsed = elapsed,
+                    Remaining = remaining
+                });
+            }
+
+            int length = signal.Length;
+            double fCut = cutoffFrequency;
+            double spectralSlope = analysisResult.SpectralSlopeDbPerOctave;
+            Log($"Spectral slope: {spectralSlope:F1} dB/oct");
+
+            Report(0, "Анализ уровней и динамики");
+
+            // Измеряем уровень в полосах перед срезом
+            double band1Low = fCut * 0.70;
+            double band1High = fCut * 0.85;
+            var band1 = BandpassSimple(signal, band1Low, band1High, sampleRate);
+            float rms1 = Rms(band1);
+
+            double band2Low = fCut * 0.85;
+            double band2High = fCut * 0.95;
+            var band2 = BandpassSimple(signal, band2Low, band2High, sampleRate);
+            float rms2 = Rms(band2);
+
+            double band3Low = fCut * 0.95;
+            double band3High = fCut * 1.00;
+            var band3 = BandpassSimple(signal, band3Low, band3High, sampleRate);
+            float rms3 = Rms(band3);
+
+            float targetRms = Math.Max(Math.Max(rms1, rms2), rms3);
+            Log($"Target RMS: {targetRms:F6}");
+
+            if (targetRms < 0.00001f)
+            {
+                var wideBand = BandpassSimple(signal, fCut * 0.3, fCut * 0.9, sampleRate);
+                targetRms = Rms(wideBand);
+                if (targetRms < 0.00001f)
+                {
+                    Report(100, "Сигнал слишком тихий");
+                    return new float[length];
+                }
+            }
+
+            // Выбираем полосу для огибающей
+            float bestRms = rms1;
+            double envLow = band1Low;
+            double envHigh = band1High;
+            if (rms2 > bestRms) { bestRms = rms2; envLow = band2Low; envHigh = band2High; }
+            if (rms3 > bestRms) { bestRms = rms3; envLow = band3Low; envHigh = band3High; }
+
+            var envelopeSource = BandpassSimple(signal, envLow, envHigh, sampleRate);
+
+            // Извлекаем основную огибающую
+            var mainEnvelope = ExtractEnvelope(envelopeSource, sampleRate);
+
+            // Извлекаем микро-динамику
+            var microDynamics = ExtractMicroDynamics(envelopeSource, sampleRate);
+
+            Report(20, "Генерация розового шума");
+
+            // Генерируем розовый шум
+            var noise = GeneratePinkNoise(length);
+
+            Report(40, "Фильтрация шума");
+
+            // Highpass
+            var highpassNoise = HighpassSimple(noise, fCut, sampleRate);
+
+            Report(50, "Применение спектрального спада");
+
+            // Применяем спектральный спад к шуму
+            if (Math.Abs(spectralSlope) > 0.5)
+            {
+                highpassNoise = ApplySpectralTilt(highpassNoise, sampleRate, fCut, spectralSlope);
+            }
+
+            Report(60, "Применение огибающих");
+
+            // Применяем основную огибающую
+            var envelopedNoise = new float[length];
+            for (int i = 0; i < length; i++)
+                envelopedNoise[i] = highpassNoise[i] * mainEnvelope[i];
+
+            // Применяем микро-динамику
+            for (int i = 0; i < length; i++)
+                envelopedNoise[i] *= (0.7f + 0.3f * microDynamics[i]);
+
+            // Амплитудная модуляция
+            float modFreq1 = 4.5f;
+            float modFreq2 = 7.3f;
+            for (int i = 0; i < length; i++)
+            {
+                double mod1 = Math.Sin(2 * Math.PI * modFreq1 * i / sampleRate);
+                double mod2 = Math.Cos(2 * Math.PI * modFreq2 * i / sampleRate);
+                float modulation = 1.0f + 0.15f * (float)(mod1 + mod2) * 0.5f;
+                envelopedNoise[i] *= modulation;
+            }
+
+            Report(80, "Масштабирование");
+
+            // Масштабируем до целевого уровня
+            float envelopedRms = Rms(envelopedNoise);
+            float scale = targetRms / Math.Max(envelopedRms, 0.0000001f);
+            Log($"Scale factor: {scale:F3}");
+
+            for (int i = 0; i < length; i++)
+                envelopedNoise[i] *= scale;
+
+            // Мягкий saturation
+            for (int i = 0; i < length; i++)
+            {
+                float x = envelopedNoise[i];
+                float saturated = (float)Math.Tanh(x * 2.0f) * 0.7f + x * 0.3f;
+                envelopedNoise[i] = saturated;
+            }
+
+            float finalRms = Rms(envelopedNoise);
+            Log($"Final noise RMS: {finalRms:F6}");
+
+            Report(100, "Готово");
+            return envelopedNoise;
+        }
+
+        // ==================== СПЕКТРАЛЬНЫЙ СПАД ====================
+
+        private float[] ApplySpectralTilt(float[] signal, int sampleRate,
+                                           double cutoffFreq, double slopeDbPerOctave)
+        {
+            int length = signal.Length;
+            int fftSize = 4096;
+            int hopSize = fftSize / 4;
+            int bins = fftSize / 2;
+
+            var window = new float[fftSize];
+            for (int i = 0; i < fftSize; i++)
+                window[i] = (float)(0.5 - 0.5 * Math.Cos(2 * Math.PI * i / (fftSize - 1)));
+
+            var outputAccum = new double[length];
+            var windowAccum = new double[length];
+
+            int numFrames = Math.Max(1, (length - fftSize) / hopSize + 1);
+
+            for (int frame = 0; frame < numFrames; frame++)
+            {
+                int offset = frame * hopSize;
+                var fft = new Complex[fftSize];
+
+                for (int i = 0; i < fftSize && offset + i < length; i++)
+                {
+                    fft[i].X = signal[offset + i] * window[i];
+                    fft[i].Y = 0;
+                }
+
+                FastFourierTransform.FFT(true, (int)Math.Log2(fftSize), fft);
+
+                // Применяем наклон к магнитудам после cutoff
+                for (int i = 0; i < bins; i++)
+                {
+                    double freq = i * sampleRate / (double)fftSize;
+                    if (freq > cutoffFreq && freq > 0)
+                    {
+                        double octavesAbove = Math.Log2(freq / cutoffFreq);
+                        double attenuationDb = slopeDbPerOctave * octavesAbove;
+                        double gain = Math.Pow(10, attenuationDb / 20.0);
+                        gain = Math.Clamp(gain, 0.001, 1.0);
+
+                        fft[i].X *= (float)gain;
+                        fft[i].Y *= (float)gain;
+                    }
+                }
+
+                FastFourierTransform.FFT(false, (int)Math.Log2(fftSize), fft);
+
+                for (int i = 0; i < fftSize && offset + i < length; i++)
+                {
+                    outputAccum[offset + i] += fft[i].X * window[i];
+                    windowAccum[offset + i] += window[i] * window[i];
+                }
+            }
+
+            var result = new float[length];
+            for (int i = 0; i < length; i++)
+            {
+                if (windowAccum[i] > 0.001)
+                    result[i] = (float)(outputAccum[i] / windowAccum[i]);
+            }
+
+            return result;
+        }
+
+        // ==================== РОЗОВЫЙ ШУМ ====================
+
+        private float[] GeneratePinkNoise(int length)
+        {
+            var noise = new float[length];
+            var rng = new Random(42);
+
+            float b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+
+            for (int i = 0; i < length; i++)
+            {
+                float white = (float)(rng.NextDouble() * 2 - 1);
+
+                b0 = 0.99886f * b0 + white * 0.0555179f;
+                b1 = 0.99332f * b1 + white * 0.0750759f;
+                b2 = 0.96900f * b2 + white * 0.1538520f;
+                b3 = 0.86650f * b3 + white * 0.3104856f;
+                b4 = 0.55000f * b4 + white * 0.5329522f;
+                b5 = -0.7616f * b5 - white * 0.0168980f;
+
+                noise[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362f) * 0.11f;
+                b6 = white * 0.115926f;
+            }
+
+            return noise;
+        }
+
+        // ==================== МИКРО-ДИНАМИКА ====================
+
+        private float[] ExtractMicroDynamics(float[] signal, int sampleRate)
+        {
+            int length = signal.Length;
+
+            var fastEnvelope = new float[length];
+            var rectified = new float[length];
+
+            for (int i = 0; i < length; i++)
+                rectified[i] = Math.Abs(signal[i]);
+
+            double cutoffFreq = 200.0;
+            double rc = 1.0 / (2 * Math.PI * cutoffFreq);
+            double dt = 1.0 / sampleRate;
+            double alpha = dt / (rc + dt);
+
+            fastEnvelope[0] = rectified[0];
+            for (int i = 1; i < length; i++)
+                fastEnvelope[i] = (float)(fastEnvelope[i - 1] + alpha * (rectified[i] - fastEnvelope[i - 1]));
+
+            float maxVal = 0;
+            for (int i = 0; i < length; i++)
+                maxVal = Math.Max(maxVal, fastEnvelope[i]);
+
+            if (maxVal > 0.0001f)
+            {
+                float normFactor = 1.0f / maxVal;
+                for (int i = 0; i < length; i++)
+                    fastEnvelope[i] *= normFactor;
+            }
+
+            return fastEnvelope;
+        }
+
+        // ==================== ОГИБАЮЩАЯ ====================
+
+        private float[] ExtractEnvelope(float[] signal, int sampleRate)
+        {
+            int length = signal.Length;
+            var envelope = new float[length];
+
+            var rectified = new float[length];
+            for (int i = 0; i < length; i++)
+                rectified[i] = Math.Abs(signal[i]);
+
+            double cutoffFreq = 50.0;
+            double rc = 1.0 / (2 * Math.PI * cutoffFreq);
+            double dt = 1.0 / sampleRate;
+            double alpha = dt / (rc + dt);
+
+            envelope[0] = rectified[0];
+            for (int i = 1; i < length; i++)
+                envelope[i] = (float)(envelope[i - 1] + alpha * (rectified[i] - envelope[i - 1]));
+
+            float maxVal = 0;
+            for (int i = 0; i < length; i++)
+                maxVal = Math.Max(maxVal, envelope[i]);
+
+            if (maxVal > 0.0001f)
+            {
+                float normFactor = 1.0f / maxVal;
+                for (int i = 0; i < length; i++)
+                    envelope[i] *= normFactor;
+            }
+
+            var smoothed = new float[length];
+            smoothed[0] = envelope[0];
+
+            float attackTime = 0.005f;
+            float releaseTime = 0.05f;
+            float attackCoeff = (float)Math.Exp(-1.0 / (sampleRate * attackTime));
+            float releaseCoeff = (float)Math.Exp(-1.0 / (sampleRate * releaseTime));
+
+            for (int i = 1; i < length; i++)
+            {
+                float coeff = envelope[i] > smoothed[i - 1] ? attackCoeff : releaseCoeff;
+                smoothed[i] = envelope[i] + coeff * (smoothed[i - 1] - envelope[i]);
+            }
+
+            float envelopeRms = Rms(smoothed);
+            if (envelopeRms > 0.0001f)
+            {
+                float envelopeGain = 1.0f / envelopeRms;
+                for (int i = 0; i < length; i++)
+                    smoothed[i] *= envelopeGain;
+            }
+
+            return smoothed;
+        }
+
+        // ==================== ФИЛЬТРЫ ====================
+
+        private static float[] HighpassSimple(float[] s, double cutoff, int sampleRate)
+        {
+            var r = new float[s.Length];
+            if (s.Length < 2) return r;
+            double rc = 1.0 / (2 * Math.PI * cutoff);
+            double dt = 1.0 / sampleRate;
+            double alpha = dt / (rc + dt);
+
+            var lp = new float[s.Length];
+            lp[0] = (float)(alpha * s[0]);
+            for (int i = 1; i < s.Length; i++)
+                lp[i] = (float)(lp[i - 1] + alpha * (s[i] - lp[i - 1]));
+
+            for (int i = 0; i < s.Length; i++)
+                r[i] = s[i] - lp[i];
+
+            return r;
+        }
+
+        private static float[] BandpassSimple(float[] s, double lowCut, double highCut, int sampleRate)
+        {
+            var lp = LowpassSimple(s, highCut, sampleRate);
+            return HighpassSimple(lp, lowCut, sampleRate);
+        }
+
+        private static float[] LowpassSimple(float[] s, double cutoff, int sampleRate)
+        {
+            var r = new float[s.Length];
+            if (s.Length < 2) return r;
+            double rc = 1.0 / (2 * Math.PI * cutoff);
+            double dt = 1.0 / sampleRate;
+            double alpha = dt / (rc + dt);
+            r[0] = (float)(alpha * s[0]);
+            for (int i = 1; i < s.Length; i++)
+                r[i] = (float)(r[i - 1] + alpha * (s[i] - r[i - 1]));
+            return r;
+        }
+
+        private static float Rms(float[] s)
+        {
+            if (s == null || s.Length == 0) return 0;
+            double sum = 0;
+            for (int i = 0; i < s.Length; i++) sum += (double)s[i] * s[i];
+            return (float)Math.Sqrt(sum / s.Length);
+        }
+
+        private void Log(string msg) => _log.Add($"[{DateTime.Now:HH:mm:ss.fff}] {msg}");
+    }
+}
+----------------------------------------
+
+================================================================================
+Файл: F:\!Evgeny\git\MyTools\csharp\AudioFill\AudioFill\Audio\IRestoreStrategy.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Generic;
+
+namespace AudioFill.Audio.Restore
+{
+    public interface IRestoreStrategy
+    {
+        string Name { get; }
+        float[] GenerateFill(float[] signal, int sampleRate, double cutoffFrequency, double cutoffLevelDb,
+                             AnalysisResult analysisResult,
+                             IProgress<RestoreProgress>? progress, List<string> debugLog);
+    }
+}
+----------------------------------------
+
+================================================================================
+Файл: F:\!Evgeny\git\MyTools\csharp\AudioFill\AudioFill\Audio\RestoreProgress.cs
+----------------------------------------
+﻿using System;
+
+namespace AudioFill.Audio.Restore
+{
+    public class RestoreProgress
+    {
+        public int Percent { get; set; }
+        public string Step { get; set; } = "";
+        public TimeSpan Elapsed { get; set; }
+        public TimeSpan Remaining { get; set; }
+    }
+}
+----------------------------------------
+

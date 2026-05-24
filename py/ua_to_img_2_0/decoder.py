@@ -1,4 +1,4 @@
-# decoder.py — цветное стерео декодирование (Cyan/Magenta)
+# decoder.py — Grayscale декодер: два канала друг над другом, калибровка, QR
 
 import time
 import numpy as np
@@ -6,452 +6,317 @@ import librosa
 import soundfile as sf
 from PIL import Image
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
+import cv2
 
-from markers import find_markers, correct_perspective
-from calibration import (measure_calibration_steps, validate_calibration,
-                         build_correction_lut, correct_spectrogram, normalize_by_range,
-                         is_original_print, CALIBRATION_VALUES)
+from calibration import (
+    measure_calibration_steps, validate_calibration, 
+    build_correction_lut, correct_spectrogram
+)
 from metadata_sheet import decode_metadata_text
-from layout import calculate_layout
-from phase_generator import griffin_lim, griffin_lim_fast, griffin_lim_stereo_parallel
 
 
-def _pad_spectrum(data: np.ndarray, low_pad: int, high_pad: int) -> np.ndarray:
-    """Дополняет спектр нулями сверху и снизу."""
-    if low_pad > 0:
-        data = np.vstack([np.zeros((low_pad, data.shape[1]), dtype=data.dtype), data])
-    if high_pad > 0:
-        data = np.vstack([data, np.zeros((high_pad, data.shape[1]), dtype=data.dtype)])
-    return data
-
-
-def correct_perspective_color(image: np.ndarray, markers: list,
-                              target_width: int, target_height: int) -> np.ndarray:
-    """Исправляет перспективу цветного изображения по 4 маркерам."""
-    import cv2
-    
-    src_points = np.array(markers, dtype=np.float32)
-    dst_points = np.array([
-        [0, 0],
-        [target_width - 1, 0],
-        [0, target_height - 1],
-        [target_width - 1, target_height - 1],
-    ], dtype=np.float32)
-    
-    M = cv2.getPerspectiveTransform(src_points, dst_points)
-    corrected = cv2.warpPerspective(image, M, (target_width, target_height))
-    
-    return corrected
-
-
-def decode_qr_page(image_path: str) -> dict:
-    """Декодирует отдельную страницу с QR-кодом."""
-    import cv2
+def decode_page(image_path: str, n_freqs: int, n_frames: int) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Декодирует страницу спектрограммы после сканирования.
+    """
+    print(f"\n   Сканирование: {Path(image_path).name}")
     
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if img is None:
-        raise ValueError(f"Не удалось загрузить QR-страницу: {image_path}")
-    
-    print(f"\n   QR-страница загружена: {img.shape[1]}×{img.shape[0]}")
-    
-    detector = cv2.QRCodeDetector()
-    
-    # 1. Прямой поиск
-    data, bbox, _ = detector.detectAndDecode(img)
-    if data:
-        print(f"   ✓ QR прочитан (прямой): {data[:100]}...")
-        return decode_metadata_text(data)
-    
-    # 2. Инвертированный
-    data, bbox, _ = detector.detectAndDecode(255 - img)
-    if data:
-        print(f"   ✓ QR прочитан (inverted): {data[:100]}...")
-        return decode_metadata_text(data)
-    
-    # 3. Разные масштабы
-    h, w = img.shape
-    for scale in [0.5, 0.75, 1.25, 1.5, 2.0]:
-        new_w, new_h = int(w * scale), int(h * scale)
-        if new_w < 100 or new_h < 100 or new_w > 5000 or new_h > 5000:
-            continue
-        
-        resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-        data, _, _ = detector.detectAndDecode(resized)
-        if data:
-            print(f"   ✓ QR прочитан (scale={scale}): {data[:100]}...")
-            return decode_metadata_text(data)
-        
-        data, _, _ = detector.detectAndDecode(255 - resized)
-        if data:
-            print(f"   ✓ QR прочитан (inverted scale={scale}): {data[:100]}...")
-            return decode_metadata_text(data)
-    
-    # 4. Поиск окнами
-    print(f"   Поиск окнами...")
-    for win_pct in [0.4, 0.5, 0.6, 0.7, 0.8]:
-        win_size = int(min(w, h) * win_pct)
-        if win_size > w or win_size > h:
-            continue
-        step = max(1, win_size // 4)
-        
-        for y in range(0, h - win_size + 1, step):
-            for x in range(0, w - win_size + 1, step):
-                window = img[y:y + win_size, x:x + win_size]
-                try:
-                    data, _, _ = detector.detectAndDecode(window)
-                    if data:
-                        print(f"   ✓ QR прочитан (окно {win_size}px): {data[:100]}...")
-                        return decode_metadata_text(data)
-                except:
-                    pass
-                try:
-                    data, _, _ = detector.detectAndDecode(255 - window)
-                    if data:
-                        print(f"   ✓ QR прочитан (inverted окно): {data[:100]}...")
-                        return decode_metadata_text(data)
-                except:
-                    pass
-    
-    raise ValueError(f"QR-код не найден на странице: {image_path}")
-
-
-def decode_single_page_color(image_path: str, global_metadata: dict,
-                             config: dict, page_num: int) -> dict:
-    """
-    Декодирует страницу с цветной Cyan/Magenta спектрограммой.
-    Находит спектрограмму внутри области, убирает белые поля.
-    """
-    import cv2
-    
-    img_bgr = cv2.imread(image_path, cv2.IMREAD_COLOR)
-    if img_bgr is None:
         raise ValueError(f"Не удалось загрузить: {image_path}")
     
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    print(f"   Размер скана: {img.shape[1]}×{img.shape[0]}")
     
-    print(f"\n   Скан загружен: {img_rgb.shape[1]}×{img_rgb.shape[0]}, RGB")
+    calib_h = 30
+    total_h = n_freqs * 2 + calib_h
+    calib_ratio = calib_h / total_h
     
-    # --- Коррекция перспективы ---
-    gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
-    layout = calculate_layout(config)
-    target_w = layout['page_w']
-    target_h = layout['page_h']
+    expected_w = n_frames
+    expected_h_channels = n_freqs * 2
     
-    markers = find_markers(gray, marker_size_hint=layout['marker_size'])
+    # Шаг 1: найти тёмную область
+    binary = cv2.adaptiveThreshold(
+        img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, blockSize=21, C=4
+    )
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
     
-    if markers is not None and len(markers) == 4:
-        print(f"   Маркеры найдены, коррекция перспективы...")
-        img_rgb = correct_perspective_color(img_rgb, markers, target_w, target_h)
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if not contours:
+        print(f"   ⚠️ Область не найдена, используется всё изображение")
+        page = img
+        calib_region = None
     else:
-        print(f"   ⚠️ Маркеры не найдены, масштабирование до {target_w}x{target_h}")
-        img_rgb = cv2.resize(img_rgb, (target_w, target_h), interpolation=cv2.INTER_LANCZOS4)
-    
-    # --- Извлекаем область спектрограммы ---
-    spec_region = layout['spectrogram']
-    sx = max(0, spec_region['x'])
-    sy = max(0, spec_region['y'])
-    sw = min(spec_region['w'], img_rgb.shape[1] - sx)
-    sh = min(spec_region['h'], img_rgb.shape[0] - sy)
-    
-    color_spec = img_rgb[sy:sy+sh, sx:sx+sw, :]
-    
-    # --- Цветоделение с белого фона ---
-    R = color_spec[:, :, 0].astype(np.float32)
-    G = color_spec[:, :, 1].astype(np.float32)
-    
-    left_raw = np.clip(255.0 - R, 0, 255)
-    right_raw = np.clip(255.0 - G, 0, 255)
-    
-    print(f"   Извлечено: {left_raw.shape[1]}×{left_raw.shape[0]}")
-    
-    # --- Получаем размеры из метаданных ---
-    n_freqs = global_metadata.get('n_freqs', 2049)
-    total_frames = global_metadata.get('total_frames', 0)
-    total_pages = global_metadata.get('total_pages', 1)
-    
-    frames_per_page_original = int(np.ceil(total_frames / total_pages))
-    start_frame = (page_num - 1) * frames_per_page_original
-    end_frame = min(page_num * frames_per_page_original, total_frames)
-    expected_frames = end_frame - start_frame
-    
-    print(f"   Ожидаемые размеры для страницы {page_num}: {expected_frames}×{n_freqs}")
-    
-    # --- Находим спектрограмму (убираем белые поля слева/справа) ---
-    # Ищем столбцы, где ЕСТЬ сигнал (не чисто белый)
-    col_max = np.max(left_raw, axis=0)
-    signal_cols = col_max > 5  # столбцы где есть хоть какой-то сигнал
-    
-    if np.any(signal_cols):
-        signal_indices = np.where(signal_cols)[0]
-        spec_start = signal_indices[0]
-        spec_end = signal_indices[-1] + 1
-        spec_width = spec_end - spec_start
+        largest = max(contours, key=cv2.contourArea)
+        x, y, w, h = cv2.boundingRect(largest)
         
-        print(f"   Найдена спектрограмма: столбцы [{spec_start}, {spec_end}], ширина={spec_width}")
+        margin = max(10, int(min(w, h) * 0.02))
+        x += margin
+        y += margin
+        w -= 2 * margin
+        h -= 2 * margin
         
-        # Вырезаем только спектрограмму
-        left_trimmed = left_raw[:, spec_start:spec_end]
-        right_trimmed = right_raw[:, spec_start:spec_end]
+        if w <= 0 or h <= 0:
+            print(f"   ⚠️ Отступ слишком большой, использую без отступа")
+            x, y, w, h = cv2.boundingRect(largest)
+        
+        print(f"   Спектрограмма: x={x}, y={y}, {w}×{h} px (отступ {margin}px)")
+        
+        calib_h_scan = max(10, int(h * calib_ratio))
+        calib_y_scan = y + h - calib_h_scan
+        calib_region = img[calib_y_scan:calib_y_scan+calib_h_scan, x:x+w]
+        
+        channels_h_scan = h - calib_h_scan
+        page = img[y:y+channels_h_scan, x:x+w]
+        
+        print(f"   Каналы в скане: {w}×{channels_h_scan} px, шкала: {w}×{calib_h_scan} px")
+    
+    # Шаг 2: масштабируем каналы
+    if page.shape[1] != expected_w or page.shape[0] != expected_h_channels:
+        print(f"   Масштабирование каналов: {page.shape[1]}×{page.shape[0]} → {expected_w}×{expected_h_channels}")
+        page = cv2.resize(page, (expected_w, expected_h_channels), interpolation=cv2.INTER_LANCZOS4)
+    
+    # Шаг 3: разделяем на левый и правый
+    half = page.shape[0] // 2
+    left_ch = page[0:half, :]
+    right_ch = page[half:half*2, :]
+    
+    # Калибровка отключена
+    measured_calib = None
+    
+    if measured_calib is not None:
+        lut = build_correction_lut(measured_calib)
+        left_ch = correct_spectrogram(left_ch.astype(np.uint8), lut).astype(np.float32)
+        right_ch = correct_spectrogram(right_ch.astype(np.uint8), lut).astype(np.float32)
+        print(f"   Коррекция яркости применена")
     else:
-        left_trimmed = left_raw
-        right_trimmed = right_raw
-        spec_width = left_raw.shape[1]
+        left_ch = left_ch.astype(np.float32)
+        right_ch = right_ch.astype(np.float32)
+        print(f"   Без коррекции яркости")
     
-    # --- Масштабируем к ожидаемым размерам ---
-    actual_h = left_trimmed.shape[0]
+    print(f"   Каналы: {left_ch.shape[0]}×{left_ch.shape[1]}, L [{left_ch.min():.0f}, {left_ch.max():.0f}]")
     
-    if actual_h != n_freqs or spec_width != expected_frames:
-        print(f"   Масштабирование: {spec_width}×{actual_h} -> {expected_frames}×{n_freqs}")
-        left_scaled = cv2.resize(left_trimmed, (expected_frames, n_freqs), interpolation=cv2.INTER_LINEAR)
-        right_scaled = cv2.resize(right_trimmed, (expected_frames, n_freqs), interpolation=cv2.INTER_LINEAR)
-    else:
-        left_scaled = left_trimmed
-        right_scaled = right_trimmed
-    
-    # Не переворачиваем
-    left_spec = left_scaled.astype(np.float32)
-    right_spec = right_scaled.astype(np.float32)
-    
-    print(f"   Итог: left={left_spec.shape}, right={right_spec.shape}")
-    print(f"   DEBUG left final: [{left_spec.min():.1f}, {left_spec.max():.1f}], mean={left_spec.mean():.1f}")
-    
-    return {
-        'mag_left': left_spec,
-        'mag_right': right_spec,
-        'n_frames': expected_frames,
-    }
+    return left_ch, right_ch
 
 
-def decode_multipage(page_paths: List[str], qr_path: str, config: dict, output_wav_path: str) -> np.ndarray:
-    """Декодирует QR-страницу и страницы спектрограмм, собирает аудио."""
+def decode_qr_page(image_path: str) -> dict:
+    """Декодирует QR-страницу и возвращает метаданные."""
+    print(f"\n   Чтение QR: {Path(image_path).name}")
+    
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise ValueError(f"Не удалось загрузить: {image_path}")
+    
+    detector = cv2.QRCodeDetector()
+    data, points, _ = detector.detectAndDecode(img)
+    
+    if not data:
+        data, points, _ = detector.detectAndDecode(255 - img)
+    
+    if not data:
+        raise ValueError("QR-код не найден на странице!")
+    
+    print(f"   QR прочитан успешно")
+    metadata = decode_metadata_text(data)
+    
+    metadata.setdefault('sr', 44100)
+    metadata.setdefault('mag_min', -120.0)
+    metadata.setdefault('ref_left', 1.0)
+    metadata.setdefault('ref_right', 1.0)
+    metadata.setdefault('phase_generate_iterations', 5000)
+    metadata.setdefault('phase_generate_random_seed', 454)
+    metadata.setdefault('griffin_lim_mode', 'fast')
+    metadata.setdefault('griffin_lim_parallel', True)
+    metadata.setdefault('early_stop_enabled', True)
+    metadata.setdefault('early_stop_threshold', 0.0001)
+    metadata.setdefault('early_stop_patience', 10)
+    
+    return metadata
+
+
+def decode_pages(image_paths: List[str], config: dict, output_wav_path: str):
+    """Декодирует страницы и восстанавливает аудио."""
     print(f"\n{'='*60}")
-    print(f"ДЕКОДИРОВАНИЕ СТРАНИЦ (Cyan/Magenta)")
+    print(f"ДЕКОДИРОВАНИЕ (GRAYSCALE STACKED)")
     print(f"{'='*60}")
     
-    # --- QR-страница ---
-    print(f"\n--- QR-страница: {Path(qr_path).name} ---")
-    global_metadata = decode_qr_page(qr_path)
+    # Собираем все файлы
+    all_files = []
+    for p in image_paths:
+        path = Path(p)
+        if path.is_dir():
+            all_files.extend(sorted(path.glob("*.png")))
+            all_files.extend(sorted(path.glob("*.jpg")))
+            all_files.extend(sorted(path.glob("*.jpeg")))
+        elif '*' in str(p) or '?' in str(p):
+            import glob
+            all_files.extend([Path(x) for x in sorted(glob.glob(str(p)))])
+        else:
+            all_files.append(path)
     
-    print(f"\n   Метаданные:")
-    print(f"   N_FFT: {global_metadata['n_fft']}")
-    print(f"   HOP_LENGTH: {global_metadata['hop_length']}")
-    print(f"   Частот: {global_metadata['n_freqs']}")
-    print(f"   Всего кадров: {global_metadata.get('total_frames', 'НЕТ')}")
-    print(f"   Страниц: {global_metadata.get('total_pages', 'НЕТ')}")
-    print(f"   Длительность: {global_metadata['original_length'] / global_metadata.get('sr', 44100):.2f} сек")
-    print(f"   ref_left: {global_metadata.get('ref_left', 'НЕТ')}")
-    print(f"   ref_right: {global_metadata.get('ref_right', 'НЕТ')}")
-    print(f"   mag_min: {global_metadata.get('mag_min', 'НЕТ')} dB")
+    all_files = [str(f) for f in all_files if f.is_file()]
     
-    # --- Декодируем страницы ---
-    print(f"\nНайдено страниц спектрограмм: {len(page_paths)}")
+    if not all_files:
+        raise ValueError("Не найдены файлы для декодирования")
     
-    pages = []
-    for i, path in enumerate(page_paths):
-        print(f"\n--- Страница {i+1}/{len(page_paths)}: {Path(path).name} ---")
-        try:
-            page_data = decode_single_page_color(path, global_metadata, config, page_num=i+1)
-            pages.append(page_data)
-        except Exception as e:
-            print(f"   ❌ Ошибка: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
+    qr_path = None
+    spectrum_paths = []
     
-    # Склеиваем
-    all_left, all_right = [], []
-    for page in pages:
-        all_left.append(page['mag_left'])
-        all_right.append(page['mag_right'])
+    for f in all_files:
+        name = Path(f).name.lower()
+        if '_qr' in name:
+            qr_path = f
+        else:
+            spectrum_paths.append(f)
     
-    mag_left_full = np.hstack(all_left)
-    mag_right_full = np.hstack(all_right)
+    if qr_path is None:
+        raise ValueError("QR-страница не найдена! Имя файла должно содержать '_qr'")
     
-    print(f"\n   Полная спектрограмма: {mag_left_full.shape}")
+    if not spectrum_paths:
+        raise ValueError("Не найдены страницы со спектрограммами")
     
-    # Проверяем размер
-    total_frames_expected = global_metadata.get('total_frames', 0)
-    if total_frames_expected > 0 and mag_left_full.shape[1] != total_frames_expected:
-        print(f"   ⚠️ Кадров: {mag_left_full.shape[1]}, ожидалось {total_frames_expected}")
-        if mag_left_full.shape[1] > total_frames_expected:
-            mag_left_full = mag_left_full[:, :total_frames_expected]
-            mag_right_full = mag_right_full[:, :total_frames_expected]
+    print(f"\n   Найдено файлов: QR — 1, спектрограмм — {len(spectrum_paths)}")
     
-    # --- Восстановление магнитуды ---
-    mag_min = global_metadata.get('mag_min', -120)
-    ref_left = global_metadata.get('ref_left', 1.0)
-    ref_right = global_metadata.get('ref_right', 1.0)
+    meta = decode_qr_page(qr_path)
     
-    print(f"\n   Восстановление магнитуды:")
-    print(f"   mag_min={mag_min}, ref_left={ref_left:.6f}, ref_right={ref_right:.6f}")
-    print(f"   mag_left_full: [{mag_left_full.min():.1f}, {mag_left_full.max():.1f}], mean={mag_left_full.mean():.1f}")
-    print(f"   mag_right_full: [{mag_right_full.min():.1f}, {mag_right_full.max():.1f}], mean={mag_right_full.mean():.1f}")
+    n_freqs = meta['n_freqs']
+    n_frames = meta['total_frames']
+    n_fft = meta['n_fft']
+    hop_length = meta['hop_length']
+    sr = meta['sr']
+    original_length = meta['original_length']
+    mag_min = meta['mag_min']
     
-    # Шаг 1: Яркость (0-255) -> dB (правильное обратное преобразование)
-    mag_left_db = (mag_left_full / 255.0) * (-mag_min) + mag_min
-    mag_right_db = (mag_right_full / 255.0) * (-mag_min) + mag_min
+    print(f"\n   Параметры из QR:")
+    print(f"   N_FFT: {n_fft}, HOP: {hop_length}, SR: {sr}")
+    print(f"   Частот: {n_freqs}, Кадров: {n_frames}")
+    print(f"   Длительность: {original_length / sr:.1f} сек")
+    print(f"   Динамический диапазон: {mag_min:.0f} dB")
     
-    print(f"   dB left: [{mag_left_db.min():.1f}, {mag_left_db.max():.1f}], mean={mag_left_db.mean():.1f}")
-    print(f"   dB right: [{mag_right_db.min():.1f}, {mag_right_db.max():.1f}], mean={mag_right_db.mean():.1f}")
+    all_left = []
+    all_right = []
     
-    if mag_left_db.max() < -10:
-        print(f"   ⚠️ ПРЕДУПРЕЖДЕНИЕ: Максимум dB левого канала = {mag_left_db.max():.1f} (ожидается ~0)")
-    if mag_right_db.max() < -10:
-        print(f"   ⚠️ ПРЕДУПРЕЖДЕНИЕ: Максимум dB правого канала = {mag_right_db.max():.1f} (ожидается ~0)")
+    for spec_path in spectrum_paths:
+        left_ch, right_ch = decode_page(spec_path, n_freqs, n_frames)
+        all_left.append(left_ch)
+        all_right.append(right_ch)
     
-    # Шаг 2: dB -> линейная амплитуда с ПРАВИЛЬНЫМ ref
-    # ref должен быть исходной амплитудой, которая была max() при кодировании
-    mag_left = librosa.db_to_amplitude(mag_left_db, ref=ref_left)
-    mag_right = librosa.db_to_amplitude(mag_right_db, ref=ref_right)
+    mag_left = all_left[0]
+    mag_right = all_right[0]
     
-    print(f"   Амплитуда left: [{mag_left.min():.6f}, {mag_left.max():.6f}], mean={mag_left.mean():.6f}")
-    print(f"   Амплитуда right: [{mag_right.min():.6f}, {mag_right.max():.6f}], mean={mag_right.mean():.6f}")
+    # Обрезаем края
+    margin_frames = 3
+    if n_frames > margin_frames * 2:
+        mag_left = mag_left[:, margin_frames:-margin_frames]
+        mag_right = mag_right[:, margin_frames:-margin_frames]
+        n_frames_used = mag_left.shape[1]
+        original_length = int(original_length * n_frames_used / n_frames)
+        print(f"   Обрезано {margin_frames} кадров по краям ({n_frames} → {n_frames_used})")
     
-    # Дополняем обрезанные частоты
-    mag_left = _pad_spectrum(mag_left, global_metadata.get('low_cut_bin', 0),
-                            global_metadata.get('high_cut_bins_removed', 0))
-    mag_right = _pad_spectrum(mag_right, global_metadata.get('low_cut_bin', 0),
-                             global_metadata.get('high_cut_bins_removed', 0))
+    # Нормализация яркости: растягиваем до 0-255
+    def normalize_channel(ch):
+        ch_min = ch.min()
+        ch_max = ch.max()
+        if ch_max > ch_min:
+            return (ch - ch_min) / (ch_max - ch_min) * 255.0
+        return ch
     
-    # --- Генерация фазы ---
-    n_fft = global_metadata['n_fft']
-    hop_length = global_metadata['hop_length']
-    original_length = global_metadata['original_length']
-    sr = global_metadata.get('sr', 44100)
+    mag_left = normalize_channel(mag_left)
+    mag_right = normalize_channel(mag_right)
+    print(f"   После нормализации яркости: L [{mag_left.min():.0f}, {mag_left.max():.0f}]")
     
-    iterations = global_metadata.get('phase_generate_iterations', 5000)
-    random_seed = global_metadata.get('phase_generate_random_seed', 454)
+    # Яркость → dB
+    db_left = (mag_left / 255.0) * (-mag_min) + mag_min
+    db_right = (mag_right / 255.0) * (-mag_min) + mag_min
+    
+    # dB → амплитуда (НЕ нормализуем — оставляем реальные значения)
+    amp_left = librosa.db_to_amplitude(db_left, ref=1.0)
+    amp_right = librosa.db_to_amplitude(db_right, ref=1.0)
+    
+    print(f"\n   Амплитуда L: [{amp_left.min():.6f}, {amp_left.max():.4f}], mean={amp_left.mean():.6f}")
+    print(f"   Амплитуда R: [{amp_right.min():.6f}, {amp_right.max():.4f}], mean={amp_right.mean():.6f}")
+    
+    # Griffin-Lim
+    iterations = meta.get('phase_generate_iterations', 5000)
+    random_seed = meta.get('phase_generate_random_seed', 454)
     if random_seed == -1:
         random_seed = None
     
-    gl_mode = global_metadata.get('griffin_lim_mode', 'fast')
-    parallel = global_metadata.get('griffin_lim_parallel', True)
-    early_stop_enabled = global_metadata.get('early_stop_enabled', True)
-    early_stop_threshold = global_metadata.get('early_stop_threshold', 0.0001)
-    early_stop_patience = global_metadata.get('early_stop_patience', 10)
+    gl_mode = meta.get('griffin_lim_mode', 'fast')
+    parallel = meta.get('griffin_lim_parallel', True)
+    early_stop_enabled = meta.get('early_stop_enabled', True)
+    early_stop_threshold = meta.get('early_stop_threshold', 0.0001)
+    early_stop_patience = meta.get('early_stop_patience', 10)
+    
+    from phase_generator import griffin_lim_fast, griffin_lim_stereo_parallel
     
     t_start = time.time()
-    
-    print(f"\n   Генерация фазы: Griffin-Lim ({gl_mode}, {iterations} итераций)...")
+    print(f"\n   Восстановление фазы (Griffin-Lim {gl_mode}, {iterations} итераций)...")
     
     if parallel:
         phase_left, phase_right = griffin_lim_stereo_parallel(
-            mag_left, mag_right, n_fft, hop_length,
+            amp_left, amp_right, n_fft, hop_length,
             iterations=iterations, random_seed=random_seed, mode=gl_mode,
-            scale_factor=None, coarse_iterations=None, fine_iterations=None,
             early_stop_threshold=early_stop_threshold if early_stop_enabled else None,
             early_stop_patience=early_stop_patience, num_workers=2, verbose=True
         )
     else:
-        if gl_mode == 'fast':
-            phase_left = griffin_lim_fast(mag_left, n_fft, hop_length, iterations,
-                                          random_seed=random_seed,
-                                          early_stop_threshold=early_stop_threshold if early_stop_enabled else None,
-                                          early_stop_patience=early_stop_patience)
-            phase_right = griffin_lim_fast(mag_right, n_fft, hop_length, iterations,
-                                           random_seed=random_seed + 1 if random_seed else None,
-                                           early_stop_threshold=early_stop_threshold if early_stop_enabled else None,
-                                           early_stop_patience=early_stop_patience)
-        else:
-            phase_left = griffin_lim(mag_left, n_fft, hop_length, iterations,
-                                     random_seed=random_seed,
-                                     early_stop_threshold=early_stop_threshold if early_stop_enabled else None,
-                                     early_stop_patience=early_stop_patience)
-            phase_right = griffin_lim(mag_right, n_fft, hop_length, iterations,
-                                      random_seed=random_seed + 1 if random_seed else None,
-                                      early_stop_threshold=early_stop_threshold if early_stop_enabled else None,
-                                      early_stop_patience=early_stop_patience)
+        seed_r = random_seed + 1 if random_seed is not None else None
+        phase_left = griffin_lim_fast(
+            amp_left, n_fft, hop_length, iterations, random_seed=random_seed,
+            early_stop_threshold=early_stop_threshold if early_stop_enabled else None,
+            early_stop_patience=early_stop_patience
+        )
+        phase_right = griffin_lim_fast(
+            amp_right, n_fft, hop_length, iterations, random_seed=seed_r,
+            early_stop_threshold=early_stop_threshold if early_stop_enabled else None,
+            early_stop_patience=early_stop_patience
+        )
     
-    # Проверка NaN в фазе
-    for name, ph in [("Left", phase_left), ("Right", phase_right)]:
+    for name, ph in [("L", phase_left), ("R", phase_right)]:
         if np.any(np.isnan(ph)):
-            print(f"   ⚠️ NaN в фазе {name}, замена на 0")
             np.nan_to_num(ph, copy=False, nan=0.0)
-        if np.abs(ph).max() > np.pi * 1.1:
-            np.clip(ph, -np.pi, np.pi, out=ph)
-    
-    # --- Восстановление аудио ---
-    print("   Восстановление комплексных спектров...")
-    D_left = mag_left.astype(np.complex64) * np.exp(1j * phase_left.astype(np.float32))
-    D_right = mag_right.astype(np.complex64) * np.exp(1j * phase_right.astype(np.float32))
+            print(f"   ⚠️ NaN в фазе {name} — заменены на 0")
     
     print("   Обратное STFT...")
+    D_left = amp_left * np.exp(1j * phase_left)
+    D_right = amp_right * np.exp(1j * phase_right)
+    
     y_left = librosa.istft(D_left, hop_length=hop_length, length=original_length, window='hann')
     y_right = librosa.istft(D_right, hop_length=hop_length, length=original_length, window='hann')
     
-    print(f"   y_left: [{y_left.min():.4f}, {y_left.max():.4f}], max_abs={np.max(np.abs(y_left)):.4f}")
-    print(f"   y_right: [{y_right.min():.4f}, {y_right.max():.4f}], max_abs={np.max(np.abs(y_right)):.4f}")
+    print(f"   y_left: min={y_left.min():.6f}, max={y_left.max():.6f}, std={y_left.std():.6f}")
+    print(f"   y_right: min={y_right.min():.6f}, max={y_right.max():.6f}, std={y_right.std():.6f}")
     
     min_len = min(len(y_left), len(y_right))
-    y_recovered = np.stack([y_left[:min_len], y_right[:min_len]], axis=1)
+    y_stereo = np.stack([y_left[:min_len], y_right[:min_len]], axis=1)
     
-    # Нормализация
-    max_val = np.max(np.abs(y_recovered))
-    if max_val > 1.0:
-        print(f"   Нормализация: деление на {max_val:.4f}")
-        y_recovered = y_recovered / max_val * 0.95
-    
-    duration = y_recovered.shape[0] / sr
-    elapsed = time.time() - t_start
-    
-    print(f"\n   Сохранение: {output_wav_path}")
-    print(f"   Длительность: {duration:.2f} сек")
-    print(f"   Время: {elapsed:.1f} сек")
-    
-    y_16bit = (y_recovered * 32767).clip(-32768, 32767).astype(np.int16)
-    sf.write(output_wav_path, y_16bit, sr, subtype='PCM_16')
-    
-    return y_recovered
-
-
-def decode_pages(image_paths: List[str], config: dict, output_wav_path: str) -> np.ndarray:
-    """Точка входа для декодирования."""
-    if len(image_paths) == 0:
-        raise ValueError("Не указаны файлы для декодирования")
-    
-    if len(image_paths) == 1:
-        path = image_paths[0]
-        if Path(path).is_dir():
-            import glob
-            png_files = sorted(glob.glob(str(Path(path) / "*.png")))
-            jpg_files = sorted(glob.glob(str(Path(path) / "*.jpg")))
-            jpeg_files = sorted(glob.glob(str(Path(path) / "*.jpeg")))
-            image_paths = png_files + jpg_files + jpeg_files
-            
-            if not image_paths:
-                raise ValueError(f"В директории {path} не найдены изображения")
-    
-    valid_paths = [p for p in image_paths if Path(p).is_file()]
-    
-    if not valid_paths:
-        raise ValueError("Нет доступных файлов")
-    
-    # Отделяем QR
-    qr_path = None
-    spec_paths = []
-    
-    for p in valid_paths:
-        name = Path(p).name.lower()
-        if '_qr' in name or 'qr.' in name:
-            qr_path = p
+    # Нормализация громкости: всегда усиливаем до 0.95
+    max_val = np.max(np.abs(y_stereo))
+    if max_val > 0:
+        print(f"   Пиковое значение: {max_val:.6f}")
+        if max_val > 1.0:
+            y_stereo /= max_val * 0.95
+            print(f"   Сигнал ослаблен до 0.95")
         else:
-            spec_paths.append(p)
+            y_stereo = y_stereo / max_val * 0.95
+            print(f"   Сигнал усилен до 0.95 (коэфф. {0.95/max_val:.1f}x)")
     
-    if qr_path is None:
-        raise ValueError("QR-страница не найдена! Ожидается файл с '_qr' в имени.")
+    y_16 = (y_stereo * 32767).clip(-32768, 32767).astype(np.int16)
+    sf.write(output_wav_path, y_16, sr, subtype='PCM_16')
     
-    if not spec_paths:
-        raise ValueError("Не найдены страницы спектрограмм!")
+    duration = min_len / sr
+    elapsed = time.time() - t_start
+    size_mb = Path(output_wav_path).stat().st_size / (1024 * 1024)
     
-    def extract_page_num(path):
-        import re
-        match = re.search(r'page(\d+)of', Path(path).name)
-        return int(match.group(1)) if match else 1
+    print(f"\n{'='*60}")
+    print(f"ГОТОВО!")
+    print(f"   Файл: {output_wav_path} ({size_mb:.1f} MB)")
+    print(f"   Длительность: {duration:.1f} сек")
+    print(f"   Время декодирования: {elapsed:.1f} сек")
+    print(f"{'='*60}")
     
-    spec_paths.sort(key=extract_page_num)
-    
-    print(f"   QR-страница: {Path(qr_path).name}")
-    print(f"   Страницы: {[Path(p).name for p in spec_paths]}")
-    
-    return decode_multipage(spec_paths, qr_path, config, output_wav_path)
+    return y_stereo

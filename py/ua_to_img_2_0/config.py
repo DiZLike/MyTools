@@ -14,35 +14,6 @@ PRESETS = {
     "87p_n1024":  {"N_FFT": 1024, "HOP_LENGTH": 128},
     "87p_n2048":  {"N_FFT": 2048, "HOP_LENGTH": 256},
     "87p_n4096":  {"N_FFT": 4096, "HOP_LENGTH": 512},
-
-    # --- ПРЕСЕТЫ ДЛЯ JPEG-СЖАТИЯ ---
-    "jpeg_n256_75p":  {"N_FFT": 256,  "HOP_LENGTH": 64},
-    "jpeg_n512_75p":  {"N_FFT": 512,  "HOP_LENGTH": 128},
-    "jpeg_n512_87p":  {"N_FFT": 512,  "HOP_LENGTH": 64},
-    "jpeg_n1024_87p": {"N_FFT": 1024, "HOP_LENGTH": 128},
-
-    # --- ПРЕСЕТЫ ДЛЯ WebP-СЖАТИЯ ---
-    "webp_n128_75p":  {"N_FFT": 128,  "HOP_LENGTH": 32},
-    "webp_n128_87p":  {"N_FFT": 128,  "HOP_LENGTH": 16},
-    "webp_n256_75p":  {"N_FFT": 256,  "HOP_LENGTH": 64},
-    "webp_n256_87p":  {"N_FFT": 256,  "HOP_LENGTH": 32},
-    "webp_n512_87p":  {"N_FFT": 512,  "HOP_LENGTH": 64},
-
-    # --- ПРЕСЕТЫ ДЛЯ AVIF-СЖАТИЯ ---
-    "avif_n128_75p":  {"N_FFT": 128,  "HOP_LENGTH": 32},
-    "avif_n128_87p":  {"N_FFT": 128,  "HOP_LENGTH": 16},
-    "avif_n256_75p":  {"N_FFT": 256,  "HOP_LENGTH": 64},
-    "avif_n256_87p":  {"N_FFT": 256,  "HOP_LENGTH": 32},
-    "avif_n512_87p":  {"N_FFT": 512,  "HOP_LENGTH": 64},
-
-    # --- ПРЕСЕТЫ ДЛЯ ВИДЕО-СЖАТИЯ ---
-    "video_n1024_87p": {"N_FFT": 1024, "HOP_LENGTH": 128},
-    "video_n2048_87p": {"N_FFT": 2048, "HOP_LENGTH": 256},
-    "video_n4096_87p": {"N_FFT": 4096, "HOP_LENGTH": 512},
-    "video_n1024_93p": {"N_FFT": 1024, "HOP_LENGTH": 64},
-    "video_n2048_93p": {"N_FFT": 2048, "HOP_LENGTH": 128},
-
-    "custom":  {"N_FFT": 4096, "HOP_LENGTH": 2048},
 }
 
 DEFAULT_CONFIG = {
@@ -58,7 +29,7 @@ DEFAULT_CONFIG = {
     # --- ПАРАМЕТРЫ ЛИСТА ---
     "dpi": 300,
     "paper_size": "A4",
-    "calibration_enabled": True,
+    "calibration_enabled": False,
     "marker_size_mm": 5,
     
     # --- МАСШТАБИРОВАНИЕ СПЕКТРОГРАММЫ ---

@@ -16,11 +16,11 @@ def encode_metadata_text(metadata: dict) -> str:
         f"RL:{metadata['ref_left']:.6f}",
         f"RR:{metadata['ref_right']:.6f}",
         f"SR:{metadata.get('sr', 44100)}",
-        f"MM:{metadata.get('mag_min', -120)}",
+        f"MM:{metadata.get('mag_min', -120):.1f}",  # Форматируем как float с 1 знаком
         f"TF:{metadata.get('total_frames', 0)}",
         f"TP:{metadata.get('total_pages', 1)}",
         f"FPG:{metadata.get('frames_per_page', 0)}",
-        f"EN:{metadata.get('encoding', 'cyan_magenta')}",
+        f"EN:{metadata.get('encoding', 'rgb_stereo')}",
         f"GI:{metadata.get('phase_generate_iterations', 5000)}",
         f"GS:{metadata.get('phase_generate_random_seed', 454)}",
         f"GM:{metadata.get('griffin_lim_mode', 'fast')}",
@@ -73,16 +73,25 @@ def decode_metadata_text(text: str) -> dict:
         'EP': 'early_stop_patience',
     }
     
+    # Ключи, которые должны быть float
+    float_keys = {'RL', 'RR', 'ET', 'MM'}
+    
+    # Ключи, которые должны быть bool
+    bool_keys = {'GP', 'ES'}
+    
+    # Ключи, которые должны быть str
+    str_keys = {'GM', 'EN'}
+    
     parts = text.strip().split()
     for part in parts:
         if ':' in part:
             key, value = part.split(':', 1)
             if key in mapping:
-                if key in ('RL', 'RR', 'ET'):
+                if key in float_keys:
                     metadata[mapping[key]] = float(value)
-                elif key in ('GP', 'ES'):
+                elif key in bool_keys:
                     metadata[mapping[key]] = bool(int(value))
-                elif key in ('GM', 'EN'):
+                elif key in str_keys:
                     metadata[mapping[key]] = value
                 else:
                     metadata[mapping[key]] = int(value)
@@ -94,7 +103,7 @@ def decode_metadata_text(text: str) -> dict:
     metadata.setdefault('total_frames', 0)
     metadata.setdefault('total_pages', 1)
     metadata.setdefault('frames_per_page', 0)
-    metadata.setdefault('encoding', 'cyan_magenta')
+    metadata.setdefault('encoding', 'rgb_stereo')
     metadata.setdefault('phase_generate_iterations', 5000)
     metadata.setdefault('phase_generate_random_seed', 454)
     metadata.setdefault('griffin_lim_mode', 'fast')
