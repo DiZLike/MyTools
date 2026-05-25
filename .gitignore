@@ -8,8 +8,10 @@
 **/icons.dat
 **/python.zip
 **/argos-translate.zip
-**/track.mp3
 
+*.mp3
+*.wav
+*.opus
 *.7z
 *.env
 
