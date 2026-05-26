@@ -8,6 +8,12 @@
 **/icons.dat
 **/python.zip
 **/argos-translate.zip
+**/dataset/
+**/originals/
+**/spectrograms/
+
+**/best_model.pth
+**/checkpoint_latest.pth
 
 *.mp3
 *.wav
