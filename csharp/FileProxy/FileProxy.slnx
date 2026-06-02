@@ -1,5 +1,0 @@
-<Solution>
-  <Project Path="FileProxy.Client/FileProxy.Client.csproj" />
-  <Project Path="FileProxy.Server/FileProxy.Server.csproj" />
-  <Project Path="FileProxy.Shared/FileProxy.Shared.csproj" />
-</Solution>

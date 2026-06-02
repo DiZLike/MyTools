@@ -21,6 +21,7 @@
 
 *.mp3
 *.wav
+*.flac
 *.opus
 *.7z
 *.env
