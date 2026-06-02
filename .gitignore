@@ -8,12 +8,16 @@
 **/icons.dat
 **/python.zip
 **/argos-translate.zip
-**/dataset/
+**/dataset_files/
 **/originals/
+**/spectrograms_aac/
+**/spectrograms_mp3/
+**/spectrograms_opus/
+**/spectrograms_vorbis/
+**/dataset/
 **/spectrograms/
 
-**/best_model.pth
-**/checkpoint_latest.pth
+*.pth
 
 *.mp3
 *.wav

@@ -1,0 +1,238 @@
+{
+  "total": 138,
+  "converted": 0,
+  "skipped": 108,
+  "errors": 30,
+  "skipped_files": [
+    "accept.gp5",
+    "balls_to_the_wall_4.gp5",
+    "beat_the_bastards.gp5",
+    "beat_the_bastards_2.gp5",
+    "beat_the_bastards_3.gp5",
+    "bloodbath_mastermind.gp5",
+    "breaking_up_again.gp5",
+    "dark_side_of_my_heart.gp5",
+    "dogs_on_leads.gp5",
+    "dying_breed_2.gp5",
+    "fast_as_a_shark_4.gp5",
+    "feelings.gp5",
+    "final_journey.gp5",
+    "hard_attack.gp5",
+    "hellfire.gp5",
+    "hellfire_2.gp5",
+    "hung_drawn_and_quartered.gp5",
+    "it_s_hard_to_find_a_way.gp5",
+    "just_by_my_own_2.gp5",
+    "kill_the_pain_2.gp5",
+    "living_for_tonight_2.gp5",
+    "london_leather_boys.gp5",
+    "love_child_3.gp5",
+    "metal_heart_4.gp5",
+    "midnight_highway_2.gp5",
+    "midnight_mover_2.gp5",
+    "monsterman_2.gp5",
+    "pandemic.gp5",
+    "shadow_soldiers_2.gp5",
+    "sick_dirty_and_mean_2.gp5",
+    "slaves_to_metal_2.gp5",
+    "sodom_and_gommora.gp5",
+    "stalingrad.gp5",
+    "stalingrad_2.gp5",
+    "stampede.gp5",
+    "tevtonic_terror.gp5",
+    "the_abyss.gp5",
+    "the_abyss_2.gp5",
+    "the_curse_2.gp5",
+    "the_king_2.gp5",
+    "time_machine.gp5",
+    "too_high_to_get_it_right_2.gp5",
+    "trail_of_tears.gp5",
+    "what_else.gp5",
+    "wrong_is_right_2.gp5",
+    "wrong_is_right_3.gp5",
+    "ahead_of_the_pack.gp4",
+    "all_or_nothing.gp4",
+    "amamos_la_vida.gp4",
+    "another_second_to_be.gp4",
+    "another_second_to_be_2.gp4",
+    "balls_to_the_wall.gp4",
+    "balls_to_the_wall_2.gp4",
+    "balls_to_the_wall_live.gp4",
+    "bound_to_fail.gp4",
+    "bound_to_fail_2.gp4",
+    "breaker.gp4",
+    "bulletproof_all_areas_worldwide_live.gp4",
+    "china_lady.gp4",
+    "donation.gp4",
+    "fast_as_a_shark_3.gp4",
+    "flash_rocking_man.gp4",
+    "head_over_heels.gp4",
+    "head_over_heels_2.gp4",
+    "hellhammer.gp4",
+    "i_don_t_wanna_be_like_you_4.gp4",
+    "losers_and_winners.gp4",
+    "losing_more_than_you_ever_had.gp4",
+    "love_child_2.gp4",
+    "love_sensation.gp4",
+    "metal_heart.gp4",
+    "midnight_highway.gp4",
+    "monsterman.gp4",
+    "neon_nights.gp4",
+    "neon_nights_2.gp4",
+    "pomp_and_circumstance.gp4",
+    "primitive.gp4",
+    "princess_of_the_dawn_live.gp4",
+    "prisoner.gp4",
+    "restless_and_wild.gp4",
+    "run_if_you_can.gp4",
+    "russian_roulette.gp4",
+    "save_us.gp4",
+    "screaming_for_a_love_bite.gp4",
+    "shake_your_heads.gp4",
+    "sick_dirty_mean.gp4",
+    "slaves_to_metal.gp4",
+    "son_of_a_bitch.gp4",
+    "thunder_and_lightning.gp4",
+    "turn_me_on.gp4",
+    "walking_in_the_shadow.gp4",
+    "wrong_is_right.gp4",
+    "balls_to_the_wall_3.gp3",
+    "fast_as_a_shark.gp3",
+    "fast_as_a_shark_2.gp3",
+    "head_over_heels_3.gp3",
+    "i_don_t_wanna_be_like_you.gp3",
+    "i_don_t_wanna_be_like_you_2.gp3",
+    "just_by_my_own.gp3",
+    "losing_more_than_you_ever_had_2.gp3",
+    "love_child.gp3",
+    "metal_heart_2.gp3",
+    "metal_heart_3.gp3",
+    "princess_of_the_dawn_live_2.gp3",
+    "run_through_the_night.gp3",
+    "screaming_for_a_love_bite_2.gp3",
+    "shake_your_heads_2.gp3",
+    "the_king.gp3"
+  ],
+  "error_files": [
+    {
+      "file": "aiming_high_2.gp5",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "blood_of_the_nations.gp5",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "bucket_full_of_hate.gp5",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "crossroads.gp5",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "dark_side_of_my_heart_2.gp5",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "from_the_ashes_we_rise.gp5",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "generation_clash.gp5",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "it_aint_over_yet.gp5",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "kill_the_pain.gp5",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "lay_it_down.gp5",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "no_shelter.gp5",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "the_beast_inside.gp5",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "too_high_to_get_it_right.gp5",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "aiming_high.gp4",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "burning.gp4",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "cant_stand_the_night.gp4",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "can_t_stand_the_night.gp4",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "dont_go_stealing_my_soul_away.gp4",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "guardian_of_the_night.gp4",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "i_wanna_be_no_hero.gp4",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "living_for_tonight.gp4",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "london_leatherboys.gp4",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "midnight_mover.gp4",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "stand_tight.gp4",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "starlight.gp4",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "t_v_war.gp4",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "up_to_the_limit.gp4",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "winter_dreams.gp4",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "i_m_a_rebel.gp3",
+      "error": "'Note' object has no attribute 'dynamic'"
+    },
+    {
+      "file": "objection_overruled.gp3",
+      "error": "'Note' object has no attribute 'dynamic'"
+    }
+  ]
+}

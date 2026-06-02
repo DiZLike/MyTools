@@ -1,0 +1,9 @@
+TEST REPORT — spectrograms_mp3
+============================================================
+
+Test MSE: 0.000382
+Test MAE: 0.0130
+Test R²: 0.9936
+
+Model: compare_model.pth
+Total params: 6,766,143

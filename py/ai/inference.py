@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.optim as optim
 import librosa
 import subprocess
 import tempfile
@@ -10,7 +11,7 @@ from collections import Counter
 import warnings
 warnings.filterwarnings('ignore')
 
-# ========== 1. Модель (должна совпадать с train.py) ==========
+# ========== 1. Модель ==========
 class SEBlock(nn.Module):
     def __init__(self, channels, reduction=16):
         super().__init__()
@@ -70,7 +71,6 @@ N_MELS = 128
 MODEL_PATH = "best_model.pth"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Классы
 ALL_NAMES = [
     "lossless",
     "mp3_32", "mp3_64", "mp3_128", "mp3_high",
@@ -79,7 +79,6 @@ ALL_NAMES = [
 ]
 NUM_LOSSY = len(ALL_NAMES) - 1
 
-# Расшифровка составных классов
 CLASS_DESCRIPTION = {
     "lossless": "Lossless (без сжатия)",
     "mp3_32": "MP3 32 kbps",
@@ -97,16 +96,12 @@ CLASS_DESCRIPTION = {
 
 # ========== 3. Загрузка аудио ==========
 def load_audio(path, target_sr=44100):
-    """Загружает аудио в моно, 44100 Гц. Работает с любыми форматами."""
-    
-    # Пробуем librosa (WAV, FLAC, MP3)
     try:
         y, sr = librosa.load(path, sr=target_sr, mono=True)
         return y
     except:
         pass
     
-    # Пробуем soundfile
     try:
         import soundfile as sf
         y, sr = sf.read(path, dtype='float32')
@@ -118,11 +113,9 @@ def load_audio(path, target_sr=44100):
     except:
         pass
     
-    # FFmpeg для всех остальных (Opus, M4A, и т.д.)
     try:
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
             tmp_name = tmp.name
-        
         cmd = [
             'ffmpeg', '-y', '-i', os.path.abspath(path),
             '-vn', '-ac', '1', '-ar', str(target_sr),
@@ -130,7 +123,6 @@ def load_audio(path, target_sr=44100):
         ]
         subprocess.run(cmd, stdout=subprocess.DEVNULL,
                       stderr=subprocess.DEVNULL, check=True)
-        
         y, _ = librosa.load(tmp_name, sr=target_sr, mono=True)
         os.unlink(tmp_name)
         return y
@@ -140,58 +132,43 @@ def load_audio(path, target_sr=44100):
 
 # ========== 4. Извлечение спектрограмм ==========
 def extract_spectrograms(audio):
-    """Режет аудио на сегменты и возвращает массив спектрограмм."""
     specs = []
-    
     for start in range(0, len(audio) - SAMPLES_PER_SEGMENT + 1, HOP):
         segment = audio[start:start + SAMPLES_PER_SEGMENT]
-        
         mel = librosa.feature.melspectrogram(
             y=segment, sr=SR, n_mels=N_MELS,
             n_fft=2048, hop_length=512
         )
         mel_db = librosa.power_to_db(mel, ref=np.max)
         mel_db = (mel_db - mel_db.mean()) / (mel_db.std() + 1e-8)
-        
         specs.append(mel_db)
     
     if len(specs) == 0:
         return None
-    
     return np.array(specs, dtype=np.float32)
 
 
 # ========== 5. Предсказание ==========
 @torch.no_grad()
 def predict(model, specs):
-    """Прогоняет спектрограммы через модель и возвращает предсказанные классы."""
     model.eval()
     predictions = []
-    
-    # Обрабатываем батчами для скорости
     batch_size = 128
     for i in range(0, len(specs), batch_size):
         batch = torch.FloatTensor(specs[i:i+batch_size]).unsqueeze(1).to(DEVICE)
-        
         out_bin, out_codec = model(batch)
-        
-        pred_bin = out_bin.argmax(1)  # 0=lossy, 1=lossless
-        
+        pred_bin = out_bin.argmax(1)
         final = torch.zeros(len(batch), dtype=torch.long, device=DEVICE)
-        final[pred_bin == 1] = 0  # lossless -> класс 0
-        
+        final[pred_bin == 1] = 0
         lossy_mask = pred_bin == 0
         if lossy_mask.any():
-            final[lossy_mask] = out_codec[lossy_mask].argmax(1) + 1  # lossy -> +1
-        
+            final[lossy_mask] = out_codec[lossy_mask].argmax(1) + 1
         predictions.extend(final.cpu().numpy())
-    
     return predictions
 
 
 # ========== 6. Анализ и вывод ==========
 def analyze_predictions(predictions):
-    """Анализирует предсказания всех сегментов и формирует итоговый вердикт."""
     counter = Counter(predictions)
     total = len(predictions)
     
@@ -199,7 +176,6 @@ def analyze_predictions(predictions):
     print(f"Проанализировано сегментов: {total}")
     print(f"{'='*60}")
     
-    # Сортируем по убыванию
     print("\nРаспределение предсказаний по сегментам:")
     for class_idx, count in counter.most_common():
         name = ALL_NAMES[class_idx]
@@ -208,13 +184,11 @@ def analyze_predictions(predictions):
         bar = '█' * int(pct / 2)
         print(f"  {desc:<30} {count:>5} ({pct:5.1f}%) {bar}")
     
-    # Итоговый вердикт — самый частый класс
     top_class_idx = counter.most_common(1)[0][0]
     top_name = ALL_NAMES[top_class_idx]
     top_desc = CLASS_DESCRIPTION[top_name]
     top_pct = 100 * counter[top_class_idx] / total
     
-    # Уверенность
     if top_pct > 80:
         confidence = "Высокая"
     elif top_pct > 60:
@@ -232,11 +206,87 @@ def analyze_predictions(predictions):
     return top_name, top_pct
 
 
-# ========== 7. Главная функция ==========
+# ========== 7. Интерактивное дообучение ==========
+def fine_tune(model, specs, correct_class_idx, epochs=3, lr=0.0001):
+    print(f"\n→ Дообучаю модель...")
+    print(f"  Правильный класс: {CLASS_DESCRIPTION[ALL_NAMES[correct_class_idx]]}")
+    print(f"  Сегментов: {len(specs)}, эпох: {epochs}, lr: {lr}")
+    
+    model.train()
+    
+    # Бинарные метки: 1 = lossless, 0 = lossy
+    is_lossless = (correct_class_idx == 0)
+    labels_binary = torch.ones(len(specs), dtype=torch.long) if is_lossless else torch.zeros(len(specs), dtype=torch.long)
+    
+    # Кодек-метки: для lossless игнорируются, для lossy = correct_class_idx - 1
+    labels_codec = torch.full((len(specs),), correct_class_idx - 1, dtype=torch.long)
+    if is_lossless:
+        labels_codec[:] = -1  # lossless-сегменты не учат кодек-голову
+    
+    crit_bin = nn.CrossEntropyLoss(weight=torch.FloatTensor([0.45, 0.55]).to(DEVICE))
+    crit_codec = nn.CrossEntropyLoss()
+    opt = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    
+    batch_size = 64
+    data = torch.FloatTensor(specs).unsqueeze(1)
+    
+    for epoch in range(epochs):
+        total_loss = 0
+        idx = torch.randperm(len(data))
+        
+        for i in range(0, len(data), batch_size):
+            batch_idx = idx[i:i+batch_size]
+            batch = data[batch_idx].to(DEVICE)
+            bin_lbl = labels_binary[batch_idx].to(DEVICE)
+            codec_lbl = labels_codec[batch_idx].to(DEVICE)
+            
+            opt.zero_grad()
+            out_bin, out_codec = model(batch)
+            
+            loss_bin = crit_bin(out_bin, bin_lbl)
+            
+            mask = codec_lbl >= 0
+            if mask.any():
+                loss_codec = crit_codec(out_codec[mask], codec_lbl[mask])
+            else:
+                loss_codec = torch.tensor(0.0, device=DEVICE)
+            
+            loss = 0.5 * loss_bin + 0.5 * loss_codec
+            loss.backward()
+            opt.step()
+            total_loss += loss.item()
+        
+        print(f"  Эпоха {epoch+1}/{epochs} — Loss: {total_loss/len(data):.4f}")
+    
+    torch.save(model.state_dict(), MODEL_PATH)
+    print(f"  ✓ Модель сохранена: {MODEL_PATH}\n")
+    
+    return model
+
+
+def show_class_menu():
+    print(f"\n{'='*60}")
+    print("Выберите правильный класс:")
+    print(f"{'='*60}")
+    print("  0  — Lossless (без сжатия)")
+    print("  1  — MP3 32 kbps")
+    print("  2  — MP3 64 kbps")
+    print("  3  — MP3 128 kbps")
+    print("  4  — MP3 192-320 kbps")
+    print("  5  — AAC 64 kbps")
+    print("  6  — AAC 128-256 kbps")
+    print("  7  — Opus 32 kbps")
+    print("  8  — Opus 64 kbps")
+    print("  9  — Opus 96 kbps")
+    print("  10 — Opus 128-192 kbps")
+    print(f"{'='*60}")
+
+
+# ========== 8. Главная функция ==========
 def main():
     if len(sys.argv) < 2:
-        print("Использование: python inference.py <путь_к_аудиофайлу>")
-        print("Пример: python inference.py my_song.mp3")
+        print("Использование:")
+        print("  python inference.py <путь_к_аудиофайлу>")
         sys.exit(1)
     
     filepath = sys.argv[1]
@@ -278,8 +328,30 @@ def main():
     predictions = predict(model, specs)
     
     # Выводим результат
-    analyze_predictions(predictions)
-    print("\nГотово! Нажми Enter для выхода..."); input()
+    predicted_class, confidence = analyze_predictions(predictions)
+    
+    # Всегда запускаем режим обучения
+    show_class_menu()
+    
+    try:
+        choice = input("\nВведите номер правильного класса (или Enter для пропуска): ").strip()
+        if choice != "":
+            class_idx = int(choice)
+            if 0 <= class_idx < len(ALL_NAMES):
+                model = fine_tune(model, specs, class_idx, epochs=3, lr=0.0001)
+                
+                # Повторный анализ после дообучения
+                print("→ Повторный анализ после дообучения...")
+                predictions = predict(model, specs)
+                analyze_predictions(predictions)
+            else:
+                print(f"✗ Неверный номер класса (0-{len(ALL_NAMES)-1})")
+    except ValueError:
+        print("✗ Введите число")
+    except KeyboardInterrupt:
+        print("\n  Дообучение отменено")
+    input()
+
 
 if __name__ == "__main__":
     main()

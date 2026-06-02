@@ -1,0 +1,9 @@
+TEST REPORT — spectrograms_opus
+============================================================
+
+Test MSE: 0.000274
+Test MAE: 0.0112
+Test R²: 0.9832
+
+Model: compare_model.pth
+Total params: 6,766,143
