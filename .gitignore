@@ -18,6 +18,7 @@
 **/spectrograms/
 
 *.pth
+*.pt
 
 *.mp3
 *.wav
