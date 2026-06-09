@@ -1,0 +1,52 @@
+Файл: F:\!Evgeny\src\py\au_to_img\utils.py
+----------------------------------------
+# utils.py
+import os
+import json
+import numpy as np
+
+def metadata_to_json(metadata: dict, path: str = "metadata.json"):
+    """Сохраняет метаданные в JSON-файл, конвертируя типы NumPy."""
+    json_data = {}
+    for k, v in metadata.items():
+        if isinstance(v, (np.integer, np.int64, np.int32)):
+            json_data[k] = int(v)
+        elif isinstance(v, (np.floating, np.float64, np.float32)):
+            json_data[k] = float(v)
+        elif isinstance(v, tuple):
+            json_data[k] = [int(x) for x in v]
+        elif isinstance(v, np.bool_):
+            json_data[k] = bool(v)
+        elif isinstance(v, np.ndarray):
+            json_data[k] = v.tolist()
+        else:
+            json_data[k] = v
+    
+    with open(path, "w", encoding='utf-8') as f:
+        json.dump(json_data, f, indent=2, ensure_ascii=False)
+
+def file_size_kb(path: str) -> float:
+    return os.path.getsize(path) / 1024.0
+
+def file_size_mb(path: str) -> float:
+    return os.path.getsize(path) / (1024.0 * 1024.0)
+
+def clean_temp_files(*paths: str):
+    for path in paths:
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError as e:
+                print(f"   Ошибка при удалении {path}: {e}")
+
+def ensure_dir(directory: str):
+    if not os.path.exists(directory):
+        os.makedirs(directory, exist_ok=True)
+
+def metadata_from_json(path: str) -> dict:
+    """Загружает метаданные из JSON-файла."""
+    import json
+    with open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+----------------------------------------
+
