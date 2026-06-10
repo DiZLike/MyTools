@@ -1,877 +1,918 @@
-Файл: D:\Evgeny\git\MyTools\py\mus_restore\prepare_dataset.py
+Файл: Z:\web\landing\admin.py
 ----------------------------------------
-"""
-DATASET BUILDER — MP3 128 kbps
-Берёт lossless-файлы, кодирует в MP3 128kbps, режет на сегменты по 3с
-Выход: low_res (MP3→WAV) и high_res (lossless)
-"""
-import os
-import subprocess
-import numpy as np
-import soundfile as sf
-from pathlib import Path
-from tqdm import tqdm
-import tempfile
-import shutil
+from django.contrib import admin
+from .models import LandingPage, ContentBlock
 
-# ======================== КОНФИГ ========================
-INPUT_FOLDER = Path("E:/AI_RESTORE/music_hi_res")
-OUTPUT_FOLDER = Path("E:/AI_RESTORE/dataset_audio_mp3_128")
-BITRATE = "128k"
-SR = 44100
-SEGMENT_DURATION = 3.0
-OVERLAP = 0.5
-SKIP_START = 30
-MAX_DURATION = 60
 
-SAMPLES_PER_SEGMENT = int(SR * SEGMENT_DURATION)
-HOP = int(SAMPLES_PER_SEGMENT * (1 - OVERLAP))
+class ContentBlockInline(admin.TabularInline):
+    model = ContentBlock
+    extra = 0
+    fields = ['order', 'block_type', 'label', 'copyable', 'image', 'url']
+    readonly_fields = ['order']
 
-# ======================== ФУНКЦИИ ========================
-def check_ffmpeg():
-    """Проверяем наличие ffmpeg"""
-    try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("❌ ffmpeg не найден. Установите ffmpeg и добавьте в PATH")
-        return False
 
-def encode_mp3(y, sr, bitrate, tmp_dir):
-    """Кодирует аудио в MP3 и декодирует обратно"""
-    # Временные файлы
-    wav_in = tmp_dir / "input.wav"
-    mp3_file = tmp_dir / "encoded.mp3"
-    wav_out = tmp_dir / "output.wav"
-    
-    # Сохраняем WAV
-    sf.write(wav_in, y, sr)
-    
-    # Кодируем в MP3
-    subprocess.run([
-        "ffmpeg", "-y", "-i", str(wav_in),
-        "-codec:a", "libmp3lame", "-b:a", bitrate,
-        "-qscale:a", "2",  # Высокое качество внутри битрейта
-        str(mp3_file)
-    ], capture_output=True, check=True)
-    
-    # Декодируем обратно
-    subprocess.run([
-        "ffmpeg", "-y", "-i", str(mp3_file),
-        "-acodec", "pcm_s16le", "-ar", str(sr),
-        "-ac", "1",
-        str(wav_out)
-    ], capture_output=True, check=True)
-    
-    # Читаем результат
-    y_mp3, _ = sf.read(wav_out)
-    
-    # Чистим временные файлы
-    for f in [wav_in, mp3_file, wav_out]:
-        if f.exists():
-            f.unlink()
-    
-    return y_mp3
-
-def process_file(file_path, output_low_dir, output_high_dir, tmp_dir):
-    """Обрабатывает один файл: кодирует целиком, потом режет на сегменты"""
-    try:
-        y, sr = sf.read(file_path)
-        if sr != SR:
-            import librosa
-            y = librosa.resample(y, orig_sr=sr, target_sr=SR)
-            sr = SR
-    except Exception as e:
-        tqdm.write(f"❌ Ошибка загрузки {file_path.name}: {e}")
-        return 0
-
-    # Нормализация
-    y = y / (np.max(np.abs(y)) + 1e-8)
-
-    # Обрезаем начало и конец
-    start_sample = int(SKIP_START * sr)
-    if len(y) <= start_sample:
-        return 0
-    y = y[start_sample:]
-    
-    max_samples = int(MAX_DURATION * sr)
-    if len(y) > max_samples:
-        y = y[:max_samples]
-    
-    if len(y) < SAMPLES_PER_SEGMENT:
-        return 0
-
-    # Кодируем ВЕСЬ трек в MP3 и обратно (один проход кодеком!)
-    tqdm.write(f"   🎧 Кодирование {file_path.name} в MP3 {BITRATE}...")
-    try:
-        y_mp3 = encode_mp3(y, sr, BITRATE, tmp_dir)
-    except Exception as e:
-        tqdm.write(f"❌ Ошибка кодирования {file_path.name}: {e}")
-        return 0
-    
-    # Режем на сегменты
-    seg_count = 0
-    for start in range(0, len(y) - SAMPLES_PER_SEGMENT + 1, HOP):
-        high_res = y[start:start + SAMPLES_PER_SEGMENT]
-        low_res = y_mp3[start:start + SAMPLES_PER_SEGMENT]
-        
-        base_name = f"{file_path.stem}_{seg_count:04d}"
-        sf.write(output_high_dir / f"{base_name}.wav", high_res, sr)
-        sf.write(output_low_dir / f"{base_name}.wav", low_res, sr)
-        seg_count += 1
-    
-    return seg_count
-
-# ======================== MAIN ========================
-if __name__ == "__main__":
-    if not check_ffmpeg():
-        exit(1)
-    
-    output_low = OUTPUT_FOLDER / "low_res"
-    output_high = OUTPUT_FOLDER / "high_res"
-    output_low.mkdir(parents=True, exist_ok=True)
-    output_high.mkdir(parents=True, exist_ok=True)
-
-    audio_files = list(INPUT_FOLDER.glob("*.wav")) + list(INPUT_FOLDER.glob("*.flac"))
-
-    if not audio_files:
-        print(f"❌ Нет файлов в {INPUT_FOLDER}")
-        exit(1)
-
-    print(f"🎵 Найдено треков: {len(audio_files)}")
-    print(f"📂 Вход:  {INPUT_FOLDER}")
-    print(f"📂 Выход: {OUTPUT_FOLDER}")
-    print(f"🎧 Битрейт: {BITRATE}")
-    print(f"⏱️  Сегменты: {SEGMENT_DURATION}с, перекрытие {OVERLAP}с")
-    print()
-
-    total_segments = 0
-    tmp_dir = Path(tempfile.mkdtemp())
-    
-    try:
-        for f in tqdm(audio_files, desc="🔪 Обработка треков", unit="track"):
-            segs = process_file(f, output_low, output_high, tmp_dir)
-            total_segments += segs
-            if segs > 0:
-                tqdm.write(f"   ✅ {f.name}: {segs} сегментов")
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    print(f"\n🏁 Готово! Всего сегментов: {total_segments}")
-    print(f"   low_res:  {output_low}")
-    print(f"   high_res: {output_high}")
+@admin.register(LandingPage)
+class LandingPageAdmin(admin.ModelAdmin):
+    list_display = ['title', 'slug', 'is_public', 'created_at', 'updated_at']
+    list_filter = ['is_public', 'created_at']
+    search_fields = ['title', 'slug']
+    readonly_fields = ['slug', 'created_at', 'updated_at']
+    inlines = [ContentBlockInline]
 ----------------------------------------
 
 ================================================================================
-Файл: D:\Evgeny\git\MyTools\py\mus_restore\train.py
+Файл: Z:\web\landing\models.py
 ----------------------------------------
-"""
-AudioUNet — MP3 RESTORER v2 (Hi-Res Direct) [FIXED v2]
-- Восстановление после MP3 128 kbps
-- Вход: 1 канал (спектр MP3, 0-22k)
-- Выход: полный high_res спектр
-- Генератор предсказывает сразу lossless
-- Дискриминатор сравнивает pred с real high_res
-- FIXED: линейная магнитуда для лосса, баланс G/D, label smoothing, аугментации
-- FIXED v2: broadcast ошибка в дискриминаторе, total_memory, совместимость .pt cache
-"""
-import os
-import sys
-import gc
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
-import librosa
-import numpy as np
-from pathlib import Path
-from tqdm import tqdm
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import warnings
-warnings.filterwarnings('ignore')
+import random
+import string
 
-torch.backends.cudnn.benchmark = True
-torch.backends.cudnn.deterministic = False
+from django.db import models
+from django.db.models.signals import pre_delete
+from django.dispatch import receiver
+from django.urls import reverse
 
-# ======================== КОНФИГ ========================
-DATASET_DIR = Path("E:/AI_RESTORE/dataset_audio_mp3_128")
-LOW_RES_DIR = DATASET_DIR / "low_res"
-HIGH_RES_DIR = DATASET_DIR / "high_res"
-CACHE_DIR = DATASET_DIR / "cache_mp3_128_v2_fixed"
-CHECKPOINT_DIR = Path("checkpoints_mp3_128_v2_fixed")
-REPORTS_DIR = Path("reports_mp3_128_v2_fixed")
 
-BATCH_SIZE = 4
-EPOCHS = 100
-LEARNING_RATE_G = 1e-4
-LEARNING_RATE_D = 5e-5
-N_FFT = 2048
-HOP_LENGTH = 512
-SR = 44100
-FREQ_BINS = N_FFT // 2 + 1
-VAL_SPLIT = 0.1
-NUM_WORKERS = 2
-GRADIENT_CLIP = 1.0
-EARLY_STOP_PATIENCE = 40
+def generate_slug():
+    """Генерирует последовательный slug с переиспользованием удалённых"""
+    chars = string.ascii_lowercase + string.digits
+    existing = set(LandingPage.objects.values_list('slug', flat=True))
 
-LAMBDA_MSE = 1.0
-LAMBDA_ADV = 2.5
-LAMBDA_FM = 2.0
-LAMBDA_TEX = 0.3
+    length = 1
+    while True:
+        for combo in _generate_combinations(chars, length):
+            if combo not in existing:
+                return combo
+        length += 1
 
-PRE_EMPHASIS_COEF = 0.90
 
-LABEL_SMOOTHING_REAL = 0.9
-LABEL_SMOOTHING_FAKE = 0.1
-NOISE_STD_D = 0.03
+def _generate_combinations(chars, length):
+    """Генерирует комбинации по порядку: a, b, ..., z, 0, 1, ..., 9, aa, ab, ..."""
+    total = len(chars) ** length
+    for i in range(total):
+        result = []
+        n = i
+        for _ in range(length):
+            result.append(chars[n % len(chars)])
+            n //= len(chars)
+        yield ''.join(reversed(result))
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CHECKPOINT_FILE = CHECKPOINT_DIR / "checkpoint_latest.pt"
-BEST_MODEL_FILE = CHECKPOINT_DIR / "best_generator.pt"
 
-# ======================== ДИСКРИМИНАТОР ========================
-class MultiScaleDiscriminator(nn.Module):
-    def __init__(self):
-        super().__init__()
-        def make_discriminator():
-            return nn.Sequential(
-                nn.Conv2d(1, 64, 4, 2, 1), nn.LeakyReLU(0.2),
-                nn.Conv2d(64, 128, 4, 2, 1), nn.BatchNorm2d(128), nn.LeakyReLU(0.2),
-                nn.Conv2d(128, 256, 4, 2, 1), nn.BatchNorm2d(256), nn.LeakyReLU(0.2),
-                nn.Conv2d(256, 512, 4, 2, 1), nn.BatchNorm2d(512), nn.LeakyReLU(0.2),
-                nn.Conv2d(512, 1, 4, 1, 0)
+class LandingPage(models.Model):
+    """Страница с контентом"""
+    title = models.CharField('Название', max_length=200)
+    slug = models.SlugField('Короткий идентификатор', max_length=50, unique=True,
+                            default=generate_slug,
+                            help_text='Короткий URL: dlike.ru/p/<slug>/')
+    is_public = models.BooleanField('Публичный доступ', default=True)
+    password = models.CharField('Пароль', max_length=128, blank=True,
+                                help_text='Оставьте пустым для публичного доступа')
+    created_at = models.DateTimeField('Создана', auto_now_add=True)
+    updated_at = models.DateTimeField('Обновлена', auto_now=True)
+
+    class Meta:
+        verbose_name = 'Страница'
+        verbose_name_plural = 'Страницы'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.title
+
+    def get_absolute_url(self):
+        return reverse('landing_page', kwargs={'slug': self.slug})
+
+
+class ContentBlock(models.Model):
+    """Блок контента на странице"""
+    BLOCK_TYPES = [
+        ('text', 'Текст'),
+        ('image', 'Изображение'),
+        ('link', 'Ссылка'),
+    ]
+
+    page = models.ForeignKey(LandingPage, on_delete=models.CASCADE,
+                             related_name='blocks')
+    order = models.PositiveIntegerField('Порядок', default=0)
+    block_type = models.CharField('Тип блока', max_length=10, choices=BLOCK_TYPES)
+
+    label = models.CharField('Заголовок', max_length=200, blank=True)
+    content = models.TextField('Текст', blank=True)
+    copyable = models.BooleanField('Можно копировать', default=False)
+    image = models.ImageField('Изображение', upload_to='landing/', blank=True, null=True)
+    url = models.URLField('Ссылка', max_length=2000, blank=True)
+
+    class Meta:
+        verbose_name = 'Блок контента'
+        verbose_name_plural = 'Блоки контента'
+        ordering = ['order']
+
+    def __str__(self):
+        return f'{self.get_block_type_display()}: {self.label or "Без названия"}'
+
+
+@receiver(pre_delete, sender=LandingPage)
+def delete_page_images(sender, instance, **kwargs):
+    """Удаляет файлы изображений при удалении страницы"""
+    for block in instance.blocks.all():
+        if block.image:
+            block.image.delete(save=False)
+
+
+@receiver(pre_delete, sender=ContentBlock)
+def delete_block_image(sender, instance, **kwargs):
+    """Удаляет файл изображения при удалении блока"""
+    if instance.image:
+        instance.image.delete(save=False)
+----------------------------------------
+
+================================================================================
+Файл: Z:\web\landing\urls.py
+----------------------------------------
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    # Публичные
+    path('p/<slug:slug>/', views.landing_page, name='landing_page'),
+
+    # Административные
+    path('pages/', views.page_list, name='page_list'),
+    path('pages/create/', views.page_create, name='page_create'),
+    path('pages/<slug:slug>/edit/', views.page_edit, name='page_edit'),
+    path('pages/<slug:slug>/delete/', views.page_delete, name='page_delete'),
+]
+----------------------------------------
+
+================================================================================
+Файл: Z:\web\landing\views.py
+----------------------------------------
+from django.shortcuts import render, redirect, get_object_or_404
+from django.contrib.auth.decorators import user_passes_test
+from django.contrib import messages
+from .models import LandingPage, ContentBlock
+from .forms import LandingPageForm
+
+
+# --- Публичные view ---
+
+def landing_page(request, slug):
+    """Публичная страница"""
+    page = get_object_or_404(LandingPage, slug=slug)
+
+    if not page.is_public:
+        if request.user.is_superuser:
+            pass
+        elif not request.session.get(f'landing_access_{page.id}'):
+            if request.method == 'POST':
+                password = request.POST.get('password', '')
+                if password == page.password:
+                    request.session[f'landing_access_{page.id}'] = True
+                    request.session.modified = True
+                    return redirect('landing_page', slug=slug)
+                else:
+                    messages.error(request, 'Неверный пароль')
+            return render(request, 'landing/password.html', {'page': page})
+
+    blocks = page.blocks.all()
+    return render(request, 'landing/page.html', {
+        'page': page,
+        'blocks': blocks,
+    })
+
+
+# --- Административные view (только для суперюзеров) ---
+
+def is_superuser(user):
+    return user.is_superuser
+
+
+def _save_new_blocks(page, request):
+    """Сохраняет новые блоки из POST-данных"""
+    new_types = request.POST.getlist('new_block_type')
+    new_labels = request.POST.getlist('new_label')
+    new_contents = request.POST.getlist('new_content')
+    new_copyables = request.POST.getlist('new_copyable')
+    new_urls = request.POST.getlist('new_url')
+    new_upload_methods = request.POST.getlist('new_upload_method')
+    new_images = request.FILES.getlist('new_image')
+    new_image_urls = request.POST.getlist('new_image_url')
+
+    order = page.blocks.count()
+    for i, block_type in enumerate(new_types):
+        if block_type == 'text':
+            ContentBlock.objects.create(
+                page=page,
+                block_type='text',
+                order=order,
+                label=new_labels[i] if i < len(new_labels) else '',
+                content=new_contents[i] if i < len(new_contents) else '',
+                copyable=new_copyables[i] == 'on' if i < len(new_copyables) else False,
             )
-        self.d1 = make_discriminator()
-        self.d2 = make_discriminator()
-        self.d3 = make_discriminator()
-        self.downsample = nn.AvgPool2d(2, 2)
 
-    def forward(self, x):
-        if self.training and NOISE_STD_D > 0:
-            x = x + torch.randn_like(x) * NOISE_STD_D
-        return [self.d1(x), self.d2(self.downsample(x)), self.d3(self.downsample(self.downsample(x)))]
-
-# ======================== ГЕНЕРАТОР ========================
-class SelfAttention(nn.Module):
-    def __init__(self, channels):
-        super().__init__()
-        self.ch_att = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1), nn.Conv2d(channels, channels // 8, 1),
-            nn.ReLU(), nn.Conv2d(channels // 8, channels, 1), nn.Sigmoid()
-        )
-        self.sp_att = nn.Sequential(nn.Conv2d(channels, 1, 1), nn.Sigmoid())
-    def forward(self, x): return x * self.ch_att(x) * self.sp_att(x)
-
-class MP3RestorerV2(nn.Module):
-    def __init__(self):
-        super().__init__()
-        def conv_block(in_ch, out_ch):
-            return nn.Sequential(
-                nn.Conv2d(in_ch, out_ch, 3, padding=1), nn.BatchNorm2d(out_ch), nn.LeakyReLU(0.2, inplace=True),
-                nn.Conv2d(out_ch, out_ch, 3, padding=1), nn.BatchNorm2d(out_ch), nn.LeakyReLU(0.2, inplace=True)
+        elif block_type == 'link':
+            ContentBlock.objects.create(
+                page=page,
+                block_type='link',
+                order=order,
+                label=new_labels[i] if i < len(new_labels) else '',
+                url=new_urls[i] if i < len(new_urls) else '',
             )
-        self.enc1 = conv_block(1, 48)
-        self.enc2 = conv_block(48, 96)
-        self.enc3 = conv_block(96, 192)
-        self.enc4 = conv_block(192, 384)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.bottleneck = nn.Sequential(conv_block(384, 768), SelfAttention(768))
-        self.up4 = nn.ConvTranspose2d(768, 384, kernel_size=2, stride=2)
-        self.dec4 = conv_block(768, 192)
-        self.up3 = nn.ConvTranspose2d(192, 192, kernel_size=2, stride=2)
-        self.dec3 = conv_block(384, 96)
-        self.up2 = nn.ConvTranspose2d(96, 96, kernel_size=2, stride=2)
-        self.dec2 = conv_block(192, 48)
-        self.up1 = nn.ConvTranspose2d(48, 48, kernel_size=2, stride=2)
-        self.dec1 = conv_block(96, 24)
-        self.output_conv = nn.Sequential(
-            nn.Conv2d(24, 24, kernel_size=1), nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(24, 1, kernel_size=1),
-            nn.Sigmoid()
-        )
-        for m in self.modules():
-            if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='leaky_relu')
-                if m.bias is not None: nn.init.constant_(m.bias, 0)
 
-    def _pad_to_match(self, x, target):
-        _, _, h_target, w_target = target.shape
-        _, _, h_x, w_x = x.shape
-        pad_h = max(0, h_target - h_x); pad_w = max(0, w_target - w_x)
-        if pad_h > 0 or pad_w > 0: x = F.pad(x, [0, pad_w, 0, pad_h])
-        if x.shape[2] > h_target: x = x[:, :, :h_target, :]
-        if x.shape[3] > w_target: x = x[:, :, :, :w_target]
-        return x
+        elif block_type == 'image':
+            block = ContentBlock(
+                page=page,
+                block_type='image',
+                order=order,
+                label=new_labels[i] if i < len(new_labels) else '',
+            )
+            _save_image(block, request, i, new_upload_methods, new_images, new_image_urls, is_new=True)
+            block.save()
 
-    def forward(self, x_input):
-        e1 = self.enc1(x_input)
-        e2 = self.enc2(self.pool(e1))
-        e3 = self.enc3(self.pool(e2))
-        e4 = self.enc4(self.pool(e3))
-        b = self.bottleneck(self.pool(e4))
-        d4 = self.up4(b); d4 = self._pad_to_match(d4, e4); d4 = self.dec4(torch.cat([d4, e4], dim=1))
-        d3 = self.up3(d4); d3 = self._pad_to_match(d3, e3); d3 = self.dec3(torch.cat([d3, e3], dim=1))
-        d2 = self.up2(d3); d2 = self._pad_to_match(d2, e2); d2 = self.dec2(torch.cat([d2, e2], dim=1))
-        d1 = self.up1(d2); d1 = self._pad_to_match(d1, e1); d1 = self.dec1(torch.cat([d1, e1], dim=1))
-        output = self.output_conv(d1)
-        if output.shape[2] != x_input.shape[2]:
-            output = F.pad(output, [0, 0, 0, max(0, x_input.shape[2] - output.shape[2])])
-        if output.shape[3] != x_input.shape[3]:
-            output = F.pad(output, [0, max(0, x_input.shape[3] - output.shape[3]), 0, 0])
-        output = output[:, :, :x_input.shape[2], :x_input.shape[3]]
-        return output
+        order += 1
 
-# ======================== ДАТАСЕТ ========================
-class MP3DatasetV2(Dataset):
-    def __init__(self, low_res_dir, high_res_dir):
-        self.low_files = sorted(Path(low_res_dir).glob("*.wav"))
-        self.high_files = sorted(Path(high_res_dir).glob("*.wav"))
-        assert len(self.low_files) == len(self.high_files), "Mismatch!"
-        self.chunk_files = sorted(CACHE_DIR.glob("chunk_*.pt"))
-        self._all_X = None; self._all_Y = None
-        self._load_or_create_cache()
 
-    def _load_or_create_cache(self):
-        if self.chunk_files:
-            print(f"📦 Загрузка чанков MP3 v2...")
-            all_X, all_Y = [], []
-            for cf in tqdm(self.chunk_files, desc="   Загрузка", unit="чанк"):
-                chunk = torch.load(cf, map_location='cpu', weights_only=True)
-                all_X.append(chunk['X']); all_Y.append(chunk['Y'])
-            self._all_X = torch.cat(all_X, dim=0); self._all_Y = torch.cat(all_Y, dim=0)
-            self.n_samples = len(self._all_X)
-        else:
-            print(f"🔨 Создание чанков MP3 v2...")
-            CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            n_files = len(self.low_files)
-            print("   Вычисление глобальной статистики...")
-            global_max = 0
-            for i in tqdm(range(0, n_files, max(1, n_files // 10)), desc="   Статистика"):
-                low, _ = librosa.load(self.low_files[i], sr=SR); high, _ = librosa.load(self.high_files[i], sr=SR)
-                low = np.append(low[0], low[1:] - PRE_EMPHASIS_COEF * low[:-1])
-                high = np.append(high[0], high[1:] - PRE_EMPHASIS_COEF * high[:-1])
-                global_max = max(global_max, np.abs(librosa.stft(low, n_fft=N_FFT, hop_length=HOP_LENGTH)).max(),
-                                           np.abs(librosa.stft(high, n_fft=N_FFT, hop_length=HOP_LENGTH)).max())
-            print(f"   Global max: {global_max:.2f}")
-            chunk_size = 200; all_X, all_Y = [], []
-            for start in tqdm(range(0, n_files, chunk_size), desc="   Запись чанков"):
-                chunk_X, chunk_Y = [], []
-                for i in range(start, min(start + chunk_size, n_files)):
-                    x, y = self._compute_stft(i, global_max)
-                    chunk_X.append(x.unsqueeze(0)); chunk_Y.append(y.unsqueeze(0))
-                chunk_X = torch.cat(chunk_X, dim=0).half(); chunk_Y = torch.cat(chunk_Y, dim=0).half()
-                torch.save({'X': chunk_X, 'Y': chunk_Y}, CACHE_DIR / f"chunk_{len(all_X):04d}.pt")
-                all_X.append(chunk_X); all_Y.append(chunk_Y)
-            self.chunk_files = sorted(CACHE_DIR.glob("chunk_*.pt"))
-            self._all_X = torch.cat(all_X, dim=0); self._all_Y = torch.cat(all_Y, dim=0)
-            self.n_samples = n_files
-            with open(CACHE_DIR / "cache_info.txt", 'w') as f: f.write(f"MP3v2_GMAX={global_max:.2f}")
-        print(f"   ✓ {self.n_samples:,} пар")
+def _save_existing_block(block, request, prefix):
+    """Сохраняет существующий блок из POST-данных"""
+    block.label = request.POST.get(f'{prefix}_label', '')
 
-    def _compute_stft(self, idx, global_max):
-        low, _ = librosa.load(self.low_files[idx], sr=SR); high, _ = librosa.load(self.high_files[idx], sr=SR)
-        low = np.append(low[0], low[1:] - PRE_EMPHASIS_COEF * low[:-1])
-        high = np.append(high[0], high[1:] - PRE_EMPHASIS_COEF * high[:-1])
-        low_mag = np.abs(librosa.stft(low, n_fft=N_FFT, hop_length=HOP_LENGTH))
-        high_mag = np.abs(librosa.stft(high, n_fft=N_FFT, hop_length=HOP_LENGTH))
-        low_mag /= global_max; high_mag /= global_max
-        log_low = (np.log10(np.maximum(low_mag, 1e-6)) + 6) / 6
-        log_high = (np.log10(np.maximum(high_mag, 1e-6)) + 6) / 6
-        x = log_low; y = log_high
-        x = torch.from_numpy(x.astype(np.float16)).unsqueeze(0)
-        y = torch.from_numpy(y.astype(np.float16)).unsqueeze(0)
-        return x, y
+    if block.block_type == 'text':
+        block.content = request.POST.get(f'{prefix}_content', '')
+        block.copyable = request.POST.get(f'{prefix}_copyable') == 'on'
 
-    def __len__(self): return self.n_samples
-    def __getitem__(self, idx): return self._all_X[idx], self._all_Y[idx]
+    elif block.block_type == 'link':
+        block.url = request.POST.get(f'{prefix}_url', '')
 
-# ======================== AUGMENTED SUBSET ========================
-class AugmentedSubsetV2(Dataset):
-    def __init__(self, dataset, indices, augment=True):
-        self.dataset = dataset; self.indices = indices; self.augment = augment
-    def __len__(self): return len(self.indices)
-    def __getitem__(self, idx):
-        x, y = self.dataset[self.indices[idx]]
-        if self.augment:
-            x = x.float(); y = y.float()
-            if torch.rand(1) > 0.5:
-                noise_level = torch.rand(1) * 0.02
-                x = x + torch.randn_like(x) * noise_level
-            if torch.rand(1) > 0.5:
-                freq_cutoff = torch.randint(128, FREQ_BINS, (1,)).item()
-                x[:, freq_cutoff:, :] *= 0.8 + 0.2 * torch.rand(1)
-            if torch.rand(1) > 0.5:
-                x *= 0.9 + 0.2 * torch.rand(1)
-                y *= 0.9 + 0.2 * torch.rand(1)
-            x = x.clamp(0, 1); y = y.clamp(0, 1)
-            x = x.half(); y = y.half()
-        return x, y
+    elif block.block_type == 'image':
+        upload_method = request.POST.get(f'{prefix}_upload_method', 'file')
+        if upload_method == 'file':
+            if f'{prefix}_image' in request.FILES:
+                block.image = request.FILES[f'{prefix}_image']
+        elif upload_method == 'url':
+            image_url = request.POST.get(f'{prefix}_image_url', '')
+            _download_image(block, image_url)
 
-# ======================== ВИЗУАЛИЗАЦИЯ ========================
-class VisualizationDatasetV2(Dataset):
-    def __init__(self, low_res_dir, high_res_dir):
-        self.low_files = sorted(Path(low_res_dir).glob("*.wav"))
-        self.high_files = sorted(Path(high_res_dir).glob("*.wav"))
-        self.global_max = 1.0
-        cache_info = CACHE_DIR / "cache_info.txt"
-        if cache_info.exists():
-            with open(cache_info) as f:
-                info = f.read()
-                if 'GMAX=' in info:
-                    self.global_max = float(info.split('GMAX=')[1])
-    def __len__(self): return len(self.low_files)
-    def __getitem__(self, idx):
-        low, _ = librosa.load(self.low_files[idx], sr=SR)
-        high, _ = librosa.load(self.high_files[idx], sr=SR)
-        low = np.append(low[0], low[1:] - PRE_EMPHASIS_COEF * low[:-1])
-        high = np.append(high[0], high[1:] - PRE_EMPHASIS_COEF * high[:-1])
-        low_mag = np.abs(librosa.stft(low, n_fft=N_FFT, hop_length=HOP_LENGTH))
-        high_mag = np.abs(librosa.stft(high, n_fft=N_FFT, hop_length=HOP_LENGTH))
-        low_mag /= self.global_max; high_mag /= self.global_max
-        log_low = (np.log10(np.maximum(low_mag, 1e-6)) + 6) / 6
-        log_high = (np.log10(np.maximum(high_mag, 1e-6)) + 6) / 6
-        x = torch.from_numpy(log_low.astype(np.float16)).unsqueeze(0)
-        y = torch.from_numpy(log_high.astype(np.float16)).unsqueeze(0)
-        return x, y
+    block.save()
 
-# ======================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ========================
-def log_mag_to_linear(log_mag):
-    return 10 ** (log_mag * 6 - 6)
 
-def linear_to_log_mag(linear_mag):
-    return (torch.log10(linear_mag.clamp(min=1e-6)) + 6) / 6
+def _save_image(block, request, index, methods, files, urls, is_new=False):
+    """Сохраняет изображение для блока (из файла или URL)"""
+    upload_method = methods[index] if index < len(methods) else 'file'
 
-# ======================== ОБУЧЕНИЕ ========================
-def train_epoch(generator, discriminator, loader, opt_g, opt_d, device):
-    generator.train(); discriminator.train()
-    total_g_loss = 0; total_d_loss = 0
-    total_mse_linear = 0
+    if upload_method == 'file':
+        if index < len(files) and files[index]:
+            block.image = files[index]
+    elif upload_method == 'url':
+        image_url = urls[index] if index < len(urls) else ''
+        _download_image(block, image_url)
 
-    pbar = tqdm(loader, desc="Train", leave=False)
-    for x, y_real_log in pbar:
-        x = x.to(device, dtype=torch.float32)
-        y_real_log = y_real_log.to(device, dtype=torch.float32)
 
-        # --- Дискриминатор ---
-        opt_d.zero_grad()
-        with torch.no_grad():
-            y_fake_log = generator(x)
+def _download_image(block, image_url):
+    """Скачивает изображение по URL и сохраняет в блок"""
+    if not image_url:
+        return
+    try:
+        import requests
+        from django.core.files.base import ContentFile
+        from urllib.parse import urlparse
+        import os
 
-        real_preds = discriminator(y_real_log)
-        fake_preds = discriminator(y_fake_log)
+        response = requests.get(image_url, timeout=30)
+        response.raise_for_status()
 
-        d_loss = 0.0
-        for rp, fp in zip(real_preds, fake_preds):
-            real_target = torch.ones_like(rp) * LABEL_SMOOTHING_REAL
-            fake_target = torch.ones_like(fp) * LABEL_SMOOTHING_FAKE
-            d_loss += F.mse_loss(rp, real_target) + F.mse_loss(fp, fake_target)
+        parsed_url = urlparse(image_url)
+        filename = os.path.basename(parsed_url.path)
+        if not filename or '.' not in filename:
+            filename = 'image.jpg'
 
-        d_loss.backward()
-        torch.nn.utils.clip_grad_norm_(discriminator.parameters(), GRADIENT_CLIP)
-        opt_d.step()
+        block.image.save(filename, ContentFile(response.content), save=False)
+    except Exception as e:
+        messages.error(None, f'Не удалось скачать изображение: {e}')
 
-        # --- Генератор ---
-        opt_g.zero_grad()
-        y_fake_log = generator(x)
 
-        fake_preds = discriminator(y_fake_log)
-        adv_loss = sum(F.mse_loss(fp, torch.ones_like(fp)) for fp in fake_preds)
+@user_passes_test(is_superuser)
+def page_list(request):
+    pages = LandingPage.objects.all()
+    return render(request, 'landing/manage/list.html', {'pages': pages})
 
-        with torch.no_grad():
-            real_preds_detached = discriminator(y_real_log)
-        fm_loss = sum(F.l1_loss(fp, rp) for fp, rp in zip(fake_preds, real_preds_detached))
 
-        y_fake_linear = log_mag_to_linear(y_fake_log)
-        y_real_linear = log_mag_to_linear(y_real_log)
-
-        mse_loss = F.l1_loss(y_fake_linear, y_real_linear)
-
-        std_fake = y_fake_linear.std(dim=3)
-        std_real = y_real_linear.std(dim=3)
-        tex_loss = (std_fake - std_real).abs().mean()
-
-        g_loss = (LAMBDA_MSE * mse_loss +
-                  LAMBDA_ADV * adv_loss +
-                  LAMBDA_FM * fm_loss +
-                  LAMBDA_TEX * tex_loss)
-
-        g_loss.backward()
-        torch.nn.utils.clip_grad_norm_(generator.parameters(), GRADIENT_CLIP)
-        opt_g.step()
-
-        total_g_loss += g_loss.item()
-        total_d_loss += d_loss.item()
-        total_mse_linear += mse_loss.item()
-
-        pbar.set_postfix(
-            g=f'{total_g_loss/(pbar.n+1):.3f}',
-            d=f'{total_d_loss/(pbar.n+1):.3f}',
-            mse_lin=f'{total_mse_linear/(pbar.n+1):.4f}',
-            adv=f'{adv_loss.item():.3f}'
-        )
-
-    n = len(loader)
-    return total_g_loss / n, total_d_loss / n, total_mse_linear / n
-
-@torch.no_grad()
-def validate(generator, loader, vis_loader, device):
-    generator.eval()
-    total_mse_linear = 0
-    sample_data = None
-
-    pbar = tqdm(loader, desc="Val", leave=False)
-    for i, (x, y_log) in enumerate(pbar):
-        x = x.to(device, dtype=torch.float32)
-        y_log = y_log.to(device, dtype=torch.float32)
-
-        pred_log = generator(x)
-
-        pred_linear = log_mag_to_linear(pred_log)
-        y_linear = log_mag_to_linear(y_log)
-        mse = F.mse_loss(pred_linear, y_linear)
-        total_mse_linear += mse.item()
-
-        pbar.set_postfix(mse_lin=f'{total_mse_linear/(i+1):.6f}')
-
-    vis_loader_small = DataLoader(vis_loader, batch_size=min(BATCH_SIZE, len(vis_loader)), shuffle=False)
-    vis_data = next(iter(vis_loader_small))
-    x_vis, y_vis_log = vis_data
-    x_vis = x_vis.to(device, dtype=torch.float32)
-    pred_vis_log = generator(x_vis).cpu()
-
-    if pred_vis_log.shape[0] >= 3:
-        y_vis_linear = log_mag_to_linear(y_vis_log)
-        pred_vis_linear = log_mag_to_linear(pred_vis_log)
-        err = (pred_vis_linear - y_vis_linear).abs().mean(dim=[1,2,3])
-        idx = err.argsort()
-        sample_data = (
-            x_vis[idx[[0, len(idx)//2, -1]]].cpu(),
-            y_vis_log[idx[[0, len(idx)//2, -1]]].cpu(),
-            pred_vis_log[idx[[0, len(idx)//2, -1]]].cpu()
-        )
-
-    return total_mse_linear / len(loader), sample_data
-
-def save_checkpoint(epoch, g, d, opt_g, opt_d, best_loss, path):
-    torch.save({
-        'epoch': epoch,
-        'g_state_dict': g.state_dict(),
-        'd_state_dict': d.state_dict(),
-        'opt_g': opt_g.state_dict(),
-        'opt_d': opt_d.state_dict(),
-        'best_loss': best_loss
-    }, path)
-
-def load_checkpoint(path, g, d, opt_g, opt_d, device):
-    ckpt = torch.load(path, map_location=device, weights_only=False)
-    g.load_state_dict(ckpt['g_state_dict']); d.load_state_dict(ckpt['d_state_dict'])
-    opt_g.load_state_dict(ckpt['opt_g']); opt_d.load_state_dict(ckpt['opt_d'])
-    return ckpt.get('epoch', 0), ckpt.get('best_loss', float('inf'))
-
-# ======================== ВИЗУАЛИЗАЦИЯ ========================
-def plot_dashboard(epoch, g_losses, d_losses, val_mses, lr_history, sample_data, save_dir):
-    if sample_data is None: return
-    inp, full_high_log, pred_log = sample_data
-    num = min(inp.shape[0], 2)
-    fig = plt.figure(figsize=(24, 16))
-
-    for i, (label, data) in enumerate([
-        ('G Loss', g_losses), ('D Loss', d_losses), ('Val MSE (linear)', val_mses), ('Info', None)
-    ]):
-        ax = plt.subplot(4, 4, i+1)
-        if i < 3:
-            ax.plot(data, 'o-', markersize=3)
-            ax.set_title(label)
-            ax.grid(alpha=0.3)
-        else:
-            ax.axis('off')
-            ax.text(0.1, 0.9,
-                    f"Epoch: {epoch+1}\n"
-                    f"G: {g_losses[-1]:.3f}\n"
-                    f"D: {d_losses[-1]:.3f}\n"
-                    f"Val MSE lin: {val_mses[-1]:.6f}\n"
-                    f"LR: {lr_history[-1]:.2e}\n"
-                    f"MP3 128 → Lossless",
-                    fontsize=8, fontfamily='monospace', verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-
-    names = ['BEST', 'MEDIAN']
-    for s in range(num):
-        inp_lin = log_mag_to_linear(inp[s, 0])
-        full_high_lin = log_mag_to_linear(full_high_log[s, 0])
-        pred_lin = log_mag_to_linear(pred_log[s, 0])
-
-        min_t = min(inp_lin.shape[1], full_high_lin.shape[1], pred_lin.shape[1])
-        inp_np = inp_lin[:, :min_t].numpy()
-        full_high_np = full_high_lin[:, :min_t].numpy()
-        pred_np = pred_lin[:, :min_t].numpy()
-
-        inp_display = np.log10(np.maximum(inp_np, 1e-6))
-        full_high_display = np.log10(np.maximum(full_high_np, 1e-6))
-        pred_display = np.log10(np.maximum(pred_np, 1e-6))
-        diff_display = np.abs(pred_np - full_high_np)
-
-        base_idx = 4 * (s + 2)
-        vmin, vmax = -6, 0
-
-        for col, (data, title, cmap, vmin_c, vmax_c) in enumerate([
-            (inp_display, f'[{names[s]}] MP3 Input (dB)', 'viridis', vmin, vmax),
-            (full_high_display, 'Target Lossless (dB)', 'viridis', vmin, vmax),
-            (pred_display, 'Predicted (dB)', 'viridis', vmin, vmax),
-            (diff_display, 'Error (linear)', 'hot', 0, 0.1)
-        ]):
-            ax = plt.subplot(4, 4, base_idx + col + 1)
-            im = ax.imshow(data, aspect='auto', origin='lower', cmap=cmap,
-                          vmin=vmin_c, vmax=vmax_c)
-            ax.set_title(title, fontsize=7)
-            plt.colorbar(im, ax=ax, fraction=0.046)
-
-    plt.tight_layout()
-    plt.savefig(save_dir / f"dashboard_epoch_{epoch+1:03d}.png", dpi=150)
-    plt.savefig(save_dir / "dashboard_latest.png", dpi=150)
-    plt.close()
-
-# ======================== MAIN ========================
-if __name__ == "__main__":
-    CHECKPOINT_DIR.mkdir(exist_ok=True)
-    REPORTS_DIR.mkdir(exist_ok=True)
-
-    print(f"╔══════════════════════════════════════╗")
-    print(f"║  MP3 Restorer v2 — FIXED           ║")
-    print(f"║  Direct Hi-Res with Linear Loss    ║")
-    print(f"╚══════════════════════════════════════╝")
-    print(f"   Вход: спектр MP3 128kbps (0-22k)")
-    print(f"   Выход: lossless спектр")
-    print(f"   Лосс: L1 в линейной магнитуде")
-    print()
-
-    print(f"→ Device: {DEVICE}")
-    if DEVICE.type == "cuda":
-        print(f"   GPU: {torch.cuda.get_device_name(0)}")
-        print(f"   VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
-
-    print("\n📦 Загрузка датасета...")
-    full_dataset = MP3DatasetV2(LOW_RES_DIR, HIGH_RES_DIR)
-    vis_dataset = VisualizationDatasetV2(LOW_RES_DIR, HIGH_RES_DIR)
-
-    val_size = int(len(full_dataset) * VAL_SPLIT)
-    train_size = len(full_dataset) - val_size
-    indices = torch.randperm(len(full_dataset), generator=torch.Generator().manual_seed(42)).tolist()
-
-    train_ds = AugmentedSubsetV2(full_dataset, indices[:train_size])
-    val_ds = AugmentedSubsetV2(full_dataset, indices[train_size:], augment=False)
-    train_loader = DataLoader(train_ds, BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS,
-                             pin_memory=True, drop_last=True)
-    val_loader = DataLoader(val_ds, BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS,
-                           pin_memory=True)
-    print(f"   Train: {train_size} | Val: {val_size}")
-    print(f"   Batches: {len(train_loader)} train | {len(val_loader)} val")
-
-    generator = MP3RestorerV2().to(DEVICE)
-    discriminator = MultiScaleDiscriminator().to(DEVICE)
-    print(f"\n🔧 Модели:")
-    print(f"   Generator: {sum(p.numel() for p in generator.parameters()):,} params")
-    print(f"   Discriminator: {sum(p.numel() for p in discriminator.parameters()):,} params")
-
-    opt_g = torch.optim.AdamW(generator.parameters(), lr=LEARNING_RATE_G, betas=(0.5, 0.999))
-    opt_d = torch.optim.AdamW(discriminator.parameters(), lr=LEARNING_RATE_D, betas=(0.5, 0.999))
-    sched_g = torch.optim.lr_scheduler.CosineAnnealingLR(opt_g, T_max=EPOCHS, eta_min=1e-6)
-    sched_d = torch.optim.lr_scheduler.CosineAnnealingLR(opt_d, T_max=EPOCHS, eta_min=1e-6)
-
-    start_epoch, best_loss = 0, float('inf')
-    if os.path.exists(CHECKPOINT_FILE):
-        start_epoch, best_loss = load_checkpoint(CHECKPOINT_FILE, generator, discriminator,
-                                                 opt_g, opt_d, DEVICE)
-        print(f"\n📂 Загрузка чекпоинта: эпоха {start_epoch}, best MSE {best_loss:.6f}")
+@user_passes_test(is_superuser)
+def page_create(request):
+    """Создание новой страницы с блоками"""
+    if request.method == 'POST':
+        form = LandingPageForm(request.POST)
+        if form.is_valid():
+            page = form.save()
+            _save_new_blocks(page, request)
+            messages.success(request, f'Страница "{page.title}" создана')
+            return redirect('page_edit', slug=page.slug)
     else:
-        print("\n🆕 Обучение с нуля")
+        form = LandingPageForm()
 
-    print(f"\n⚙️  Параметры обучения:")
-    print(f"   LR G: {LEARNING_RATE_G:.0e} | LR D: {LEARNING_RATE_D:.0e}")
-    print(f"   LAMBDA_MSE: {LAMBDA_MSE} | LAMBDA_ADV: {LAMBDA_ADV}")
-    print(f"   LAMBDA_FM: {LAMBDA_FM} | LAMBDA_TEX: {LAMBDA_TEX}")
-    print(f"   Label Smoothing: {LABEL_SMOOTHING_REAL}/{LABEL_SMOOTHING_FAKE}")
-    print(f"   Noise D: {NOISE_STD_D}")
-    print(f"\n{'='*60}")
+    return render(request, 'landing/manage/form.html', {
+        'form': form,
+        'blocks': [],
+        'is_new': True,
+    })
 
-    g_losses, d_losses, val_mses, lr_history = [], [], [], []
-    no_improve = 0
 
-    for epoch in range(start_epoch, EPOCHS):
-        print(f"\n--- Epoch {epoch+1}/{EPOCHS} ---")
+@user_passes_test(is_superuser)
+def page_edit(request, slug):
+    """Редактирование страницы и её блоков"""
+    page = get_object_or_404(LandingPage, slug=slug)
 
-        g_loss, d_loss, train_mse_linear = train_epoch(
-            generator, discriminator, train_loader, opt_g, opt_d, DEVICE
-        )
-        val_mse_linear, sample_data = validate(
-            generator, val_loader, vis_dataset, DEVICE
-        )
+    if request.method == 'POST':
+        form = LandingPageForm(request.POST, instance=page)
+        if form.is_valid():
+            page = form.save()
 
-        sched_g.step()
-        sched_d.step()
+            for block in page.blocks.all():
+                _save_existing_block(block, request, f'block_{block.pk}')
 
-        g_losses.append(g_loss)
-        d_losses.append(d_loss)
-        val_mses.append(val_mse_linear)
-        lr_history.append(opt_g.param_groups[0]['lr'])
+            deleted_ids = request.POST.getlist('delete_blocks')
+            if deleted_ids:
+                ContentBlock.objects.filter(pk__in=deleted_ids).delete()
 
-        print(f"   G: {g_loss:.3f} | D: {d_loss:.3f}")
-        print(f"   Train MSE (linear): {train_mse_linear:.6f}")
-        print(f"   Val MSE (linear):   {val_mse_linear:.6f} | LR: {opt_g.param_groups[0]['lr']:.2e}")
+            _save_new_blocks(page, request)
 
-        if val_mse_linear < best_loss:
-            best_loss = val_mse_linear
-            no_improve = 0
-            torch.save(generator.state_dict(), BEST_MODEL_FILE)
-            print(f"   ✓ Лучшая модель (Val MSE={best_loss:.6f})")
-        else:
-            no_improve += 1
-            print(f"   · Нет улучшения ({no_improve}/{EARLY_STOP_PATIENCE})")
+            messages.success(request, f'Страница "{page.title}" обновлена')
+            return redirect('page_edit', slug=page.slug)
+    else:
+        form = LandingPageForm(instance=page)
 
-        save_checkpoint(epoch+1, generator, discriminator, opt_g, opt_d, best_loss, CHECKPOINT_FILE)
+    blocks = page.blocks.all()
+    return render(request, 'landing/manage/form.html', {
+        'form': form,
+        'page': page,
+        'blocks': blocks,
+        'is_new': False,
+    })
 
-        plot_dashboard(epoch, g_losses, d_losses, val_mses, lr_history, 
-                    sample_data, REPORTS_DIR)
 
-        if no_improve >= EARLY_STOP_PATIENCE:
-            print(f"\n⏹️  Ранняя остановка на эпохе {epoch+1}")
-            break
-
-        if DEVICE.type == "cuda" and (epoch + 1) % 10 == 0:
-            torch.cuda.empty_cache()
-            gc.collect()
-
-    print(f"\n{'='*60}")
-    print(f"🏁 Обучение завершено!")
-    print(f"   Лучшая Val MSE (linear): {best_loss:.6f}")
-    print(f"   Модель сохранена: {BEST_MODEL_FILE}")
-    print(f"   Дашборды: {REPORTS_DIR}")
-
-    if sample_data is not None:
-        plot_dashboard(EPOCHS-1, g_losses, d_losses, val_mses, lr_history,
-                      sample_data, REPORTS_DIR)
-        print(f"   Финальный дашборд сохранён")
+@user_passes_test(is_superuser)
+def page_delete(request, slug):
+    page = get_object_or_404(LandingPage, slug=slug)
+    if request.method == 'POST':
+        title = page.title
+        page.delete()
+        messages.success(request, f'Страница "{title}" удалена')
+        return redirect('page_list')
+    return render(request, 'landing/manage/delete_confirm.html', {'page': page})
 ----------------------------------------
 
 ================================================================================
-Файл: F:\!Evgeny\src\py\au_to_img\config.py
+Файл: Z:\web\templates\landing\base.html
 ----------------------------------------
-# config.py
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Landing{% endblock %}</title>
+    <style>
+        *, *::before, *::after {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: #0d1117;
+            color: #c9d1d9;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        a { color: #58a6ff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 { font-size: 20px; margin-bottom: 16px; }
+        h2 { font-size: 16px; margin-bottom: 12px; }
+        button, .btn, input[type="submit"] {
+            display: inline-block;
+            padding: 6px 14px;
+            font-size: 12px;
+            font-family: inherit;
+            border: 1px solid #30363d;
+            border-radius: 5px;
+            background: #21262d;
+            color: #c9d1d9;
+            cursor: pointer;
+        }
+        button:hover, .btn:hover, input[type="submit"]:hover {
+            background: #30363d;
+        }
+        .btn-primary {
+            background: #238636;
+            border-color: #2ea043;
+        }
+        .btn-primary:hover { background: #2ea043; }
+        .btn-danger {
+            border-color: rgba(248,81,73,0.4);
+            color: #f85149;
+        }
+        .btn-danger:hover { background: #da3633; color: #fff; }
+        .btn-sm { padding: 4px 10px; font-size: 11px; }
+        input, textarea, select {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 4px;
+            padding: 6px 10px;
+            color: #c9d1d9;
+            font-family: inherit;
+            font-size: 13px;
+            width: 100%;
+        }
+        textarea { min-height: 80px; resize: vertical; }
+        .form-group { margin-bottom: 12px; }
+        .form-group label {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 12px;
+            color: #8b949e;
+        }
+        .form-group input[type="checkbox"] {
+            width: auto;
+            margin-right: 6px;
+        }
+        .messages { margin-bottom: 16px; }
+        .message {
+            padding: 8px 12px;
+            border-radius: 4px;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+        .message.success {
+            background: rgba(35,134,54,0.2);
+            border: 1px solid #238636;
+        }
+        .message.error {
+            background: rgba(248,81,73,0.2);
+            border: 1px solid #da3633;
+        }
+    </style>
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <div class="container">
+        {% if messages %}
+        <div class="messages">
+            {% for message in messages %}
+            <div class="message {{ message.tags }}">{{ message }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% block content %}{% endblock %}
+    </div>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>
+----------------------------------------
 
-PRESETS = {
-    # --- СТАНДАРТНЫЕ ПРЕСЕТЫ ---
-    # 75% перекрытие (hop = N_FFT / 4)
-    "75p_n512":   {"N_FFT": 512,  "HOP_LENGTH": 128},
-    "75p_n1024":  {"N_FFT": 1024, "HOP_LENGTH": 256},
-    "75p_n2048":  {"N_FFT": 2048, "HOP_LENGTH": 512},
-    "75p_n4096":  {"N_FFT": 4096, "HOP_LENGTH": 1024},
-    "75p_n8192":  {"N_FFT": 8192, "HOP_LENGTH": 2048},
+================================================================================
+Файл: Z:\web\templates\landing\page.html
+----------------------------------------
+{% extends 'landing/base.html' %}
 
-    # 87.5% перекрытие (hop = N_FFT / 8)
-    "87p_n256":   {"N_FFT": 256,  "HOP_LENGTH": 32},
-    "87p_n512":   {"N_FFT": 512,  "HOP_LENGTH": 64},
-    "87p_n1024":  {"N_FFT": 1024, "HOP_LENGTH": 128},
-    "87p_n2048":  {"N_FFT": 2048, "HOP_LENGTH": 256},
-    "87p_n4096":  {"N_FFT": 4096, "HOP_LENGTH": 512},
+{% block title %}{{ page.title }}{% endblock %}
 
-    # --- ПРЕСЕТЫ ДЛЯ JPEG-СЖАТИЯ ---
-    "jpeg_n256_75p":  {"N_FFT": 256,  "HOP_LENGTH": 64},
-    "jpeg_n512_75p":  {"N_FFT": 512,  "HOP_LENGTH": 128},
-    "jpeg_n512_87p":  {"N_FFT": 512,  "HOP_LENGTH": 64},
-    "jpeg_n1024_87p": {"N_FFT": 1024, "HOP_LENGTH": 128},
+{% block content %}
+{% if request.user.is_superuser %}
+<div style="margin-bottom: 16px;">
+    <a href="{% url 'page_list' %}">← К списку страниц</a>
+</div>
+{% endif %}
 
-    # --- ПРЕСЕТЫ ДЛЯ WebP-СЖАТИЯ ---
-    "webp_n128_75p":  {"N_FFT": 128,  "HOP_LENGTH": 32},
-    "webp_n128_87p":  {"N_FFT": 128,  "HOP_LENGTH": 16},
-    "webp_n256_75p":  {"N_FFT": 256,  "HOP_LENGTH": 64},
-    "webp_n256_87p":  {"N_FFT": 256,  "HOP_LENGTH": 32},
-    "webp_n512_87p":  {"N_FFT": 512,  "HOP_LENGTH": 64},
+<h1>{{ page.title }}</h1>
 
-    # --- ПРЕСЕТЫ ДЛЯ AVIF-СЖАТИЯ ---
-    "avif_n128_75p":  {"N_FFT": 128,  "HOP_LENGTH": 32},
-    "avif_n128_87p":  {"N_FFT": 128,  "HOP_LENGTH": 16},
-    "avif_n256_75p":  {"N_FFT": 256,  "HOP_LENGTH": 64},
-    "avif_n256_87p":  {"N_FFT": 256,  "HOP_LENGTH": 32},
-    "avif_n512_87p":  {"N_FFT": 512,  "HOP_LENGTH": 64},
+{% for block in blocks %}
+<div class="block" style="margin-bottom: 24px;">
+    {% if block.block_type == 'text' %}
+        {% if block.label %}
+        <h2>{{ block.label }}</h2>
+        {% endif %}
+        <div style="white-space: pre-wrap; margin-bottom: 8px;">{{ block.content }}</div>
+        {% if block.copyable %}
+        <button onclick="copyText(this, '{{ block.content|escapejs }}')" class="btn-sm">
+            📋 Копировать
+        </button>
+        {% endif %}
 
-    # --- ПРЕСЕТЫ ДЛЯ ВИДЕО-СЖАТИЯ ---
-    # Оптимизированы под высокую временную избыточность (87.5% перекрытие)
-    "video_n1024_87p": {"N_FFT": 1024, "HOP_LENGTH": 128},
-    "video_n2048_87p": {"N_FFT": 2048, "HOP_LENGTH": 256},
-    "video_n4096_87p": {"N_FFT": 4096, "HOP_LENGTH": 512},
-    
-    # 93.75% перекрытие — максимальная временная избыточность
-    "video_n1024_93p": {"N_FFT": 1024, "HOP_LENGTH": 64},
-    "video_n2048_93p": {"N_FFT": 2048, "HOP_LENGTH": 128},
+    {% elif block.block_type == 'image' %}
+        {% if block.label %}
+        <h2>{{ block.label }}</h2>
+        {% endif %}
+        {% if block.image %}
+        <img src="{{ block.image.url }}" alt="{{ block.label }}" style="max-width: 100%; border-radius: 4px;">
+        {% endif %}
 
-    "custom":  {"N_FFT": 4096, "HOP_LENGTH": 2048},
+    {% elif block.block_type == 'link' %}
+        {% if block.label %}
+        <h2>{{ block.label }}</h2>
+        {% endif %}
+        <a href="{{ block.url }}" target="_blank" rel="noopener noreferrer">{{ block.url }}</a>
+    {% endif %}
+</div>
+{% empty %}
+<p style="color: #8b949e;">Страница пуста</p>
+{% endfor %}
+
+<script>
+function copyText(btn, text) {
+    navigator.clipboard.writeText(text).then(function() {
+        btn.textContent = '✓ Скопировано';
+        setTimeout(function() {
+            btn.textContent = '📋 Копировать';
+        }, 2000);
+    });
+}
+</script>
+{% endblock %}
+----------------------------------------
+
+================================================================================
+Файл: Z:\web\templates\landing\password.html
+----------------------------------------
+{% extends 'landing/base.html' %}
+
+{% block title %}{{ page.title }} — Доступ{% endblock %}
+
+{% block content %}
+{% if request.user.is_superuser %}
+<div style="margin-bottom: 16px;">
+    <a href="{% url 'page_list' %}">← К списку страниц</a>
+</div>
+{% endif %}
+
+<div style="max-width: 360px; margin: 60px auto; text-align: center;">
+    <h1>🔒 Доступ ограничен</h1>
+    <p style="color: #8b949e; margin-bottom: 20px;">Введите пароль для доступа к странице</p>
+
+    <form method="post">
+        {% csrf_token %}
+        <div class="form-group">
+            <input type="password" name="password" placeholder="Пароль" required autofocus>
+        </div>
+        <button type="submit" class="btn-primary" style="width: 100%;">Открыть</button>
+    </form>
+</div>
+{% endblock %}
+----------------------------------------
+
+================================================================================
+Файл: Z:\web\templates\landing\manage\delete_confirm.html
+----------------------------------------
+{% extends 'landing/base.html' %}
+
+{% block title %}Удаление: {{ page.title }}{% endblock %}
+
+{% block content %}
+<div style="margin-bottom: 16px;">
+    <a href="{% url 'page_list' %}">← К списку страниц</a>
+</div>
+
+<div style="max-width: 440px; margin: 60px auto; text-align: center;">
+    <h1>Удалить страницу?</h1>
+    <p style="color: #8b949e; margin-bottom: 20px;">
+        Вы уверены, что хотите удалить <strong>{{ page.title }}</strong>?
+        Это действие нельзя отменить.
+    </p>
+
+    <form method="post">
+        {% csrf_token %}
+        <div style="display: flex; gap: 8px; justify-content: center;">
+            <button type="submit" class="btn-danger">Удалить</button>
+            <a href="{% url 'page_list' %}" class="btn">Отмена</a>
+        </div>
+    </form>
+</div>
+{% endblock %}
+----------------------------------------
+
+================================================================================
+Файл: Z:\web\templates\landing\manage\form.html
+----------------------------------------
+{% extends 'landing/base.html' %}
+
+{% block title %}{% if is_new %}Новая страница{% else %}Редактирование: {{ page.title }}{% endif %}{% endblock %}
+
+{% block content %}
+<h1>{% if is_new %}Новая страница{% else %}Редактирование: {{ page.title }}{% endif %}</h1>
+<div style="margin-bottom: 16px;">
+    <a href="{% url 'page_list' %}">← К списку страниц</a>
+</div>
+
+<form method="post" enctype="multipart/form-data" id="page-form">
+    {% csrf_token %}
+
+    <fieldset style="border: 1px solid #30363d; border-radius: 6px; padding: 16px; margin-bottom: 20px;">
+        <legend style="padding: 0 8px; color: #8b949e;">Настройки страницы</legend>
+
+        {% for field in form %}
+        <div class="form-group">
+            {{ field.label_tag }}
+            {{ field }}
+            {% if field.help_text %}
+            <small style="color: #8b949e;">{{ field.help_text }}</small>
+            {% endif %}
+            {% if field.errors %}
+            <div style="color: #f85149; font-size: 12px;">{{ field.errors }}</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+
+        {% if not is_new %}
+        <div class="form-group">
+            <label>Короткий идентификатор:</label>
+            <input type="text" value="{{ page.slug }}" readonly
+                   style="background: #161b22; cursor: not-allowed;">
+            <small style="color: #8b949e;">URL: dlike.ru/p/{{ page.slug }}/</small>
+        </div>
+        {% endif %}
+    </fieldset>
+
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h2 style="margin: 0;">Блоки</h2>
+        <div style="display: flex; gap: 8px;">
+            <button type="button" class="btn btn-sm" onclick="addTextBlock()">+ Текст</button>
+            <button type="button" class="btn btn-sm" onclick="addImageBlock()">+ Изображение</button>
+            <button type="button" class="btn btn-sm" onclick="addLinkBlock()">+ Ссылка</button>
+        </div>
+    </div>
+
+    <div id="blocks-container">
+        {% for block in blocks %}
+        <div class="block-item" data-block-id="{{ block.pk }}" style="border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-bottom: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <strong style="color: #8b949e;">
+                    {% if block.block_type == 'text' %}📝 Текст
+                    {% elif block.block_type == 'image' %}🖼️ Изображение
+                    {% elif block.block_type == 'link' %}🔗 Ссылка
+                    {% endif %}
+                </strong>
+                <button type="button" class="btn btn-sm btn-danger" onclick="deleteBlock(this)">Удалить</button>
+                <input type="hidden" name="delete_blocks" value="" disabled>
+            </div>
+
+            <div class="form-group">
+                <label>Заголовок</label>
+                <input type="text" name="block_{{ block.pk }}_label" value="{{ block.label }}">
+            </div>
+
+            {% if block.block_type == 'text' %}
+            <div class="form-group">
+                <label>Текст</label>
+                <textarea name="block_{{ block.pk }}_content">{{ block.content }}</textarea>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="block_{{ block.pk }}_copyable" {% if block.copyable %}checked{% endif %}>
+                    Можно копировать
+                </label>
+            </div>
+
+            {% elif block.block_type == 'link' %}
+            <div class="form-group">
+                <label>Ссылка (URL)</label>
+                <input type="url" name="block_{{ block.pk }}_url" value="{{ block.url }}" placeholder="https://...">
+            </div>
+
+            {% elif block.block_type == 'image' %}
+            {% if block.image %}
+            <div style="margin-bottom: 8px;">
+                <img src="{{ block.image.url }}" alt="" style="max-height: 150px; border-radius: 4px;">
+            </div>
+            {% endif %}
+
+            <div style="margin-bottom: 8px;">
+                <label style="margin-right: 16px;">
+                    <input type="radio" name="block_{{ block.pk }}_upload_method" value="file" checked onchange="toggleUploadMethod(this)">
+                    Загрузить файл
+                </label>
+                <label>
+                    <input type="radio" name="block_{{ block.pk }}_upload_method" value="url" onchange="toggleUploadMethod(this)">
+                    Указать ссылку
+                </label>
+            </div>
+
+            <div class="file-upload-field">
+                <div class="form-group">
+                    <label>Выберите файл</label>
+                    <input type="file" name="block_{{ block.pk }}_image" accept="image/*">
+                </div>
+            </div>
+
+            <div class="url-upload-field" style="display: none;">
+                <div class="form-group">
+                    <label>Ссылка на изображение</label>
+                    <input type="url" name="block_{{ block.pk }}_image_url" placeholder="https://example.com/image.jpg">
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+
+    <div style="margin-top: 20px; display: flex; gap: 8px;">
+        <button type="submit" class="btn-primary">Сохранить</button>
+        <a href="{% url 'page_list' %}" class="btn">Отмена</a>
+    </div>
+</form>
+
+<script>
+function addTextBlock() {
+    const container = document.getElementById('blocks-container');
+    const div = document.createElement('div');
+    div.className = 'block-item new-block';
+    div.style.cssText = 'border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-bottom: 12px;';
+
+    div.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <strong style="color: #8b949e;">📝 Новый текст</strong>
+            <button type="button" class="btn btn-sm btn-danger" onclick="deleteBlock(this)">Удалить</button>
+        </div>
+        <input type="hidden" name="new_block_type" value="text">
+        <div class="form-group">
+            <label>Заголовок</label>
+            <input type="text" name="new_label" value="">
+        </div>
+        <div class="form-group textarea-wrapper">
+            <label>Текст</label>
+        </div>
+        <div class="form-group">
+            <label>
+                <input type="checkbox" name="new_copyable">
+                Можно копировать
+            </label>
+        </div>
+    `;
+
+    const textarea = document.createElement('textarea');
+    textarea.name = 'new_content';
+    const wrapper = div.querySelector('.textarea-wrapper');
+    wrapper.appendChild(textarea);
+
+    container.appendChild(div);
 }
 
-DEFAULT_CONFIG = {
-    # --- ФАЙЛЫ ---
-    "mp3_file": "track.mp3",          # Входной аудиофайл (MP3 или WAV)
-    "active_preset": "75p_n4096",     # Пресет из PRESETS: размер FFT и длина хопа
-    
-    # --- ДИАПАЗОН ОБРАБОТКИ ---
-    "trim_enabled": True,             # Включить обрезку трека по времени
-    "trim_start": 60.0,                 # Начало обрабатываемого фрагмента в секундах
-    "trim_end": 130.0,                   # Конец обрабатываемого фрагмента (0 = до конца трека)
-    
-    # --- НАСТРОЙКИ ФОРМАТА ИЗОБРАЖЕНИЯ ---
-    "output_format": "jpeg",          # Формат: "png", "webp", "jpeg"/"jpg", "avif"
-    "output_quality": 5,              # Качество для webp/jpeg/avif (1-100). Для PNG: уровень сжатия (1-9)
-    "output_lossless": False,         # Lossless-режим для webp и avif
-
-    # --- ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ AVIF ---
-    "avif_speed": 0,                    # Скорость кодирования AVIF (0-10, 0 = лучшее сжатие)
-    "avif_subsampling": "4:2:0",        # Цветовая субдискретизация: "4:4:4", "4:2:2", "4:2:0"
-    
-    # --- МАСШТАБИРОВАНИЕ ИЗОБРАЖЕНИЯ ---
-    "scale_enabled": False,           # Включить масштабирование спектрограммы
-    "scale_x": 2,                     # Масштаб по ширине (деление: 2 = в 2 раза уже)
-    "scale_y": 1,                     # Масштаб по высоте (деление: 2 = в 2 раза ниже)
-    "scale_method": "lanczos",        # Метод интерполяции: "lanczos", "bilinear", "bicubic", "nearest"
-    
-    # --- ПАРАМЕТРЫ ГЕНЕРАЦИИ ФАЗЫ ---
-    "phase_generate_iterations": 5000,   # Число итераций Griffin-Lim (больше = точнее, но медленнее)
-    "phase_generate_random_seed": 454,    # Seed для воспроизводимости (-1 = случайный)
-    "griffin_lim_mode": "fast",     # Режим Griffin-Lim: "standard", "fast", "multi_scale"
-    "griffin_lim_parallel": True,       # Параллельная обработка Mid/Side (ускорение ~2x)
-    
-    # --- РАННЯЯ ОСТАНОВКА (early stopping) ---
-    "early_stop_enabled": True,         # Включить раннюю остановку
-    "early_stop_threshold": 0.0001,     # Минимальное улучшение ошибки для продолжения
-    "early_stop_patience": 10,          # Сколько итераций ждать улучшения перед остановкой
-    
-    # --- ПАРАМЕТРЫ MULTI-SCALE РЕЖИМА ---
-    "multi_scale_factor": 2,            # Фактор уменьшения для грубого этапа (2, 4, 8)
-    "multi_scale_coarse_iterations": -1, # Итераций на грубом этапе (-1 = все итерации)
-    "multi_scale_fine_iterations": 400,   # Итераций на точном этапе (-1 = половина от общего)
-    
-    # --- ОБРЕЗКА НИЗКИХ ЧАСТОТ (убирает инфразвук и DC) ---
-    "low_cut_enabled": True,            # Включить обрезку низких частот
-    "low_cut_freq": 0,                 # Частота среза снизу в Гц (рекомендуется 20-100)
-    
-    # --- ОБРЕЗКА ВЫСОКИХ ЧАСТОТ (экономия места) ---
-    "high_cut_enabled": True,           # Включить обрезку высоких частот
-    "high_cut_mode": "auto",            # "auto" - автоматический срез по спаду энергии
-                                        # "manual" - ручная установка частоты
-    "high_cut_freq": 16000,             # Частота среза сверху в Гц (для manual режима)
-    "high_cut_auto_threshold_db": -80,  # Порог энергии для автосреза (тише этого = обрезаем)
-    "high_cut_auto_freq_min": 8000,     # Минимальная частота, выше которой ищем спад
-    "high_cut_auto_margin_db": 10,      # Запас над порогом для надёжности среза
-
-        # --- НАСТРОЙКИ ВИДЕО-КОДИРОВАНИЯ (базовые) ---
-    "video_codec": "h265",              # Кодек: "h265"
-    "video_crf": 16,                    # Качество (0 = lossless, 51 = ужас, 16-28 разумно)
-    "video_preset": "veryslow",         # Скорость: "fast", "medium", "slow", "veryslow"
-    "video_fps": 30,                    # Частота кадров (не влияет на качество, только метаданные)
-    "video_columns_per_frame": 128,     # Размер кадра: сколько столбцов спектрограммы в кадре
-    "video_pixel_format": "yuv420p",    # Цветность: "yuv420p" или "yuv444p"
-
-    "data_dir": "data",                 # Папка для выходных файлов
+function addLinkBlock() {
+    const container = document.getElementById('blocks-container');
+    const div = document.createElement('div');
+    div.className = 'block-item new-block';
+    div.style.cssText = 'border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-bottom: 12px;';
+    div.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <strong style="color: #8b949e;">🔗 Новая ссылка</strong>
+            <button type="button" class="btn btn-sm btn-danger" onclick="deleteBlock(this)">Удалить</button>
+        </div>
+        <input type="hidden" name="new_block_type" value="link">
+        <div class="form-group">
+            <label>Заголовок</label>
+            <input type="text" name="new_label" value="">
+        </div>
+        <div class="form-group">
+            <label>Ссылка (URL)</label>
+            <input type="url" name="new_url" value="" placeholder="https://...">
+        </div>
+    `;
+    container.appendChild(div);
 }
+
+function addImageBlock() {
+    const container = document.getElementById('blocks-container');
+    const div = document.createElement('div');
+    div.className = 'block-item new-block';
+    div.style.cssText = 'border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-bottom: 12px;';
+    div.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <strong style="color: #8b949e;">🖼️ Новое изображение</strong>
+            <button type="button" class="btn btn-sm btn-danger" onclick="deleteBlock(this)">Удалить</button>
+        </div>
+        <input type="hidden" name="new_block_type" value="image">
+        <div class="form-group">
+            <label>Заголовок</label>
+            <input type="text" name="new_label" value="">
+        </div>
+
+        <div style="margin-bottom: 8px;">
+            <label style="margin-right: 16px;">
+                <input type="radio" name="new_upload_method" value="file" checked onchange="toggleUploadMethod(this)">
+                Загрузить файл
+            </label>
+            <label>
+                <input type="radio" name="new_upload_method" value="url" onchange="toggleUploadMethod(this)">
+                Указать ссылку
+            </label>
+        </div>
+
+        <div class="file-upload-field">
+            <div class="form-group">
+                <label>Выберите файл</label>
+                <input type="file" name="new_image" accept="image/*">
+            </div>
+        </div>
+
+        <div class="url-upload-field" style="display: none;">
+            <div class="form-group">
+                <label>Ссылка на изображение</label>
+                <input type="url" name="new_image_url" placeholder="https://example.com/image.jpg">
+            </div>
+        </div>
+    `;
+    container.appendChild(div);
+}
+
+function deleteBlock(btn) {
+    const block = btn.closest('.block-item');
+    const blockId = block.dataset.blockId;
+
+    if (blockId) {
+        const deleteInput = block.querySelector('input[name="delete_blocks"]');
+        deleteInput.disabled = false;
+        deleteInput.value = blockId;
+        block.style.opacity = '0.3';
+        btn.textContent = 'Будет удалён';
+        btn.className = 'btn btn-sm';
+        btn.onclick = function() { undoDelete(btn); };
+    } else {
+        block.remove();
+    }
+}
+
+function undoDelete(btn) {
+    const block = btn.closest('.block-item');
+    const deleteInput = block.querySelector('input[name="delete_blocks"]');
+    deleteInput.disabled = true;
+    deleteInput.value = '';
+    block.style.opacity = '1';
+    btn.textContent = 'Удалить';
+    btn.className = 'btn btn-sm btn-danger';
+    btn.onclick = function() { deleteBlock(btn); };
+}
+
+function toggleUploadMethod(radio) {
+    const block = radio.closest('.block-item');
+    const fileField = block.querySelector('.file-upload-field');
+    const urlField = block.querySelector('.url-upload-field');
+
+    if (radio.value === 'file') {
+        fileField.style.display = 'block';
+        urlField.style.display = 'none';
+    } else {
+        fileField.style.display = 'none';
+        urlField.style.display = 'block';
+    }
+}
+</script>
+{% endblock %}
+----------------------------------------
+
+================================================================================
+Файл: Z:\web\templates\landing\manage\list.html
+----------------------------------------
+{% extends 'landing/base.html' %}
+
+{% block title %}Страницы | Управление{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+    <h1>📄 Мои страницы</h1>
+    <a href="{% url 'page_create' %}" class="btn btn-primary">+ Создать</a>
+</div>
+
+{% if pages %}
+<table style="width: 100%; border-collapse: collapse;">
+    <thead>
+        <tr style="border-bottom: 1px solid #30363d;">
+            <th style="text-align: left; padding: 8px;">Название</th>
+            <th style="text-align: left; padding: 8px;">Slug</th>
+            <th style="text-align: left; padding: 8px;">Доступ</th>
+            <th style="text-align: left; padding: 8px;">Блоки</th>
+            <th style="text-align: right; padding: 8px;">Действия</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for page in pages %}
+        <tr style="border-bottom: 1px solid #21262d;">
+            <td style="padding: 8px;">{{ page.title }}</td>
+            <td style="padding: 8px; font-family: monospace;">{{ page.slug }}</td>
+            <td style="padding: 8px;">
+                {% if page.is_public %}🌐 Публичная{% else %}🔒 Закрытая{% endif %}
+            </td>
+            <td style="padding: 8px;">{{ page.blocks.count }}</td>
+            <td style="padding: 8px; text-align: right;">
+                <a href="{% url 'landing_page' slug=page.slug %}" class="btn btn-sm" target="_blank">Открыть</a>
+                <a href="{% url 'page_edit' slug=page.slug %}" class="btn btn-sm">Ред.</a>
+                <a href="{% url 'page_delete' slug=page.slug %}" class="btn btn-sm btn-danger">Удалить</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p style="color: #8b949e;">Нет созданных страниц</p>
+{% endif %}
+{% endblock %}
 ----------------------------------------
 
