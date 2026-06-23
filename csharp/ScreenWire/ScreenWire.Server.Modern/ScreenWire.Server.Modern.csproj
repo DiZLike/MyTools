@@ -1,0 +1,78 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>disable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>ScreenWire.Server</RootNamespace>
+    <AssemblyName>ScreenWire.Server.Modern</AssemblyName>
+    <ApplicationIcon>Terminal_64x64.ico</ApplicationIcon>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyVersion>1.0.0</AssemblyVersion>
+    <FileVersion>1.0.0</FileVersion>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Auth -->
+    <Compile Include="..\ScreenWire.Server.Common\Auth\Authenticator.cs" Link="Auth\Authenticator.cs" />
+
+    <!-- Capture (общие) -->
+    <Compile Include="..\ScreenWire.Server.Common\Capture\IScreenCaptor.cs" Link="Capture\IScreenCaptor.cs" />
+    <Compile Include="..\ScreenWire.Server.Common\Capture\BaseScreenCaptor.cs" Link="Capture\BaseScreenCaptor.cs" />
+    <Compile Include="..\ScreenWire.Server.Common\Capture\GdiScreenCaptor.cs" Link="Capture\GdiScreenCaptor.cs" />
+
+    <!-- Capture (специфичные для Modern) -->
+
+    <!-- Clipboard -->
+    <Compile Include="..\ScreenWire.Server.Common\Clipboard\ClipboardBridge.cs" Link="Clipboard\ClipboardBridge.cs" />
+
+    <!-- Config -->
+    <Compile Include="..\ScreenWire.Server.Common\Config\ServerConfig.cs" Link="Config\ServerConfig.cs" />
+
+    <!-- Input -->
+    <Compile Include="..\ScreenWire.Server.Common\Input\InputSimulator.cs" Link="Input\InputSimulator.cs" />
+
+    <!-- Network -->
+    <Compile Include="..\ScreenWire.Server.Common\Network\UdpClientSession.cs" Link="Network\UdpClientSession.cs" />
+    <Compile Include="..\ScreenWire.Server.Common\Network\UdpServer.cs" Link="Network\UdpServer.cs" />
+
+    <!-- Protocol -->
+    <Compile Include="..\ScreenWire.Server.Common\Protocol\UdpProtocol.cs" Link="Protocol\UdpProtocol.cs" />
+
+    <!-- Update -->
+    <Compile Include="..\ScreenWire.Server.Common\Update\UpdateManager.cs" Link="Update\UpdateManager.cs" />
+
+    <!-- UI -->
+    <Compile Include="..\ScreenWire.Server.Common\ServerMainForm.cs" Link="ServerMainForm.cs" />
+    <Compile Include="..\ScreenWire.Server.Common\ServerMainForm.Designer.cs" Link="ServerMainForm.Designer.cs" />
+    <Compile Include="..\ScreenWire.Server.Common\Program.cs" Link="Program.cs" />
+
+    <!-- Properties -->
+    <Compile Include="..\ScreenWire.Server.Common\Properties\Resources.Designer.cs" Link="Properties\Resources.Designer.cs" />
+    <Compile Include="..\ScreenWire.Server.Common\Properties\Settings.Designer.cs" Link="Properties\Settings.Designer.cs" />
+
+    <!-- Resources -->
+    <EmbeddedResource Include="..\ScreenWire.Server.Common\ServerMainForm.resx" Link="ServerMainForm.resx" />
+    <EmbeddedResource Include="..\ScreenWire.Server.Common\Properties\Resources.resx" Link="Properties\Resources.resx" />
+
+    <!-- Icons and tools -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SharpDX.Direct3D11" Version="4.2.0" />
+    <PackageReference Include="SharpDX.DXGI" Version="4.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="7z.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="7z.exe">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

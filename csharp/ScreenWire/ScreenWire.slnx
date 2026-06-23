@@ -1,0 +1,9 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="ScreenWire.Client/ScreenWire.Client.csproj" Id="1a8a4e68-e061-4196-9821-7ec5a0298a08" />
+  <Project Path="ScreenWire.Server.Legacy/ScreenWire.Server.Legacy.csproj" Id="cce991be-3d06-4f0c-966c-9f32b0358df3" />
+  <Project Path="ScreenWire.Server.Modern/ScreenWire.Server.Modern.csproj" Id="0a52531e-7993-4457-b70e-bda6cf9fa320" />
+</Solution>

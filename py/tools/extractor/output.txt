@@ -1,0 +1,975 @@
+Файл: D:\Evgeny\git\MyTools\csharp\ScreenWire\ScreenWire.Client\Config\ClientConfig.cs
+----------------------------------------
+﻿using System;
+using System.IO;
+using System.Text;
+
+namespace ScreenWire.Client.Config;
+
+public class ClientConfig
+{
+    private readonly string _path;
+
+    public string ServerAddress { get; set; } = "127.0.0.1";
+    public int Port { get; set; } = 9090;
+    public string Password { get; set; } = "";
+    public int FrameRate { get; set; } = 20;
+    public int JpegQuality { get; set; } = 50;
+    public bool ScaleToFit { get; set; } = true;
+
+    public ClientConfig()
+        : this(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "client.ini"))
+    { }
+
+    public ClientConfig(string path)
+    {
+        _path = path;
+    }
+
+    public void Load()
+    {
+        if (!File.Exists(_path)) return;
+
+        foreach (var line in File.ReadAllLines(_path, Encoding.UTF8))
+        {
+            var parts = line.Split('=');
+            if (parts.Length != 2) continue;
+
+            var key = parts[0].Trim().ToLowerInvariant();
+            var value = parts[1].Trim();
+
+            switch (key)
+            {
+                case "serveraddress":
+                    ServerAddress = value;
+                    break;
+                case "port":
+                    if (int.TryParse(value, out int port) && port > 0)
+                        Port = port;
+                    break;
+                case "password":
+                    Password = value;
+                    break;
+                case "framerate":
+                    if (int.TryParse(value, out int fr))
+                        FrameRate = Math.Clamp(fr, 1, 60);
+                    break;
+                case "jpegquality":
+                    if (int.TryParse(value, out int q))
+                        JpegQuality = Math.Clamp(q, 1, 100);
+                    break;
+                case "scaletofit":
+                    ScaleToFit = value.ToLowerInvariant() == "true";
+                    break;
+            }
+        }
+    }
+
+    public void Save()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"ServerAddress={ServerAddress}");
+        sb.AppendLine($"Port={Port}");
+        sb.AppendLine($"Password={Password}");
+        sb.AppendLine($"FrameRate={FrameRate}");
+        sb.AppendLine($"JpegQuality={JpegQuality}");
+        sb.AppendLine($"ScaleToFit={ScaleToFit}");
+        File.WriteAllText(_path, sb.ToString(), Encoding.UTF8);
+    }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\ScreenWire\ScreenWire.Client\Network\UdpClient.cs
+----------------------------------------
+﻿using System;
+using System.Collections.Concurrent;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Text;
+using ScreenWire.Client.Protocol;
+
+namespace ScreenWire.Client.Network;
+
+public class UdpClient : IDisposable
+{
+    private Socket? _cmd;
+    private TcpClient? _tcp;
+    private NetworkStream? _videoStream;
+    private IPEndPoint? _server;
+    private volatile bool _running;
+    private ushort _msgId;
+    private readonly ConcurrentQueue<ReceivedCmd> _queue = new();
+    private readonly SynchronizationContext? _sync = SynchronizationContext.Current;
+    private CancellationTokenSource? _cts;
+
+    private const bool ENABLE_LOGGING = false;
+    private static readonly string LogPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "debug.log");
+
+    public event EventHandler<byte[]>? ScreenshotReceived;
+    public event EventHandler<(int Width, int Height)>? ScreenInfoReceived;
+    public event EventHandler<byte[]>? DisplayInfoReceived;
+    public event EventHandler<string>? ClipboardTextReceived;
+    public event EventHandler<string>? ConnectionError;
+    public event EventHandler<string>? StatusChanged;
+    public event EventHandler<bool>? ConnectedChanged;
+
+    private volatile bool _connected;
+    public bool Connected
+    {
+        get => _connected;
+        private set
+        {
+            if (_connected != value)
+            {
+                _connected = value;
+                PostToUI(() => ConnectedChanged?.Invoke(this, value));
+            }
+        }
+    }
+
+    public async Task<bool> ConnectAsync(string ip, int port, string password)
+    {
+        try
+        {
+            Log("Connecting to " + ip + ":" + port);
+            RaiseStatus("Подключение...");
+            _cts = new CancellationTokenSource();
+            _server = new IPEndPoint(IPAddress.Parse(ip), port);
+            _cmd = BindSocket(0);
+
+            _running = true;
+            _ = Task.Run(() => CmdLoop(_cts.Token));
+
+            RaiseStatus("Авторизация...");
+            Send(UdpProtocol.MsgAuthRequest, null);
+
+            var salt = await WaitForAsync(UdpProtocol.MsgAuthRequest, 5000);
+            if (salt == null) { Log("No salt received"); Error("Нет ответа от сервера"); Disconnect(); return false; }
+            Log("Salt received: " + salt.Length + " bytes");
+
+            var hash = ComputeHash(password, salt);
+            Send(UdpProtocol.MsgAuthResponse, Encoding.UTF8.GetBytes(hash));
+
+            var res = await WaitForAsync(UdpProtocol.MsgAuthResult, 5000);
+            if (res == null || res.Length < 1 || res[0] != UdpProtocol.AuthOk)
+            {
+                Log("Auth failed: " + (res != null && res.Length > 0 ? res[0].ToString() : "no response"));
+                Error("Неверный пароль"); Disconnect(); return false;
+            }
+
+            Log("Auth OK, waiting for screen info...");
+            var info = await WaitForAsync(UdpProtocol.MsgScreenInfo, 5000);
+            if (info != null && info.Length >= 8)
+            {
+                int w = BitConverter.ToInt32(info, 0);
+                int h = BitConverter.ToInt32(info, 4);
+                Log("Screen info: " + w + "x" + h);
+                PostToUI(() => ScreenInfoReceived?.Invoke(this, (w, h)));
+            }
+
+            // Ждём информацию о мониторах
+            var displayInfo = await WaitForAsync(UdpProtocol.MsgDisplayInfo, 5000);
+            if (displayInfo != null && displayInfo.Length > 0)
+            {
+                Log("Display info received: " + displayInfo[0] + " monitors");
+                PostToUI(() => DisplayInfoReceived?.Invoke(this, displayInfo));
+            }
+
+            Log("Connecting TCP for video...");
+            _tcp = new TcpClient();
+            _tcp.NoDelay = true;
+            _tcp.ReceiveTimeout = 5000;
+            _tcp.SendTimeout = 5000;
+            await _tcp.ConnectAsync(IPAddress.Parse(ip), port + 1);
+            _videoStream = _tcp.GetStream();
+            Log("TCP video connected on port " + (port + 1));
+
+            _ = Task.Run(() => VideoLoop(_cts.Token));
+
+            Connected = true;
+            Log("Connected successfully");
+            RaiseStatus("Подключено");
+            return true;
+        }
+        catch (Exception ex) { Log("Connect exception: " + ex); Error(ex.Message); Disconnect(); return false; }
+    }
+
+    public void SendFpsRequest(int fps) => Send(UdpProtocol.MsgFpsRequest, [(byte)Math.Clamp(fps, 1, 60)]);
+    public void SendQuality(int q) => Send(UdpProtocol.MsgQualityRequest, [(byte)Math.Clamp(q, 1, 100)]);
+    public void SendDisplaySelect(int index) => Send(UdpProtocol.MsgDisplaySelect, [(byte)index]);
+
+    public void SendMouseEvent(byte flags, short x, short y, short wheel)
+    {
+        byte[] p = new byte[7];
+        p[0] = flags;
+        BitConverter.GetBytes(x).CopyTo(p, 1);
+        BitConverter.GetBytes(y).CopyTo(p, 3);
+        BitConverter.GetBytes(wheel).CopyTo(p, 5);
+        SendFast(UdpProtocol.MsgMouseEvent, p);
+    }
+
+    public void SendKeyboardEvent(byte flags, byte vk)
+        => SendFast(UdpProtocol.MsgKeyboardEvent, [flags, vk]);
+
+    public void SendClipboardText(string t)
+        => Send(UdpProtocol.MsgClipboardText, Encoding.UTF8.GetBytes(t ?? ""));
+
+    public async Task<bool> SendUpdateAsync(string zipFilePath, Action<string>? progressCallback = null)
+    {
+        if (!Connected || _cmd == null || _server == null)
+        { progressCallback?.Invoke("Нет подключения к серверу"); return false; }
+        if (!File.Exists(zipFilePath))
+        { progressCallback?.Invoke("Файл обновления не найден: " + zipFilePath); return false; }
+
+        try
+        {
+            progressCallback?.Invoke("Запрос обновления сервера...");
+            Send(UdpProtocol.MsgUpdateRequest, null);
+
+            var portData = await WaitForAsync(UdpProtocol.MsgUpdatePort, 10000);
+            if (portData == null || portData.Length < 2)
+            { progressCallback?.Invoke("Сервер не ответил на запрос обновления"); return false; }
+
+            ushort updatePort = BitConverter.ToUInt16(portData, 0);
+            progressCallback?.Invoke($"Сервер готов, порт TCP: {updatePort}");
+
+            using var tcp = new TcpClient();
+            await tcp.ConnectAsync(_server.Address, updatePort);
+            tcp.SendTimeout = 30000;
+            using var ns = tcp.GetStream();
+            using var fs = File.OpenRead(zipFilePath);
+
+            long fileSize = fs.Length, sent = 0;
+            byte[] buffer = new byte[8192];
+            DateTime lastProgress = DateTime.Now;
+            progressCallback?.Invoke($"Отправка обновления ({FormatSize(fileSize)})...");
+
+            int bytesRead;
+            while ((bytesRead = await fs.ReadAsync(buffer, 0, buffer.Length)) > 0)
+            {
+                await ns.WriteAsync(buffer, 0, bytesRead);
+                sent += bytesRead;
+                if ((DateTime.Now - lastProgress).TotalMilliseconds > 500 && progressCallback != null)
+                {
+                    int percent = (int)(sent * 100 / fileSize);
+                    progressCallback($"Отправлено: {percent}% ({FormatSize(sent)} / {FormatSize(fileSize)})");
+                    lastProgress = DateTime.Now;
+                }
+            }
+            await ns.FlushAsync();
+            progressCallback?.Invoke("Обновление отправлено. Сервер перезапускается...");
+            return true;
+        }
+        catch (Exception ex) { progressCallback?.Invoke("Ошибка при отправке обновления: " + ex.Message); return false; }
+    }
+
+    public void Disconnect()
+    {
+        Log("Disconnecting...");
+        Connected = false;
+        _running = false;
+
+        try { SendFast(UdpProtocol.MsgDisconnect, null); } catch { }
+
+        _cts?.Cancel(); _cts?.Dispose(); _cts = null;
+        try { _cmd?.Close(); } catch { }
+        try { _videoStream?.Close(); } catch { }
+        try { _tcp?.Close(); } catch { }
+        _cmd = null; _videoStream = null; _tcp = null;
+        while (_queue.TryDequeue(out _)) { }
+        RaiseStatus("Отключено");
+        Log("Disconnected");
+    }
+
+    public void Dispose() { Disconnect(); GC.SuppressFinalize(this); }
+
+    private void Send(byte type, byte[]? payload)
+    {
+        if (_cmd == null || _server == null) return;
+        try { _cmd.SendTo(UdpProtocol.CreateCommandPacket(_msgId++, type, payload), _server); } catch { }
+    }
+
+    private void SendFast(byte type, byte[]? payload)
+    {
+        if (_cmd == null || _server == null) return;
+        try
+        {
+            int plen = payload?.Length ?? 0;
+            byte[] packet = new byte[UdpProtocol.CmdHeaderSize + plen];
+            Buffer.BlockCopy(UdpProtocol.Magic, 0, packet, 0, 4);
+            packet[4] = 0; packet[5] = 0; packet[6] = type;
+            packet[7] = (byte)(plen >> 8); packet[8] = (byte)(plen & 0xFF);
+            if (plen > 0 && payload != null) Buffer.BlockCopy(payload, 0, packet, UdpProtocol.CmdHeaderSize, plen);
+            _cmd.SendTo(packet, _server);
+        }
+        catch { }
+    }
+
+    private async Task<byte[]?> WaitForAsync(byte expectedType, int timeoutMs)
+    {
+        using var cts = new CancellationTokenSource(timeoutMs);
+        try
+        {
+            while (!cts.Token.IsCancellationRequested)
+            {
+                var snapshot = _queue.ToArray();
+                foreach (var cmd in snapshot)
+                {
+                    if (cmd.Type == expectedType)
+                    {
+                        var newQueue = new ConcurrentQueue<ReceivedCmd>(snapshot.Where(c => c != cmd));
+                        while (_queue.TryDequeue(out _)) { }
+                        foreach (var c in newQueue) _queue.Enqueue(c);
+                        return cmd.Data;
+                    }
+                }
+                await Task.Delay(10, cts.Token);
+            }
+        }
+        catch (OperationCanceledException) { }
+        return null;
+    }
+
+    private async Task CmdLoop(CancellationToken ct)
+    {
+        var buf = new byte[65536];
+        var ep = new IPEndPoint(IPAddress.Any, 0);
+        EndPoint remoteEp = ep;
+        while (!ct.IsCancellationRequested && _running)
+        {
+            try
+            {
+                if (_cmd!.Available > 0)
+                {
+                    var result = await _cmd.ReceiveFromAsync(buf, SocketFlags.None, remoteEp);
+                    byte[] p = new byte[result.ReceivedBytes];
+                    Buffer.BlockCopy(buf, 0, p, 0, result.ReceivedBytes);
+                    if (UdpProtocol.ParseCommandHeader(p, out _, out byte type, out ushort plen))
+                    {
+                        byte[] data = new byte[plen];
+                        if (plen > 0) Buffer.BlockCopy(p, UdpProtocol.CmdHeaderSize, data, 0, plen);
+                        _queue.Enqueue(new ReceivedCmd { Type = type, Data = data });
+                    }
+                }
+                else await Task.Delay(1, ct);
+            }
+            catch (SocketException) { if (_running && !ct.IsCancellationRequested) await Task.Delay(10, ct); }
+            catch (OperationCanceledException) { break; }
+            catch { }
+        }
+    }
+
+    private async Task VideoLoop(CancellationToken ct)
+    {
+        var lenBuf = new byte[4];
+        while (!ct.IsCancellationRequested && _running && _videoStream != null)
+        {
+            try
+            {
+                int read = await ReadExactAsync(_videoStream, lenBuf, 0, 4, ct);
+                if (read < 4) break;
+
+                int packetLen = (lenBuf[0] << 24) | (lenBuf[1] << 16) | (lenBuf[2] << 8) | lenBuf[3];
+                if (packetLen <= 0 || packetLen > 10 * 1024 * 1024) break;
+
+                byte[] jpeg = new byte[packetLen];
+                read = await ReadExactAsync(_videoStream, jpeg, 0, packetLen, ct);
+                if (read < packetLen) break;
+
+                PostToUI(() => ScreenshotReceived?.Invoke(this, jpeg));
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex)
+            {
+                Log("VideoLoop error: " + ex.Message);
+                if (_running && !ct.IsCancellationRequested)
+                {
+                    PostToUI(() => ConnectionError?.Invoke(this, "Видео-соединение разорвано"));
+                    Disconnect();
+                }
+                break;
+            }
+        }
+    }
+
+    private static async Task<int> ReadExactAsync(NetworkStream stream, byte[] buffer, int offset, int count, CancellationToken ct)
+    {
+        int totalRead = 0;
+        while (totalRead < count)
+        {
+            int read = await stream.ReadAsync(buffer, offset + totalRead, count - totalRead, ct);
+            if (read == 0) return totalRead;
+            totalRead += read;
+        }
+        return totalRead;
+    }
+
+    private static Socket BindSocket(int port)
+    {
+        var s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        s.Bind(new IPEndPoint(IPAddress.Any, port));
+        s.Blocking = false;
+        s.ReceiveBufferSize = 1048576;
+        s.SendBufferSize = 1048576;
+        return s;
+    }
+
+    private static string ComputeHash(string password, byte[] salt)
+    {
+        using var sha = SHA256.Create();
+        byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(password ?? ""));
+        byte[] combined = new byte[hash.Length + salt.Length];
+        Buffer.BlockCopy(hash, 0, combined, 0, hash.Length);
+        Buffer.BlockCopy(salt, 0, combined, hash.Length, salt.Length);
+        byte[] finalHash = sha.ComputeHash(combined);
+        var sb = new StringBuilder(64);
+        foreach (var b in finalHash) sb.AppendFormat("{0:x2}", b);
+        return sb.ToString();
+    }
+
+    private static string FormatSize(long bytes)
+    {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return (bytes / 1024.0).ToString("F1") + " KB";
+        return (bytes / (1024.0 * 1024.0)).ToString("F1") + " MB";
+    }
+
+    private void PostToUI(Action action)
+    {
+        if (_sync != null) _sync.Post(_ => action(), null);
+        else action();
+    }
+
+    private void RaiseStatus(string s) => PostToUI(() => StatusChanged?.Invoke(this, s));
+    private void Error(string s) => PostToUI(() => ConnectionError?.Invoke(this, s));
+
+    private static void Log(string msg)
+    {
+        if (!ENABLE_LOGGING) return;
+        try
+        {
+            File.AppendAllText(LogPath,
+                DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " [Cli] " + msg + Environment.NewLine,
+                Encoding.UTF8);
+        }
+        catch { }
+    }
+
+    private class ReceivedCmd { public byte Type { get; init; } public byte[] Data { get; init; } = []; }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\ScreenWire\ScreenWire.Client\Protocol\UdpProtocol.cs
+----------------------------------------
+﻿using System;
+
+namespace ScreenWire.Client.Protocol;
+
+public static class UdpProtocol
+{
+    public static readonly byte[] Magic = { (byte)'S', (byte)'C', (byte)'W', (byte)'I' };
+
+    public const byte MsgAuthRequest = 0x01;
+    public const byte MsgAuthResponse = 0x02;
+    public const byte MsgAuthResult = 0x03;
+    public const byte MsgScreenInfo = 0x04;
+    public const byte MsgFrameRequest = 0x05;
+    public const byte MsgMouseEvent = 0x06;
+    public const byte MsgKeyboardEvent = 0x07;
+    public const byte MsgQualityRequest = 0x08;
+    public const byte MsgClipboardText = 0x09;
+    public const byte MsgPing = 0x0A;
+    public const byte MsgUpdateRequest = 0x0B;
+    public const byte MsgUpdatePort = 0x0C;
+    public const byte MsgUpdateStatus = 0x0D;
+    public const byte MsgDisconnect = 0x0E;
+    public const byte MsgFpsRequest = 0x0F;
+    public const byte MsgDisplaySelect = 0x10;
+    public const byte MsgDisplayInfo = 0x11;
+    public const byte MsgAck = 0xFF;
+
+    public const byte AuthOk = 0x00;
+    public const byte AuthBadPassword = 0x01;
+
+    public const byte MouseLeftDown = 1 << 0;
+    public const byte MouseRightDown = 1 << 1;
+    public const byte MouseMiddleDown = 1 << 2;
+    public const byte MouseX1Down = 1 << 3;
+    public const byte MouseX2Down = 1 << 4;
+    public const byte MouseMove = 1 << 5;
+    public const byte MouseWheel = 1 << 6;
+    public const byte KeyDown = 1 << 0;
+
+    public const int CmdHeaderSize = 9;
+    public const int VideoHeaderSize = 10;
+    public const int BlockHeaderSize = 12;
+    public const int TcpLengthPrefixSize = 4;
+
+    public const int AckTimeout = 3000;
+    public const int MaxRetries = 5;
+
+    public const byte VideoFlagKeyFrame = 0x01;
+    public const byte VideoFlagDelta = 0x00;
+
+    public const byte UpdateStatusReady = 0x00;
+    public const byte UpdateStatusReceiving = 0x01;
+    public const byte UpdateStatusVerifying = 0x02;
+    public const byte UpdateStatusInstalling = 0x03;
+    public const byte UpdateStatusSuccess = 0x04;
+    public const byte UpdateStatusError = 0xFF;
+
+    public const byte UpdateErrorNone = 0x00;
+    public const byte UpdateErrorInvalidZip = 0x01;
+    public const byte UpdateErrorNoExe = 0x02;
+    public const byte UpdateErrorExtract = 0x03;
+    public const byte UpdateErrorInstall = 0x04;
+    public const byte UpdateErrorTimeout = 0x05;
+
+    public static byte[] CreateCommandPacket(ushort msgId, byte type, byte[]? payload)
+    {
+        int plen = payload?.Length ?? 0;
+        byte[] p = new byte[CmdHeaderSize + plen];
+        Buffer.BlockCopy(Magic, 0, p, 0, 4);
+        p[4] = (byte)(msgId >> 8);
+        p[5] = (byte)(msgId & 0xFF);
+        p[6] = type;
+        p[7] = (byte)(plen >> 8);
+        p[8] = (byte)(plen & 0xFF);
+        if (plen > 0) Buffer.BlockCopy(payload, 0, p, CmdHeaderSize, plen);
+        return p;
+    }
+
+    public static byte[] CreateAckPacket(ushort msgId) => CreateCommandPacket(msgId, MsgAck, null);
+
+    public static bool ParseCommandHeader(byte[] p, out ushort msgId, out byte type, out ushort plen)
+    {
+        msgId = 0; type = 0; plen = 0;
+        if (p.Length < CmdHeaderSize) return false;
+        if (p[0] != Magic[0] || p[1] != Magic[1] || p[2] != Magic[2] || p[3] != Magic[3]) return false;
+        msgId = (ushort)((p[4] << 8) | p[5]);
+        type = p[6];
+        plen = (ushort)((p[7] << 8) | p[8]);
+        return true;
+    }
+
+    public static byte[] CreateVideoBlockPacket(uint frameId, byte flags, ushort blockIndex, ushort totalBlocks,
+        ushort blockX, ushort blockY, ushort blockW, ushort blockH, byte[] jpegData)
+    {
+        int header = VideoHeaderSize + BlockHeaderSize;
+        byte[] p = new byte[header + jpegData.Length];
+        p[0] = (byte)(frameId >> 24);
+        p[1] = (byte)(frameId >> 16);
+        p[2] = (byte)(frameId >> 8);
+        p[3] = (byte)frameId;
+        p[4] = flags;
+        p[5] = (byte)(blockIndex >> 8);
+        p[6] = (byte)(blockIndex & 0xFF);
+        p[7] = (byte)(totalBlocks >> 8);
+        p[8] = (byte)(totalBlocks & 0xFF);
+        p[9] = 0;
+        p[10] = (byte)(blockX >> 8);
+        p[11] = (byte)(blockX & 0xFF);
+        p[12] = (byte)(blockY >> 8);
+        p[13] = (byte)(blockY & 0xFF);
+        p[14] = (byte)(blockW >> 8);
+        p[15] = (byte)(blockW & 0xFF);
+        p[16] = (byte)(blockH >> 8);
+        p[17] = (byte)(blockH & 0xFF);
+        p[18] = (byte)(jpegData.Length >> 24);
+        p[19] = (byte)(jpegData.Length >> 16);
+        p[20] = (byte)(jpegData.Length >> 8);
+        p[21] = (byte)(jpegData.Length & 0xFF);
+        Buffer.BlockCopy(jpegData, 0, p, header, jpegData.Length);
+        return p;
+    }
+
+    public static bool ParseVideoBlockHeader(byte[] p, out uint frameId, out byte flags,
+        out ushort blockIndex, out ushort totalBlocks,
+        out ushort blockX, out ushort blockY,
+        out ushort blockW, out ushort blockH,
+        out int jpegSize)
+    {
+        frameId = 0; flags = 0; blockIndex = 0; totalBlocks = 0;
+        blockX = 0; blockY = 0; blockW = 0; blockH = 0; jpegSize = 0;
+
+        int minLen = VideoHeaderSize + BlockHeaderSize;
+        if (p.Length < minLen) return false;
+
+        frameId = (uint)((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]);
+        flags = p[4];
+        blockIndex = (ushort)((p[5] << 8) | p[6]);
+        totalBlocks = (ushort)((p[7] << 8) | p[8]);
+
+        blockX = (ushort)((p[10] << 8) | p[11]);
+        blockY = (ushort)((p[12] << 8) | p[13]);
+        blockW = (ushort)((p[14] << 8) | p[15]);
+        blockH = (ushort)((p[16] << 8) | p[17]);
+        jpegSize = (p[18] << 24) | (p[19] << 16) | (p[20] << 8) | p[21];
+
+        return p.Length >= minLen + jpegSize;
+    }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\ScreenWire\ScreenWire.Client\MainForm.cs
+----------------------------------------
+using System;
+using System.Drawing;
+using System.IO;
+using System.Windows.Forms;
+using ScreenWire.Client.Config;
+using ScreenWire.Client.Network;
+using ScreenWire.Client.UI;
+using Timer = System.Windows.Forms.Timer;
+
+namespace ScreenWire.Client;
+
+public partial class MainForm : Form
+{
+    private UdpClient? _client;
+    private readonly ClientConfig _config = new();
+    private readonly Timer _statsTimer = new();
+    private int _serverW, _serverH;
+    private int _frameCount;
+    private DateTime _fpsTime;
+    private FormBorderStyle _savedBorder;
+    private bool _isFull;
+    private byte _mouseFlags;
+    private string _lastClip = "";
+    private readonly Timer _clipTimer = new() { Interval = 500 };
+    private MemoryStream? _currentImageStream;
+
+    public MainForm()
+    {
+        InitializeComponent();
+
+        typeof(PictureBox).InvokeMember("DoubleBuffered",
+            System.Reflection.BindingFlags.SetProperty |
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.NonPublic,
+            null, pictureBox, new object[] { true });
+
+        _config.Load();
+
+        _statsTimer.Tick += StatsTick;
+        _clipTimer.Tick += ClipTick;
+
+        menuScaleToFit.Checked = _config.ScaleToFit;
+        ApplyScale();
+
+        pictureBox.TabStop = true;
+        KeyPreview = true;
+        Icon = SystemIcons.Application;
+    }
+
+    private async void MenuConnect_Click(object? sender, EventArgs e)
+    {
+        string pw;
+        using (var f = new ConnectForm())
+        {
+            f.SetDefaults(_config.ServerAddress, _config.Port, _config.Password);
+            if (f.ShowDialog(this) != DialogResult.OK) return;
+            _config.ServerAddress = f.ServerAddress; _config.Port = f.Port;
+            pw = f.Password; _config.Password = f.SavePassword ? pw : "";
+            _config.Save();
+        }
+        await ConnectAsync(pw);
+    }
+
+    private async Task ConnectAsync(string password)
+    {
+        menuConnect.Enabled = false; lblStatus.Text = "Подключение...";
+        _client?.Dispose(); _client = new UdpClient();
+        _client.ScreenshotReceived += OnScreenshotReceived;
+        _client.ScreenInfoReceived += OnScreenInfoReceived;
+        _client.DisplayInfoReceived += OnDisplayInfoReceived;
+        _client.ClipboardTextReceived += OnClipboardTextReceived;
+        _client.ConnectionError += OnConnectionError;
+        _client.StatusChanged += OnStatusChanged;
+        _client.ConnectedChanged += OnConnectedChanged;
+        if (!await _client.ConnectAsync(_config.ServerAddress, _config.Port, password))
+        { menuConnect.Enabled = true; lblStatus.Text = "Не подключено"; }
+    }
+
+    private void OnScreenshotReceived(object? sender, byte[] jpeg)
+    {
+        if (jpeg == null || jpeg.Length == 0) return;
+        try
+        {
+            var newStream = new MemoryStream(jpeg);
+            var oldStream = _currentImageStream;
+            var oldImage = pictureBox.Image;
+            pictureBox.ImageLocation = null;
+            using (var ms = new MemoryStream(jpeg))
+            {
+                pictureBox.Image = Image.FromStream(ms);
+            }
+            _currentImageStream = newStream;
+            oldImage?.Dispose(); oldStream?.Dispose();
+            _frameCount++;
+        }
+        catch { }
+    }
+
+    private void OnScreenInfoReceived(object? sender, (int Width, int Height) info)
+    {
+        _serverW = info.Width; _serverH = info.Height;
+        lblResolution.Text = $"{info.Width}x{info.Height}";
+        if (!menuScaleToFit.Checked && !_isFull)
+        {
+            ClientSize = new Size(
+                Math.Min(info.Width, Screen.PrimaryScreen!.WorkingArea.Width - 50),
+                Math.Min(info.Height, Screen.PrimaryScreen!.WorkingArea.Height - 100));
+        }
+    }
+
+    private void OnDisplayInfoReceived(object? sender, byte[] data)
+    {
+        if (InvokeRequired) { Invoke(() => OnDisplayInfoReceived(sender, data)); return; }
+
+        toolStrip1.Items.Clear();
+        int count = data[0];
+
+        for (int i = 0; i < count; i++)
+        {
+            int x = BitConverter.ToUInt16(data, 1 + i * 8);
+            int y = BitConverter.ToUInt16(data, 1 + i * 8 + 2);
+            int w = BitConverter.ToUInt16(data, 1 + i * 8 + 4);
+            int h = BitConverter.ToUInt16(data, 1 + i * 8 + 6);
+            string position = x == 0 ? "левый" : "правый";
+
+            ToolStripButton mon = new ToolStripButton();
+            mon.Click += Mon_Click;
+            mon.Text = $"Монитор {i + 1}";
+            mon.Tag = i;
+            toolStrip1.Items.Add( mon );
+        }
+        ToolStripButton mon_all = new ToolStripButton();
+        mon_all.Click += Mon_Click;
+        mon_all.Text = "Все мониторы";
+        mon_all.Tag = count;
+        toolStrip1.Items.Add(mon_all);
+    }
+
+    private void Mon_Click(object sender, EventArgs e)
+    {
+        int idx = int.Parse((sender as ToolStripButton).Tag.ToString());
+        SetDisplay(idx);
+    }
+
+    private void SetDisplay(int idx)
+    {
+        if (_client == null || !_client.Connected || idx < 0) return;
+        _client.SendDisplaySelect(idx);
+    }
+
+    private void OnClipboardTextReceived(object? sender, string text)
+    { if (!string.IsNullOrEmpty(text)) { _lastClip = text; try { Clipboard.SetText(text); } catch { } } }
+
+    private void OnConnectionError(object? sender, string error)
+    { MessageBox.Show(error, "ScreenWire", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+
+    private void OnStatusChanged(object? sender, string status) => lblStatus.Text = status;
+
+    private void OnConnectedChanged(object? sender, bool connected)
+    { if (InvokeRequired) Invoke(() => OnConnected(connected)); else OnConnected(connected); }
+
+    private void OnConnected(bool connected)
+    {
+        if (connected)
+        {
+            menuConnect.Enabled = false; menuDisconnect.Enabled = true;
+            _frameCount = 0; _fpsTime = DateTime.Now;
+            _clipTimer.Start(); _lastClip = Clipboard.GetText() ?? "";
+            _client?.SendQuality(_config.JpegQuality);
+            _client?.SendFpsRequest(_config.FrameRate);
+            _statsTimer.Interval = 1000; _statsTimer.Start();
+        }
+        else Disconnect();
+    }
+
+    private void StatsTick(object? sender, EventArgs e)
+    {
+        double elapsed = (DateTime.Now - _fpsTime).TotalSeconds;
+        if (elapsed >= 1.0) { lblFps.Text = $"{(int)(_frameCount / elapsed)} FPS"; _frameCount = 0; _fpsTime = DateTime.Now; }
+    }
+
+    private void ClipTick(object? sender, EventArgs e)
+    {
+        if (_client == null || !_client.Connected) return;
+        try { if (Clipboard.ContainsText()) { string? text = Clipboard.GetText(); if (text != null && text != _lastClip) { _lastClip = text; _client.SendClipboardText(text); } } } catch { }
+    }
+
+    private void MenuDisconnect_Click(object? sender, EventArgs e) => Disconnect();
+
+    private void Disconnect()
+    {
+        _statsTimer.Stop(); _clipTimer.Stop();
+        _client?.Dispose(); _client = null;
+        var oldImage = pictureBox.Image; var oldStream = _currentImageStream;
+        pictureBox.Image = null; _currentImageStream = null;
+        oldImage?.Dispose(); oldStream?.Dispose();
+        menuConnect.Enabled = true; menuDisconnect.Enabled = false;
+        lblStatus.Text = "Отключено"; lblFps.Text = "0 FPS"; lblResolution.Text = "";
+    }
+
+    // ---------- Мышь и клавиатура ----------
+
+    private void PicMouseDown(object? sender, MouseEventArgs e)
+    {
+        pictureBox.Focus(); _mouseFlags = 0;
+        if (e.Button == MouseButtons.Left) _mouseFlags |= Protocol.UdpProtocol.MouseLeftDown;
+        else if (e.Button == MouseButtons.Right) _mouseFlags |= Protocol.UdpProtocol.MouseRightDown;
+        else if (e.Button == MouseButtons.Middle) _mouseFlags |= Protocol.UdpProtocol.MouseMiddleDown;
+        SendMouse(e.X, e.Y);
+    }
+
+    private void PicMouseUp(object? sender, MouseEventArgs e) { _mouseFlags = 0; SendMouse(e.X, e.Y); }
+
+    private void PicMouseMove(object? sender, MouseEventArgs e)
+    { byte sf = _mouseFlags; _mouseFlags = (byte)(sf | Protocol.UdpProtocol.MouseMove); SendMouse(e.X, e.Y); _mouseFlags = sf; }
+
+    private void PicMouseWheel(object? sender, MouseEventArgs e)
+    { byte sf = _mouseFlags; _mouseFlags = (byte)(sf | Protocol.UdpProtocol.MouseWheel); SendMouse(e.X, e.Y, (short)e.Delta); _mouseFlags = sf; }
+
+    private void SendMouse(int controlX, int controlY, short wheel = 0)
+    {
+        if (_client == null || !_client.Connected || pictureBox.Image == null) return;
+        short serverX, serverY;
+        if (pictureBox.SizeMode == PictureBoxSizeMode.Zoom)
+        {
+            int imgW = pictureBox.Image.Width, imgH = pictureBox.Image.Height;
+            int boxW = pictureBox.ClientSize.Width, boxH = pictureBox.ClientSize.Height;
+            double scale = Math.Min((double)boxW / imgW, (double)boxH / imgH);
+            int displayedW = (int)(imgW * scale), displayedH = (int)(imgH * scale);
+            int offsetX = (boxW - displayedW) / 2, offsetY = (boxH - displayedH) / 2;
+            double picX = controlX - offsetX, picY = controlY - offsetY;
+            if (picX < 0 || picY < 0 || picX >= displayedW || picY >= displayedH) return;
+            serverX = (short)(picX / scale); serverY = (short)(picY / scale);
+        }
+        else if (pictureBox.SizeMode == PictureBoxSizeMode.StretchImage)
+        {
+            int imgW = pictureBox.Image.Width, imgH = pictureBox.Image.Height;
+            int boxW = pictureBox.ClientSize.Width, boxH = pictureBox.ClientSize.Height;
+            if (boxW == 0 || boxH == 0) return;
+            serverX = (short)((long)controlX * imgW / boxW); serverY = (short)((long)controlY * imgH / boxH);
+        }
+        else
+        {
+            int imgW = pictureBox.Image.Width, imgH = pictureBox.Image.Height;
+            int boxW = pictureBox.ClientSize.Width, boxH = pictureBox.ClientSize.Height;
+            int offsetX = 0, offsetY = 0;
+            if (pictureBox.SizeMode == PictureBoxSizeMode.CenterImage)
+            { offsetX = Math.Max(0, (boxW - imgW) / 2); offsetY = Math.Max(0, (boxH - imgH) / 2); }
+            int picX = controlX - offsetX, picY = controlY - offsetY;
+            if (picX < 0 || picY < 0 || picX >= imgW || picY >= imgH) return;
+            serverX = (short)picX; serverY = (short)picY;
+        }
+        _client.SendMouseEvent(_mouseFlags, serverX, serverY, wheel);
+    }
+
+    private void PicKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (_client == null || !_client.Connected) return;
+        if (e.Control) _client.SendKeyboardEvent(Protocol.UdpProtocol.KeyDown, (byte)Keys.ControlKey);
+        if (e.Alt) _client.SendKeyboardEvent(Protocol.UdpProtocol.KeyDown, (byte)Keys.Menu);
+        if (e.Shift) _client.SendKeyboardEvent(Protocol.UdpProtocol.KeyDown, (byte)Keys.ShiftKey);
+        if (e.KeyCode == Keys.F11 || e.KeyCode == Keys.F10 || e.KeyCode == Keys.Escape) return;
+        _client.SendKeyboardEvent(Protocol.UdpProtocol.KeyDown, (byte)e.KeyValue);
+        e.Handled = true; e.SuppressKeyPress = true;
+    }
+
+    private void PicKeyUp(object? sender, KeyEventArgs e)
+    {
+        if (_client == null || !_client.Connected) return;
+        if (e.Control) _client.SendKeyboardEvent(0, (byte)Keys.ControlKey);
+        if (e.Alt) _client.SendKeyboardEvent(0, (byte)Keys.Menu);
+        if (e.Shift) _client.SendKeyboardEvent(0, (byte)Keys.ShiftKey);
+        _client.SendKeyboardEvent(0, (byte)e.KeyValue);
+        e.Handled = true; e.SuppressKeyPress = true;
+    }
+
+    // ---------- Меню ----------
+
+    private void MenuScale_Click(object? sender, EventArgs e)
+    { _config.ScaleToFit = menuScaleToFit.Checked; _config.Save(); ApplyScale(); }
+
+    private void ApplyScale()
+    {
+        pictureBox.SizeMode = menuScaleToFit.Checked ? PictureBoxSizeMode.Zoom : PictureBoxSizeMode.Normal;
+        if (!menuScaleToFit.Checked && _serverW > 0 && !_isFull)
+            ClientSize = new Size(Math.Min(_serverW, Screen.PrimaryScreen!.WorkingArea.Width - 50),
+                                  Math.Min(_serverH, Screen.PrimaryScreen!.WorkingArea.Height - 100));
+    }
+
+    private void MenuFull_Click(object? sender, EventArgs e) => ToggleFull();
+
+    private void ToggleFull()
+    {
+        if (!_isFull) { _savedBorder = FormBorderStyle; FormBorderStyle = FormBorderStyle.None; WindowState = FormWindowState.Maximized; menuStrip.Visible = false; statusStrip.Visible = false; _isFull = true; }
+        else { FormBorderStyle = _savedBorder; WindowState = FormWindowState.Normal; menuStrip.Visible = true; statusStrip.Visible = true; _isFull = false; }
+    }
+
+    private void MenuSettings_Click(object? sender, EventArgs e)
+    {
+        using var f = new SettingsForm();
+        f.SetDefaults(_config.FrameRate, _config.JpegQuality, _config.ScaleToFit);
+        if (f.ShowDialog(this) != DialogResult.OK) return;
+        _config.FrameRate = f.FrameRate; _config.JpegQuality = f.JpegQuality; _config.ScaleToFit = f.ScaleToFit;
+        _config.Save();
+        menuScaleToFit.Checked = _config.ScaleToFit; ApplyScale();
+        _client?.SendFpsRequest(_config.FrameRate); _client?.SendQuality(_config.JpegQuality);
+    }
+
+    private async void MenuUpdateServer_Click(object? sender, EventArgs e)
+    {
+        if (_client == null || !_client.Connected) { MessageBox.Show("Сначала подключитесь к серверу.", "ScreenWire", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+        using var dialog = new OpenFileDialog { Title = "Выберите ZIP-архив с обновлением сервера", Filter = "ZIP архивы (*.zip)|*.zip|Все файлы (*.*)|*.*", DefaultExt = "zip" };
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        menuStrip.Enabled = false;
+        try
+        {
+            bool success = await _client.SendUpdateAsync(dialog.FileName, msg => { if (InvokeRequired) Invoke(() => lblStatus.Text = msg); else lblStatus.Text = msg; });
+            MessageBox.Show(success ? "Обновление успешно отправлено на сервер.\n\nСервер автоматически перезапустится с новой версией.\nТекущее подключение будет разорвано." : "Не удалось отправить обновление на сервер.\nПроверьте статус в строке состояния.", "ScreenWire", MessageBoxButtons.OK, success ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        }
+        catch (Exception ex) { MessageBox.Show("Ошибка при отправке обновления: " + ex.Message, "ScreenWire", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        finally { menuStrip.Enabled = true; }
+    }
+
+    private void MainForm_FormClosing(object? sender, FormClosingEventArgs e) { Disconnect(); _config.Save(); }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == Keys.F11) { ToggleFull(); return true; }
+        if (keyData == Keys.Escape && _isFull) { ToggleFull(); return true; }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\ScreenWire\ScreenWire.Client\ScreenWire.Client.csproj
+----------------------------------------
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>disable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationIcon>display_64x64.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="display_64x64.ico" />
+  </ItemGroup>
+
+</Project>
+----------------------------------------
+
