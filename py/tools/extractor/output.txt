@@ -10,7 +10,7 @@ public class ClientConfig
 {
     private readonly string _path;
 
-    public string ServerAddress { get; set; } = "127.0.0.1";
+    public string ServerAddress { get; set; } = "10.191.43.92";
     public int Port { get; set; } = 9090;
     public string Password { get; set; } = "";
     public int FrameRate { get; set; } = 20;
