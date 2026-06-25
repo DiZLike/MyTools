@@ -11,7 +11,7 @@ namespace ScreenWire.Client;
 
 public partial class MainForm : Form
 {
-    private UdpClient? _client;
+    private UdpClient _client;
     private readonly ClientConfig _config = new();
     private readonly Timer _statsTimer = new();
     private int _serverW, _serverH;
@@ -22,7 +22,7 @@ public partial class MainForm : Form
     private byte _mouseFlags;
     private string _lastClip = "";
     private readonly Timer _clipTimer = new() { Interval = 500 };
-    private MemoryStream? _currentImageStream;
+    private MemoryStream _currentImageStream;
 
     public MainForm()
     {
@@ -47,7 +47,7 @@ public partial class MainForm : Form
         Icon = SystemIcons.Application;
     }
 
-    private async void MenuConnect_Click(object? sender, EventArgs e)
+    private async void MenuConnect_Click(object sender, EventArgs e)
     {
         string pw;
         using (var f = new ConnectForm())
@@ -76,7 +76,7 @@ public partial class MainForm : Form
         { menuConnect.Enabled = true; lblStatus.Text = "Не подключено"; }
     }
 
-    private void OnScreenshotReceived(object? sender, byte[] jpeg)
+    private void OnScreenshotReceived(object sender, byte[] jpeg)
     {
         if (jpeg == null || jpeg.Length == 0) return;
         try
@@ -108,7 +108,7 @@ public partial class MainForm : Form
         }
     }
 
-    private void OnDisplayInfoReceived(object? sender, byte[] data)
+    private void OnDisplayInfoReceived(object sender, byte[] data)
     {
         if (InvokeRequired) { Invoke(() => OnDisplayInfoReceived(sender, data)); return; }
 
@@ -151,7 +151,7 @@ public partial class MainForm : Form
     private void OnClipboardTextReceived(object? sender, string text)
     { if (!string.IsNullOrEmpty(text)) { _lastClip = text; try { Clipboard.SetText(text); } catch { } } }
 
-    private void OnConnectionError(object? sender, string error)
+    private void OnConnectionError(object sender, string error)
     { MessageBox.Show(error, "ScreenWire", MessageBoxButtons.OK, MessageBoxIcon.Error); }
 
     private void OnStatusChanged(object? sender, string status) => lblStatus.Text = status;
@@ -168,6 +168,7 @@ public partial class MainForm : Form
             _clipTimer.Start(); _lastClip = Clipboard.GetText() ?? "";
             _client?.SendQuality(_config.JpegQuality);
             _client?.SendFpsRequest(_config.FrameRate);
+            _client?.SendReductionRatio(_config.ReductionRatio);
             _statsTimer.Interval = 1000; _statsTimer.Start();
         }
         else Disconnect();
@@ -298,12 +299,18 @@ public partial class MainForm : Form
     private void MenuSettings_Click(object? sender, EventArgs e)
     {
         using var f = new SettingsForm();
-        f.SetDefaults(_config.FrameRate, _config.JpegQuality, _config.ScaleToFit);
+        f.SetDefaults(_config.FrameRate, _config.JpegQuality, _config.ScaleToFit, _config.ReductionRatio);
         if (f.ShowDialog(this) != DialogResult.OK) return;
-        _config.FrameRate = f.FrameRate; _config.JpegQuality = f.JpegQuality; _config.ScaleToFit = f.ScaleToFit;
+        _config.FrameRate = f.FrameRate;
+        _config.JpegQuality = f.JpegQuality;
+        _config.ReductionRatio = f.ReductionRatio;
+        _config.ScaleToFit = f.ScaleToFit;
         _config.Save();
-        menuScaleToFit.Checked = _config.ScaleToFit; ApplyScale();
-        _client?.SendFpsRequest(_config.FrameRate); _client?.SendQuality(_config.JpegQuality);
+        menuScaleToFit.Checked = _config.ScaleToFit;
+        ApplyScale();
+        _client?.SendFpsRequest(_config.FrameRate);
+        _client?.SendQuality(_config.JpegQuality);
+        _client?.SendReductionRatio(_config.ReductionRatio);
     }
 
     private async void MenuUpdateServer_Click(object? sender, EventArgs e)

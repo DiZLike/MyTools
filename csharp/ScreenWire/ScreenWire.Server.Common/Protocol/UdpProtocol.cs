@@ -23,6 +23,7 @@ namespace ScreenWire.Server.Protocol
         public const byte MsgFpsRequest = 0x0F;
         public const byte MsgDisplaySelect = 0x10;
         public const byte MsgDisplayInfo = 0x11;
+        public const byte MsgReductionRatio = 0x12;
         public const byte MsgAck = 0xFF;
 
         public const byte AuthOk = 0x00;

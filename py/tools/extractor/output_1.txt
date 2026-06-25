@@ -1,1019 +1,396 @@
-Файл: D:\Evgeny\git\MyTools\csharp\ScreenWire\ScreenWire.Server.Common\Capture\BaseScreenCaptor.cs
+Файл: D:\Evgeny\!src_actual\Apps\Likeman\Likeman\Views\MainWindow.xaml
 ----------------------------------------
-﻿using System;
-using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Imaging;
-using System.IO;
-using System.Windows.Forms;
+﻿<Window x:Class="Likeman.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Likeman - Менеджер паролей" Height="550" Width="850"
+        WindowStartupLocation="CenterScreen"
+        Background="White">
 
-namespace ScreenWire.Server.Capture
-{
-    public abstract class BaseScreenCaptor : IScreenCaptor
-    {
-        protected Rectangle _bounds;
-        protected Bitmap _bitmap;
-        protected byte[] _pixelBuffer;
-        protected bool _disposed;
+    <Window.Resources>
+        <!-- Стили для текстовых полей -->
+        <Style x:Key="ModernTextBox" TargetType="TextBox">
+            <Setter Property="Background" Value="#FAFAFA"/>
+            <Setter Property="Foreground" Value="#333333"/>
+            <Setter Property="BorderBrush" Value="#DDDDDD"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="6"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
 
-        protected readonly ImageCodecInfo _jpeg;
-        protected readonly EncoderParameters _jpegParams;
+        <!-- Базовый стиль для кнопок -->
+        <Style x:Key="BaseButtonStyle" TargetType="Button">
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="2">
+                            <ContentPresenter HorizontalAlignment="Center" 
+                                              VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
-        protected BaseScreenCaptor(int displayIndex)
-        {
-            _bounds = GetDisplayBounds(displayIndex);
-            _pixelBuffer = new byte[_bounds.Width * _bounds.Height * 3];
-            _bitmap = new Bitmap(_bounds.Width, _bounds.Height, PixelFormat.Format24bppRgb);
+        <!-- Стили для кнопок -->
+        <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource BaseButtonStyle}">
+            <Setter Property="Background" Value="#007ACC"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#106EBE"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="#005A9E"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
 
-            _jpeg = GetEncoder();
-            _jpegParams = new EncoderParameters(1);
-            _jpegParams.Param[0] = new EncoderParameter(Encoder.Quality, (long)50);
-        }
+        <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource BaseButtonStyle}">
+            <Setter Property="Background" Value="#D13438"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#B02A2E"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="#8E2225"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
 
-        public abstract byte[] CaptureScreen(int quality);
+        <Style x:Key="SuccessButton" TargetType="Button" BasedOn="{StaticResource BaseButtonStyle}">
+            <Setter Property="Background" Value="#107C10"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#0E6A0E"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="#0B570B"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
 
-        public static Rectangle GetDisplayBounds(int index)
-        {
-            Screen[] screens = Screen.AllScreens;
-            var sorted = new List<Screen>(screens);
-            sorted.Sort((a, b) => a.Bounds.X.CompareTo(b.Bounds.X));
+        <!-- Стиль для DataGrid -->
+        <Style x:Key="ModernDataGrid" TargetType="DataGrid">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="Foreground" Value="#333333"/>
+            <Setter Property="BorderBrush" Value="#DDDDDD"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="RowBackground" Value="White"/>
+            <Setter Property="AlternatingRowBackground" Value="#F8F8F8"/>
+            <Setter Property="HorizontalGridLinesBrush" Value="#EEEEEE"/>
+            <Setter Property="VerticalGridLinesBrush" Value="#EEEEEE"/>
+            <Setter Property="HeadersVisibility" Value="Column"/>
+            <Setter Property="CanUserAddRows" Value="False"/>
+            <Setter Property="IsReadOnly" Value="False"/>
+            <Setter Property="AutoGenerateColumns" Value="False"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="RowHeight" Value="32"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
 
-            if (index < 0 || index >= sorted.Count)
-                return SystemInformation.VirtualScreen;
-            return sorted[index].Bounds;
-        }
+        <!-- Стиль для заголовков колонок -->
+        <Style x:Key="DataGridColumnHeaderStyle" TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="#F5F5F5"/>
+            <Setter Property="Foreground" Value="#333333"/>
+            <Setter Property="BorderBrush" Value="#DDDDDD"/>
+            <Setter Property="BorderThickness" Value="0,0,1,1"/>
+            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="FontSize" Value="11"/>
+        </Style>
 
-        public static int GetDisplayCount()
-        {
-            return Screen.AllScreens.Length;
-        }
+        <!-- Стиль для ячеек -->
+        <Style x:Key="DataGridCellStyle" TargetType="DataGridCell">
+            <Setter Property="BorderBrush" Value="#EEEEEE"/>
+            <Setter Property="BorderThickness" Value="0,0,1,1"/>
+            <Setter Property="Padding" Value="8,0,8,0"/>
+            <Setter Property="Foreground" Value="#333333"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="DataGridCell">
+                        <Grid Background="{TemplateBinding Background}">
+                            <ContentPresenter VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                            HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                            Margin="{TemplateBinding Padding}"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="#E3F2FD"/>
+                    <Setter Property="BorderBrush" Value="#007ACC"/>
+                    <Setter Property="Foreground" Value="#333333"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
 
-        public static List<Screen> GetSortedScreens()
-        {
-            Screen[] screens = Screen.AllScreens;
-            var sorted = new List<Screen>(screens);
-            sorted.Sort((a, b) => a.Bounds.X.CompareTo(b.Bounds.X));
-            return sorted;
-        }
+        <!-- Стиль для текстовых колонок DataGrid -->
+        <Style x:Key="CenteredDataGridTextColumn" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
 
-        protected void UpdateJpegQuality(int q)
-        {
-            _jpegParams.Param[0] = new EncoderParameter(Encoder.Quality, (long)Math.Max(1, Math.Min(100, q)));
-        }
+        <!-- Компактный стиль для GroupBox -->
+        <Style x:Key="CompactGroupBox" TargetType="GroupBox">
+            <Setter Property="BorderBrush" Value="#DDDDDD"/>
+            <Setter Property="Background" Value="#FAFAFA"/>
+            <Setter Property="Foreground" Value="#333333"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="6"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+            <Setter Property="FontSize" Value="11"/>
+        </Style>
+    </Window.Resources>
 
-        protected static ImageCodecInfo GetEncoder()
-        {
-            foreach (ImageCodecInfo c in ImageCodecInfo.GetImageEncoders())
-                if (c.FormatID == ImageFormat.Jpeg.Guid) return c;
-            return null;
-        }
+    <DockPanel>
+        <!-- Статусбар -->
+        <StatusBar DockPanel.Dock="Bottom" 
+                   Background="#F5F5F5" 
+                   BorderBrush="#DDDDDD" 
+                   BorderThickness="0,1,0,0"
+                   Height="24">
+            <StatusBarItem>
+                <TextBlock Text="{Binding StatusMessage}" 
+                           Foreground="#333333"
+                           FontSize="11"
+                           VerticalAlignment="Center"/>
+            </StatusBarItem>
+        </StatusBar>
 
-        public virtual void Dispose()
-        {
-            _disposed = true;
-            _pixelBuffer = null;
-            if (_bitmap != null) { _bitmap.Dispose(); _bitmap = null; }
-        }
-    }
-}
+        <!-- Основное содержимое -->
+        <Grid Margin="10">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Форма добавления нового пароля -->
+            <GroupBox Grid.Row="0" Header="Добавить новый пароль" 
+                      Style="{StaticResource CompactGroupBox}">
+                <Grid Margin="4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Подписи полей -->
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Название" Margin="2,0,2,2" FontSize="10" Foreground="#666666"/>
+                    <TextBlock Grid.Row="0" Grid.Column="1" Text="URL сайта" Margin="2,0,2,2" FontSize="10" Foreground="#666666"/>
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="Логин" Margin="2,0,2,2" FontSize="10" Foreground="#666666"/>
+                    <TextBlock Grid.Row="0" Grid.Column="3" Text="Пароль" Margin="2,0,2,2" FontSize="10" Foreground="#666666"/>
+                    <TextBlock Grid.Row="0" Grid.Column="4" Text="Примечание" Margin="2,0,2,2" FontSize="10" Foreground="#666666"/>
+
+                    <!-- Поля ввода -->
+                    <TextBox Grid.Row="1" Grid.Column="0" 
+                             Text="{Binding NewPassword.Name}" 
+                             Style="{StaticResource ModernTextBox}"
+                             Margin="2"
+                             ToolTip="Название пароля"/>
+
+                    <TextBox Grid.Row="1" Grid.Column="1" 
+                             Text="{Binding NewPassword.Website}" 
+                             Style="{StaticResource ModernTextBox}"
+                             Margin="2"
+                             ToolTip="URL сайта"/>
+
+                    <TextBox Grid.Row="1" Grid.Column="2" 
+                             Text="{Binding NewPassword.Username}" 
+                             Style="{StaticResource ModernTextBox}"
+                             Margin="2"
+                             ToolTip="Логин/Имя пользователя"/>
+
+                    <TextBox Grid.Row="1" Grid.Column="3" 
+                             Text="{Binding NewPassword.Password}" 
+                             Style="{StaticResource ModernTextBox}"
+                             Margin="2"
+                             FontFamily="Consolas"
+                             ToolTip="Пароль"/>
+
+                    <TextBox Grid.Row="1" Grid.Column="4" 
+                             Text="{Binding NewPassword.Notes}" 
+                             Style="{StaticResource ModernTextBox}"
+                             Margin="2"
+                             ToolTip="Примечание"/>
+
+                    <Button Grid.Row="1" Grid.Column="5" 
+                            Content="Добавить" 
+                            Command="{Binding AddPasswordCommand}" 
+                            Style="{StaticResource PrimaryButton}"
+                            Margin="2" 
+                            Width="80"
+                            Height="28"/>
+                </Grid>
+            </GroupBox>
+
+            <!-- Таблица паролей -->
+            <DataGrid Grid.Row="1"
+                      ItemsSource="{Binding Passwords}"
+                      SelectedItem="{Binding SelectedPassword}"
+                      Style="{StaticResource ModernDataGrid}"
+                      ColumnHeaderStyle="{StaticResource DataGridColumnHeaderStyle}"
+                      CellStyle="{StaticResource DataGridCellStyle}"
+                      Margin="0,8,0,0">
+
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="Название" 
+                                       Binding="{Binding Name}" 
+                                       Width="Auto"
+                                       ElementStyle="{StaticResource CenteredDataGridTextColumn}"/>
+
+                    <DataGridTextColumn Header="Сайт" 
+                                       Binding="{Binding Website}" 
+                                       Width="Auto"
+                                       ElementStyle="{StaticResource CenteredDataGridTextColumn}"/>
+
+                    <DataGridTextColumn Header="Логин" 
+                                       Binding="{Binding Username}" 
+                                       Width="Auto"
+                                       ElementStyle="{StaticResource CenteredDataGridTextColumn}"/>
+
+                    <DataGridTextColumn Header="Пароль" 
+                                       Binding="{Binding Password}" 
+                                       Width="Auto"
+                                       ElementStyle="{StaticResource CenteredDataGridTextColumn}"
+                                       FontFamily="Consolas"/>
+
+                    <DataGridTextColumn Header="Примечание" 
+                                       Binding="{Binding Notes}" 
+                                       Width="*"
+                                       ElementStyle="{StaticResource CenteredDataGridTextColumn}"/>
+
+                    <DataGridTemplateColumn Header="Действия" 
+                                           Width="Auto" 
+                                           MinWidth="80">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <Button Content="✕" 
+                                        Command="{Binding DataContext.DeletePasswordCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                        CommandParameter="{Binding}" 
+                                        Style="{StaticResource DangerButton}"
+                                        Margin="2" 
+                                        Width="30"
+                                        Height="24"
+                                        FontSize="12"
+                                        FontWeight="Bold"
+                                        Padding="0"
+                                        VerticalAlignment="Center"
+                                        HorizontalAlignment="Center"
+                                        ToolTip="Удалить запись"/>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <!-- Панель управления -->
+            <StackPanel Grid.Row="2" 
+                        Orientation="Horizontal" 
+                        HorizontalAlignment="Left"
+                        Margin="0,8,0,0">
+                <Button Content="🔄 Загрузить с сервера" 
+                        Command="{Binding LoadFromServerCommand}" 
+                        Style="{StaticResource PrimaryButton}"
+                        Margin="2" 
+                        Width="140"
+                        Height="26"/>
+
+                <Button Content="💾 Сохранить все" 
+                        Command="{Binding SaveAllCommand}" 
+                        Style="{StaticResource SuccessButton}"
+                        Margin="2" 
+                        Width="120"
+                        Height="26"/>
+                <Button Content="📤 Экспорт ключа" 
+                        Command="{Binding ExportKeyCommand}" 
+                        Style="{StaticResource PrimaryButton}"
+                        Margin="2" 
+                        Width="120"
+                        Height="26"
+                        ToolTip="Экспортировать ключ шифрования для использования на других ПК"/>
+
+                <Button Content="📥 Импорт ключа" 
+                        Command="{Binding ImportKeyCommand}" 
+                        Style="{StaticResource PrimaryButton}"
+                        Margin="2" 
+                        Width="120"
+                        Height="26"
+                        ToolTip="Импортировать ключ шифрования с другого ПК"/>
+            </StackPanel>
+        </Grid>
+    </DockPanel>
+</Window>
 ----------------------------------------
 
 ================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\ScreenWire\ScreenWire.Server.Common\Capture\GdiScreenCaptor.cs
+Файл: D:\Evgeny\!src_actual\Apps\Likeman\Likeman\Views\MainWindow.xaml.cs
 ----------------------------------------
-﻿using System;
-using System.Drawing;
-using System.Drawing.Imaging;
-using System.IO;
-using System.Runtime.InteropServices;
+﻿using likecfg;
+using Likeman.Services;
+using Likeman.ViewModels;
+using System.Windows;
 
-namespace ScreenWire.Server.Capture
+namespace Likeman.Views
 {
-    public class GdiScreenCaptor : BaseScreenCaptor
+    public partial class MainWindow : Window
     {
-        private IntPtr _desktopHwnd;
-
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetDesktopWindow();
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetWindowDC(IntPtr hwnd);
-        [DllImport("user32.dll")]
-        private static extern void ReleaseDC(IntPtr hwnd, IntPtr dc);
-        [DllImport("gdi32.dll")]
-        private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
-        [DllImport("gdi32.dll")]
-        private static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int width, int height);
-        [DllImport("gdi32.dll")]
-        private static extern IntPtr SelectObject(IntPtr hdc, IntPtr hgdiobj);
-        [DllImport("gdi32.dll")]
-        private static extern bool BitBlt(IntPtr hdcDest, int xDest, int yDest, int width, int height,
-            IntPtr hdcSrc, int xSrc, int ySrc, uint rop);
-        [DllImport("gdi32.dll")]
-        private static extern bool DeleteDC(IntPtr hdc);
-        [DllImport("gdi32.dll")]
-        private static extern bool DeleteObject(IntPtr hObject);
-        [DllImport("gdi32.dll")]
-        private static extern int GetDIBits(IntPtr hdc, IntPtr hbmp, uint uStartScan, uint cScanLines,
-            byte[] lpvBits, ref BITMAPINFO lpbi, uint uUsage);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct BITMAPINFO
+        public MainWindow()
         {
-            public int biSize, biWidth, biHeight;
-            public short biPlanes, biBitCount;
-            public int biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant;
-        }
+            InitializeComponent();
+            // загрузка конфигурации приложения
+            var app_config = LikeCfg.FromFile("app.cfg");
+            var host = app_config["sftp"].GetString("host");
+            var login = app_config["sftp"].GetString("login");
+            var password = app_config["sftp"].GetString("password");
+            var pass_file = app_config["sftp"].GetString("pass_file");
 
-        private const uint SRCCOPY = 0x00CC0020;
-        private const uint DIB_RGB_COLORS = 0;
-
-        public GdiScreenCaptor(int displayIndex) : base(displayIndex)
-        {
-            _desktopHwnd = GetDesktopWindow();
-        }
-
-        public override byte[] CaptureScreen(int quality)
-        {
-            if (_disposed) return null;
-
-            IntPtr desktopDC = IntPtr.Zero, memoryDC = IntPtr.Zero, hbitmap = IntPtr.Zero, oldBitmap = IntPtr.Zero;
-            try
+            // Конфигурация SFTP
+            var config = new Models.SftpConfig
             {
-                desktopDC = GetWindowDC(_desktopHwnd);
-                if (desktopDC == IntPtr.Zero) return null;
-
-                memoryDC = CreateCompatibleDC(desktopDC);
-                if (memoryDC == IntPtr.Zero) return null;
-
-                hbitmap = CreateCompatibleBitmap(desktopDC, _bounds.Width, _bounds.Height);
-                if (hbitmap == IntPtr.Zero) return null;
-
-                oldBitmap = SelectObject(memoryDC, hbitmap);
-
-                if (!BitBlt(memoryDC, 0, 0, _bounds.Width, _bounds.Height,
-                           desktopDC, _bounds.X, _bounds.Y, SRCCOPY))
-                    return null;
-
-                BITMAPINFO bmi = new BITMAPINFO();
-                bmi.biSize = Marshal.SizeOf(typeof(BITMAPINFO));
-                bmi.biWidth = _bounds.Width;
-                bmi.biHeight = -_bounds.Height;
-                bmi.biPlanes = 1;
-                bmi.biBitCount = 24;
-                bmi.biCompression = 0;
-
-                int bufLen = _bounds.Width * _bounds.Height * 3;
-                if (_pixelBuffer == null || _pixelBuffer.Length != bufLen)
-                    _pixelBuffer = new byte[bufLen];
-
-                GetDIBits(memoryDC, hbitmap, 0, (uint)_bounds.Height, _pixelBuffer, ref bmi, DIB_RGB_COLORS);
-
-                var bmpData = _bitmap.LockBits(new Rectangle(0, 0, _bounds.Width, _bounds.Height),
-                    ImageLockMode.WriteOnly, PixelFormat.Format24bppRgb);
-                Marshal.Copy(_pixelBuffer, 0, bmpData.Scan0, _pixelBuffer.Length);
-                _bitmap.UnlockBits(bmpData);
-
-                UpdateJpegQuality(quality);
-                using (var ms = new MemoryStream())
-                {
-                    _bitmap.Save(ms, _jpeg, _jpegParams);
-                    return ms.ToArray();
-                }
-            }
-            catch { return null; }
-            finally
-            {
-                if (oldBitmap != IntPtr.Zero && memoryDC != IntPtr.Zero) SelectObject(memoryDC, oldBitmap);
-                if (hbitmap != IntPtr.Zero) DeleteObject(hbitmap);
-                if (memoryDC != IntPtr.Zero) DeleteDC(memoryDC);
-                if (desktopDC != IntPtr.Zero) ReleaseDC(_desktopHwnd, desktopDC);
-            }
-        }
-    }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\ScreenWire\ScreenWire.Server.Common\Capture\IScreenCaptor.cs
-----------------------------------------
-﻿using System;
-
-namespace ScreenWire.Server.Capture
-{
-    public interface IScreenCaptor : IDisposable
-    {
-        byte[] CaptureScreen(int quality);
-    }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\ScreenWire\ScreenWire.Server.Common\Config\ServerConfig.cs
-----------------------------------------
-﻿using System;
-using System.IO;
-using System.Text;
-
-namespace ScreenWire.Server.Config
-{
-    public class ServerConfig
-    {
-        private readonly string _path;
-        public int Port { get; set; } = 9090;
-        public string PasswordHash { get; set; } = "";
-        public bool StartMinimized { get; set; } = true;
-        public bool AutoStartServer { get; set; } = true;
-        public string CaptureMethod { get; set; } = "gdi";
-
-        public ServerConfig() : this(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "server.ini")) { }
-        public ServerConfig(string path) => _path = path;
-
-        public void Load()
-        {
-            if (!File.Exists(_path)) return;
-            foreach (var line in File.ReadAllLines(_path, Encoding.UTF8))
-            {
-                var parts = line.Split(new[] { '=' }, 2);
-                if (parts.Length != 2) continue;
-                var k = parts[0].Trim().ToLowerInvariant();
-                var v = parts[1].Trim();
-                switch (k)
-                {
-                    case "port": if (int.TryParse(v, out int p) && p > 0) Port = p; break;
-                    case "passwordhash": PasswordHash = v; break;
-                    case "startminimized": StartMinimized = v.ToLowerInvariant() == "true"; break;
-                    case "autostartserver": AutoStartServer = v.ToLowerInvariant() == "true"; break;
-                    case "capturemethod": CaptureMethod = v.ToLowerInvariant(); break;
-                }
-            }
-        }
-
-        public void Save()
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("Port=" + Port);
-            sb.AppendLine("PasswordHash=" + PasswordHash);
-            sb.AppendLine("StartMinimized=" + StartMinimized);
-            sb.AppendLine("AutoStartServer=" + AutoStartServer);
-            sb.AppendLine("CaptureMethod=" + CaptureMethod);
-            File.WriteAllText(_path, sb.ToString(), Encoding.UTF8);
-        }
-    }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\ScreenWire\ScreenWire.Server.Common\Network\UdpClientSession.cs
-----------------------------------------
-﻿using System;
-using System.Collections.Generic;
-using System.Net;
-using System.Net.Sockets;
-using System.Threading;
-
-namespace ScreenWire.Server.Network
-{
-    public class UdpClientSession
-    {
-        public IPEndPoint Endpoint { get; }
-        public IPEndPoint VideoEndpoint { get; set; }
-        public int LastSeen { get; set; }
-        public bool Authenticated { get; set; }
-        public byte[] Salt { get; set; }
-        public int Quality { get; set; } = 50;
-        public int TargetFps { get; set; } = 10;
-        public int LastFrameSent { get; set; }
-
-        public DateTime LastKeyFrameTime = DateTime.MinValue;
-
-        private Thread _frameThread;
-        internal volatile bool _frameRunning;
-
-        private ushort _nextMsgId;
-        private SortedList<int, List<PendingMsg>> _pendingByTime = new SortedList<int, List<PendingMsg>>();
-        private Dictionary<ushort, PendingMsg> _pendingById = new Dictionary<ushort, PendingMsg>();
-        private object _lock = new object();
-        private volatile bool _retryRunning = true;
-
-        public UdpClientSession(IPEndPoint ep)
-        {
-            Endpoint = ep;
-            LastSeen = Environment.TickCount;
-            var retryThread = new Thread(RetryLoop) { IsBackground = true };
-            retryThread.Start();
-        }
-
-        public void SendWithRetry(Socket socket, byte msgType, byte[] payload)
-        {
-            ushort id = _nextMsgId++;
-            byte[] packet = Protocol.UdpProtocol.CreateCommandPacket(id, msgType, payload);
-
-            var msg = new PendingMsg
-            {
-                Id = id,
-                Packet = packet,
-                SendTime = Environment.TickCount,
-                Retries = 0,
-                Socket = socket
+                Host = host,
+                Username = login,
+                Password = password,
+                RemoteFilePath = pass_file
             };
 
-            lock (_lock)
-            {
-                _pendingById[id] = msg;
-                int timeKey = msg.SendTime / 100;
-                if (!_pendingByTime.ContainsKey(timeKey))
-                    _pendingByTime[timeKey] = new List<PendingMsg>();
-                _pendingByTime[timeKey].Add(msg);
-            }
+            // Создаем сервис шифрования
+            var encryptionService = new AesEncryptionService();
 
-            try { socket.SendTo(packet, Endpoint); } catch { }
+            // Передаем encryptionService в оба сервиса
+            var sftpService = new SftpService(config, encryptionService);
+            var localStorageService = new LocalStorageService(encryptionService);
+
+            // Передаем все три зависимости в MainViewModel
+            DataContext = new MainViewModel(sftpService, localStorageService, encryptionService);
         }
-
-        private void RetryLoop()
-        {
-            while (_retryRunning)
-            {
-                Thread.Sleep(50);
-                int now = Environment.TickCount;
-                List<PendingMsg> toRetry = new List<PendingMsg>();
-                List<ushort> toRemove = new List<ushort>();
-
-                lock (_lock)
-                {
-                    foreach (var kvp in _pendingByTime)
-                    {
-                        foreach (var msg in kvp.Value)
-                        {
-                            int elapsed = unchecked(now - msg.SendTime);
-                            if (elapsed > Protocol.UdpProtocol.AckTimeout * (msg.Retries + 1))
-                            {
-                                if (msg.Retries >= Protocol.UdpProtocol.MaxRetries)
-                                    toRemove.Add(msg.Id);
-                                else
-                                {
-                                    msg.Retries++;
-                                    toRetry.Add(msg);
-                                    msg.SendTime = now;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                foreach (var msg in toRetry)
-                    try { msg.Socket.SendTo(msg.Packet, Endpoint); } catch { }
-
-                lock (_lock)
-                {
-                    foreach (var id in toRemove) _pendingById.Remove(id);
-                }
-
-                if (unchecked((uint)now % 5000) < 50)
-                    CleanupOldEntries(now);
-            }
-        }
-
-        private void CleanupOldEntries(int now)
-        {
-            lock (_lock)
-            {
-                var keysToRemove = new List<int>();
-                foreach (var kvp in _pendingByTime)
-                {
-                    kvp.Value.RemoveAll(m => !_pendingById.ContainsKey(m.Id));
-                    if (kvp.Value.Count == 0) keysToRemove.Add(kvp.Key);
-                }
-                foreach (var key in keysToRemove) _pendingByTime.Remove(key);
-            }
-        }
-
-        public void OnAckReceived(ushort id)
-        {
-            lock (_lock) { _pendingById.Remove(id); }
-        }
-
-        public void Dispose()
-        {
-            _retryRunning = false;
-            StopFrameThread();
-            lock (_lock)
-            {
-                _pendingById.Clear();
-                _pendingByTime.Clear();
-            }
-        }
-
-        public void StartFrameThread(ParameterizedThreadStart callback)
-        {
-            StopFrameThread();
-            _frameRunning = true;
-            _frameThread = new Thread(callback) { IsBackground = true };
-            _frameThread.Start(this);
-        }
-
-        public void StopFrameThread()
-        {
-            _frameRunning = false;
-            if (_frameThread != null)
-            {
-                _frameThread.Join(1000);
-                _frameThread = null;
-            }
-        }
-
-        private class PendingMsg
-        {
-            public byte[] Packet;
-            public ushort Id;
-            public int SendTime;
-            public int Retries;
-            public Socket Socket;
-        }
-    }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\ScreenWire\ScreenWire.Server.Common\Network\UdpServer.cs
-----------------------------------------
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Net;
-using System.Net.Sockets;
-using System.Threading;
-using ScreenWire.Server.Auth;
-using ScreenWire.Server.Capture;
-using ScreenWire.Server.Config;
-using ScreenWire.Server.Input;
-using ScreenWire.Server.Protocol;
-using ScreenWire.Server.Update;
-
-namespace ScreenWire.Server.Network
-{
-    public class UdpServer
-    {
-        private readonly ServerConfig _config;
-        private Socket _cmdSocket;
-        private TcpListener _tcpListener;
-        private IScreenCaptor _captor;
-        private InputSimulator _input = new InputSimulator();
-        private volatile bool _running;
-        private Dictionary<string, UdpClientSession> _clients = new Dictionary<string, UdpClientSession>();
-        private Dictionary<string, TcpClient> _tcpClients = new Dictionary<string, TcpClient>();
-        private object _lock = new object();
-        private uint _frameId;
-        private byte _prevFlags;
-        private string _currentInputClientKey;
-
-        private UpdateManager _updateManager;
-        private ParameterizedThreadStart _frameThreadCallback;
-
-        private int _displayOffsetX = 0;
-        private int _displayOffsetY = 0;
-
-        private const bool ENABLE_LOGGING = false;
-        private static readonly string LogPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "debug.log");
-
-        public event EventHandler<StatusChangedEventArgs> StatusChanged;
-
-        public UdpServer(ServerConfig config)
-        {
-            _config = config;
-            _captor = ScreenCaptorFactory.Create(config.CaptureMethod, -1);
-            _frameThreadCallback = FrameThreadCallback;
-        }
-
-        public void Start()
-        {
-            _running = true;
-            _cmdSocket = BindSocket(_config.Port);
-            _tcpListener = new TcpListener(IPAddress.Any, _config.Port + 1);
-            _tcpListener.Start();
-            Log("Server started: UDP " + _config.Port + ", TCP " + (_config.Port + 1));
-            RaiseStatus("Запущен (UDP " + _config.Port + "/TCP " + (_config.Port + 1) + ")");
-            new Thread(CommandLoop) { IsBackground = true }.Start();
-            new Thread(TcpAcceptLoop) { IsBackground = true }.Start();
-            new Thread(CleanupLoop) { IsBackground = true }.Start();
-        }
-
-        public void Stop()
-        {
-            _running = false;
-            StopUpdate();
-            CloseSocket(ref _cmdSocket);
-            try { _tcpListener?.Stop(); } catch { }
-            lock (_lock)
-            {
-                foreach (var tcp in _tcpClients.Values)
-                    try { tcp.Close(); } catch { }
-                _tcpClients.Clear();
-                foreach (var c in _clients.Values) c.Dispose();
-                _clients.Clear();
-            }
-            _captor?.Dispose();
-            Log("Server stopped");
-            RaiseStatus("Остановлен");
-        }
-
-        private static Socket BindSocket(int port)
-        {
-            var s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-            s.Bind(new IPEndPoint(IPAddress.Any, port));
-            s.ReceiveBufferSize = 1048576;
-            s.SendBufferSize = 1048576;
-            s.ReceiveTimeout = 1000;
-            return s;
-        }
-
-        private static void CloseSocket(ref Socket s)
-        {
-            try { if (s != null) s.Close(); } catch { }
-            s = null;
-        }
-
-        private void TcpAcceptLoop()
-        {
-            while (_running)
-            {
-                try
-                {
-                    var tcpClient = _tcpListener.AcceptTcpClient();
-                    tcpClient.NoDelay = true;
-                    tcpClient.ReceiveTimeout = 5000;
-                    tcpClient.SendTimeout = 5000;
-                    string ip = ((IPEndPoint)tcpClient.Client.RemoteEndPoint).Address.ToString();
-                    lock (_lock)
-                    {
-                        if (_tcpClients.ContainsKey(ip))
-                            try { _tcpClients[ip].Close(); } catch { }
-                        _tcpClients[ip] = tcpClient;
-                    }
-                    Log("TCP client connected: " + ip);
-                }
-                catch (SocketException) { if (_running) Thread.Sleep(100); }
-                catch { }
-            }
-        }
-
-        private void CommandLoop()
-        {
-            byte[] buf = new byte[65536];
-            EndPoint ep = new IPEndPoint(IPAddress.Any, 0);
-            while (_running)
-            {
-                try
-                {
-                    if (_cmdSocket != null && _cmdSocket.Available > 0)
-                    {
-                        int len = _cmdSocket.ReceiveFrom(buf, ref ep);
-                        byte[] pkt = new byte[len];
-                        Buffer.BlockCopy(buf, 0, pkt, 0, len);
-                        ProcessPacket(pkt, (IPEndPoint)ep);
-                    }
-                    else Thread.Sleep(1);
-                }
-                catch (SocketException) { if (_running) Thread.Sleep(10); }
-                catch { }
-            }
-        }
-
-        private void ProcessPacket(byte[] pkt, IPEndPoint clientEp)
-        {
-            if (!UdpProtocol.ParseCommandHeader(pkt, out ushort msgId, out byte type, out ushort plen))
-                return;
-
-            string key = clientEp.Address + ":" + clientEp.Port;
-
-            if (type == UdpProtocol.MsgAck)
-            {
-                lock (_lock) { if (_clients.TryGetValue(key, out var s)) s.OnAckReceived(msgId); }
-                return;
-            }
-
-            if (type == UdpProtocol.MsgDisconnect)
-            {
-                ForceDisconnect(key);
-                return;
-            }
-
-            if (type != UdpProtocol.MsgMouseEvent && type != UdpProtocol.MsgKeyboardEvent)
-            {
-                try { if (_cmdSocket != null) _cmdSocket.SendTo(UdpProtocol.CreateAckPacket(msgId), clientEp); }
-                catch { }
-            }
-
-            byte[] payload = new byte[plen];
-            if (plen > 0) Buffer.BlockCopy(pkt, UdpProtocol.CmdHeaderSize, payload, 0, plen);
-
-            switch (type)
-            {
-                case UdpProtocol.MsgAuthRequest: AuthRequest(clientEp, key); break;
-                case UdpProtocol.MsgAuthResponse: AuthResponse(clientEp, key, payload); break;
-                case UdpProtocol.MsgMouseEvent: MouseEvent(key, payload); break;
-                case UdpProtocol.MsgKeyboardEvent: KeyEvent(key, payload); break;
-                case UdpProtocol.MsgQualityRequest: Quality(key, payload); break;
-                case UdpProtocol.MsgClipboardText: ClipboardSet(key, payload); break;
-                case UdpProtocol.MsgPing: Ping(key); break;
-                case UdpProtocol.MsgUpdateRequest: HandleUpdateRequest(key); break;
-                case UdpProtocol.MsgFpsRequest: FpsRequest(key, payload); break;
-                case UdpProtocol.MsgDisplaySelect:
-                    if (payload.Length > 0) ChangeDisplay(payload[0]);
-                    break;
-            }
-        }
-
-        private void ChangeDisplay(int displayIndex)
-        {
-            lock (_lock)
-            {
-                _captor?.Dispose();
-                _captor = ScreenCaptorFactory.Create(_config.CaptureMethod, displayIndex);
-            }
-
-            var bounds = BaseScreenCaptor.GetDisplayBounds(displayIndex);
-            _displayOffsetX = bounds.X;
-            _displayOffsetY = bounds.Y;
-
-            byte[] info = new byte[8];
-            BitConverter.GetBytes(bounds.Width).CopyTo(info, 0);
-            BitConverter.GetBytes(bounds.Height).CopyTo(info, 4);
-
-            lock (_lock)
-            {
-                foreach (var kv in _clients)
-                {
-                    if (kv.Value.Authenticated)
-                        kv.Value.SendWithRetry(_cmdSocket, UdpProtocol.MsgScreenInfo, info);
-                }
-            }
-
-            Log("Display changed to " + (displayIndex < 0 ? "all" : displayIndex.ToString()) +
-                ": " + bounds.Width + "x" + bounds.Height + " at (" + _displayOffsetX + "," + _displayOffsetY + ")");
-        }
-
-        private void ForceDisconnect(string key)
-        {
-            lock (_lock)
-            {
-                if (_clients.TryGetValue(key, out var s))
-                {
-                    s.Dispose();
-                    _clients.Remove(key);
-
-                    string ip = key.Split(':')[0];
-                    if (_tcpClients.TryGetValue(ip, out var tcp))
-                    {
-                        try { tcp.Close(); } catch { }
-                        _tcpClients.Remove(ip);
-                    }
-
-                    if (_currentInputClientKey == key)
-                    {
-                        _currentInputClientKey = null;
-                        if ((_prevFlags & UdpProtocol.MouseLeftDown) != 0) _input.MouseEvent(InputSimulator.MOUSEEVENTF_LEFTUP, 0, 0, 0);
-                        if ((_prevFlags & UdpProtocol.MouseRightDown) != 0) _input.MouseEvent(InputSimulator.MOUSEEVENTF_RIGHTUP, 0, 0, 0);
-                        if ((_prevFlags & UdpProtocol.MouseMiddleDown) != 0) _input.MouseEvent(InputSimulator.MOUSEEVENTF_MIDDLEUP, 0, 0, 0);
-                        _prevFlags = 0;
-                    }
-
-                    Log("Client force-disconnected: " + key);
-                }
-            }
-        }
-
-        private UdpClientSession GetOrCreateSession(IPEndPoint ep, string key)
-        {
-            lock (_lock)
-            {
-                if (!_clients.TryGetValue(key, out var s))
-                {
-                    s = new UdpClientSession(ep);
-                    _clients[key] = s;
-                    Log("New session: " + key);
-                }
-                s.LastSeen = Environment.TickCount;
-                return s;
-            }
-        }
-
-        private void AuthRequest(IPEndPoint ep, string key)
-        {
-            var s = GetOrCreateSession(ep, key);
-            s.Salt = Authenticator.GenerateSalt();
-            s.SendWithRetry(_cmdSocket, UdpProtocol.MsgAuthRequest, s.Salt);
-        }
-
-        private void AuthResponse(IPEndPoint ep, string key, byte[] payload)
-        {
-            UdpClientSession s;
-            lock (_lock) { if (!_clients.TryGetValue(key, out s)) return; }
-
-            string clientHash = System.Text.Encoding.UTF8.GetString(payload).Trim();
-            if (string.IsNullOrEmpty(_config.PasswordHash))
-            {
-                s.SendWithRetry(_cmdSocket, UdpProtocol.MsgAuthResult, new[] { UdpProtocol.AuthBadPassword });
-                return;
-            }
-
-            string computed = Authenticator.ComputeHash(
-                Convert.FromBase64String(_config.PasswordHash), s.Salt);
-            byte result = clientHash == computed ? UdpProtocol.AuthOk : UdpProtocol.AuthBadPassword;
-
-            if (result == UdpProtocol.AuthOk)
-            {
-                s.Authenticated = true;
-                s.StartFrameThread(_frameThreadCallback);
-                SendScreenInfo(s);
-                SendDisplayInfo(s);
-                Log("Client authenticated: " + key);
-                RaiseStatus("Клиент: " + ep.Address);
-            }
-            else
-            {
-                Log("Auth failed for: " + key);
-            }
-
-            s.SendWithRetry(_cmdSocket, UdpProtocol.MsgAuthResult, new[] { result });
-        }
-
-        private void SendScreenInfo(UdpClientSession s)
-        {
-            var bounds = BaseScreenCaptor.GetDisplayBounds(-1);
-            byte[] info = new byte[8];
-            BitConverter.GetBytes(bounds.Width).CopyTo(info, 0);
-            BitConverter.GetBytes(bounds.Height).CopyTo(info, 4);
-            s.SendWithRetry(_cmdSocket, UdpProtocol.MsgScreenInfo, info);
-            Log("Sent screen info: " + bounds.Width + "x" + bounds.Height);
-        }
-
-        private void SendDisplayInfo(UdpClientSession s)
-        {
-            var screens = BaseScreenCaptor.GetSortedScreens();
-            int count = screens.Count;
-            byte[] data = new byte[1 + count * 8];
-            data[0] = (byte)count;
-            for (int i = 0; i < count; i++)
-            {
-                var b = screens[i].Bounds;
-                BitConverter.GetBytes((ushort)b.X).CopyTo(data, 1 + i * 8);
-                BitConverter.GetBytes((ushort)b.Y).CopyTo(data, 1 + i * 8 + 2);
-                BitConverter.GetBytes((ushort)b.Width).CopyTo(data, 1 + i * 8 + 4);
-                BitConverter.GetBytes((ushort)b.Height).CopyTo(data, 1 + i * 8 + 6);
-            }
-            s.SendWithRetry(_cmdSocket, UdpProtocol.MsgDisplayInfo, data);
-            Log("Sent display info: " + count + " monitors");
-        }
-
-        // ---------- Frame thread callback ----------
-
-        private void FrameThreadCallback(object state)
-        {
-            var s = (UdpClientSession)state;
-
-            while (s._frameRunning && _running)
-            {
-                if (!s.Authenticated)
-                {
-                    Thread.Sleep(100);
-                    continue;
-                }
-
-                s.LastSeen = Environment.TickCount;
-
-                var sw = System.Diagnostics.Stopwatch.StartNew();
-
-                try
-                {
-                    TcpClient tcp;
-                    lock (_lock)
-                    {
-                        string ip = s.Endpoint.Address.ToString();
-                        if (!_tcpClients.TryGetValue(ip, out tcp)) break;
-                    }
-
-                    byte[] jpeg = _captor.CaptureScreen(s.Quality);
-                    if (jpeg != null && jpeg.Length > 0)
-                    {
-                        byte[] frame = UdpProtocol.WrapTcpFrame(jpeg);
-                        NetworkStream ns = tcp.GetStream();
-                        ns.Write(frame, 0, frame.Length);
-                    }
-                }
-                catch
-                {
-                    lock (_lock)
-                    {
-                        string ip = s.Endpoint.Address.ToString();
-                        if (_tcpClients.TryGetValue(ip, out var tcp))
-                        {
-                            try { tcp.Close(); } catch { }
-                            _tcpClients.Remove(ip);
-                        }
-                    }
-                    break;
-                }
-
-                sw.Stop();
-                int frameTime = (int)sw.ElapsedMilliseconds;
-                int targetInterval = 1000 / Math.Max(1, s.TargetFps);
-                int sleepTime = targetInterval - frameTime;
-
-                if (sleepTime > 0)
-                    Thread.Sleep(sleepTime);
-                else
-                    Thread.Sleep(1);
-            }
-        }
-
-        // ---------- Остальные обработчики ----------
-
-        private void FpsRequest(string key, byte[] data)
-        {
-            lock (_lock)
-                if (_clients.TryGetValue(key, out var s) && s.Authenticated && data.Length > 0)
-                {
-                    s.TargetFps = Math.Max(1, Math.Min(60, (int)data[0]));
-                    s.LastSeen = Environment.TickCount;
-                    s.StartFrameThread(_frameThreadCallback);
-                }
-        }
-
-        private void MouseEvent(string key, byte[] data)
-        {
-            UdpClientSession s;
-            lock (_lock)
-            {
-                if (!_clients.TryGetValue(key, out s) || !s.Authenticated) return;
-                if (_currentInputClientKey != null && _currentInputClientKey != key) return;
-                _currentInputClientKey = key;
-                s.LastSeen = Environment.TickCount;
-            }
-            if (data.Length < 7) return;
-
-            byte flags = data[0];
-            short x = (short)(BitConverter.ToInt16(data, 1) + _displayOffsetX);
-            short y = (short)(BitConverter.ToInt16(data, 3) + _displayOffsetY);
-            short wheel = BitConverter.ToInt16(data, 5);
-
-            if ((flags & UdpProtocol.MouseMove) != 0) _input.MoveMouse(x, y);
-            HandleMouseButton(flags, UdpProtocol.MouseLeftDown, InputSimulator.MOUSEEVENTF_LEFTDOWN, InputSimulator.MOUSEEVENTF_LEFTUP);
-            HandleMouseButton(flags, UdpProtocol.MouseRightDown, InputSimulator.MOUSEEVENTF_RIGHTDOWN, InputSimulator.MOUSEEVENTF_RIGHTUP);
-            HandleMouseButton(flags, UdpProtocol.MouseMiddleDown, InputSimulator.MOUSEEVENTF_MIDDLEDOWN, InputSimulator.MOUSEEVENTF_MIDDLEUP);
-            if ((flags & UdpProtocol.MouseWheel) != 0) _input.MouseEvent(InputSimulator.MOUSEEVENTF_WHEEL, 0, 0, (uint)wheel);
-            _prevFlags = flags;
-        }
-
-        private void HandleMouseButton(byte flags, byte mask, uint downFlag, uint upFlag)
-        {
-            bool cur = (flags & mask) != 0;
-            bool prev = (_prevFlags & mask) != 0;
-            if (cur && !prev) _input.MouseEvent(downFlag, 0, 0, 0);
-            else if (!cur && prev) _input.MouseEvent(upFlag, 0, 0, 0);
-        }
-
-        private void KeyEvent(string key, byte[] data)
-        {
-            UdpClientSession s;
-            lock (_lock)
-            {
-                if (!_clients.TryGetValue(key, out s) || !s.Authenticated) return;
-                if (_currentInputClientKey != null && _currentInputClientKey != key) return;
-                _currentInputClientKey = key;
-                s.LastSeen = Environment.TickCount;
-            }
-            if (data.Length < 2) return;
-            _input.SendKey(data[1], (data[0] & UdpProtocol.KeyDown) != 0);
-        }
-
-        private void Quality(string key, byte[] data)
-        {
-            lock (_lock)
-                if (_clients.TryGetValue(key, out var s) && s.Authenticated && data.Length > 0)
-                {
-                    s.LastSeen = Environment.TickCount;
-                    s.Quality = Math.Max(1, Math.Min(100, (int)data[0]));
-                }
-        }
-
-        private void ClipboardSet(string key, byte[] data)
-        {
-            lock (_lock)
-                if (_clients.TryGetValue(key, out var s) && s.Authenticated)
-                {
-                    s.LastSeen = Environment.TickCount;
-                    try { System.Windows.Forms.Clipboard.SetText(System.Text.Encoding.UTF8.GetString(data)); } catch { }
-                }
-        }
-
-        private void Ping(string key)
-        {
-            lock (_lock) { if (_clients.TryGetValue(key, out var s)) s.LastSeen = Environment.TickCount; }
-        }
-
-        // ---------- Update ----------
-
-        private void HandleUpdateRequest(string key)
-        {
-            UdpClientSession s;
-            lock (_lock) { if (!_clients.TryGetValue(key, out s) || !s.Authenticated) return; s.LastSeen = Environment.TickCount; }
-            StopUpdate();
-            _updateManager = new UpdateManager();
-            _updateManager.StatusChanged += OnUpdateStatusChanged;
-            int port = _updateManager.StartListener();
-            if (port > 0)
-                s.SendWithRetry(_cmdSocket, UdpProtocol.MsgUpdatePort, BitConverter.GetBytes((ushort)port));
-            else
-            {
-                s.SendWithRetry(_cmdSocket, UdpProtocol.MsgUpdateStatus, new byte[] { UdpProtocol.UpdateStatusError, UdpProtocol.UpdateErrorExtract });
-                StopUpdate();
-            }
-        }
-
-        private void OnUpdateStatusChanged(object sender, UpdateStatusEventArgs e)
-        {
-            if (!string.IsNullOrEmpty(e.Message)) { Log("Update: " + e.Message); RaiseStatus("Update: " + e.Message); }
-            byte[] data = new byte[] { e.Status, e.ErrorCode };
-            lock (_lock)
-                foreach (var kv in _clients)
-                    if (kv.Value.Authenticated)
-                        try { kv.Value.SendWithRetry(_cmdSocket, UdpProtocol.MsgUpdateStatus, data); } catch { }
-        }
-
-        private void StopUpdate()
-        {
-            if (_updateManager != null)
-            {
-                try { _updateManager.StatusChanged -= OnUpdateStatusChanged; _updateManager.Stop(); _updateManager.Dispose(); }
-                catch { }
-                _updateManager = null;
-            }
-        }
-
-        // ---------- Cleanup ----------
-
-        private void CleanupLoop()
-        {
-            while (_running)
-            {
-                Thread.Sleep(1000);
-                int now = Environment.TickCount;
-                lock (_lock)
-                {
-                    var dead = new List<string>();
-                    foreach (var kv in _clients)
-                        if (unchecked(now - kv.Value.LastSeen) > 10000) dead.Add(kv.Key);
-
-                    foreach (var key in dead)
-                    {
-                        if (_currentInputClientKey == key)
-                        {
-                            _currentInputClientKey = null;
-                            if ((_prevFlags & UdpProtocol.MouseLeftDown) != 0) _input.MouseEvent(InputSimulator.MOUSEEVENTF_LEFTUP, 0, 0, 0);
-                            if ((_prevFlags & UdpProtocol.MouseRightDown) != 0) _input.MouseEvent(InputSimulator.MOUSEEVENTF_RIGHTUP, 0, 0, 0);
-                            if ((_prevFlags & UdpProtocol.MouseMiddleDown) != 0) _input.MouseEvent(InputSimulator.MOUSEEVENTF_MIDDLEUP, 0, 0, 0);
-                            _prevFlags = 0;
-                        }
-                        _clients[key].Dispose();
-                        _clients.Remove(key);
-
-                        string ip = key.Split(':')[0];
-                        if (_tcpClients.TryGetValue(ip, out var tcp))
-                        {
-                            try { tcp.Close(); } catch { }
-                            _tcpClients.Remove(ip);
-                        }
-
-                        Log("Client disconnected: " + key);
-                        RaiseStatus("Клиент отключен: " + key);
-                    }
-                }
-            }
-        }
-
-        private void RaiseStatus(string s)
-        {
-            var h = StatusChanged;
-            if (h != null) h(this, new StatusChangedEventArgs(s));
-        }
-
-        private static void Log(string msg)
-        {
-            if (!ENABLE_LOGGING) return;
-            try
-            {
-                File.AppendAllText(LogPath,
-                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " [Srv] " + msg + Environment.NewLine,
-                    System.Text.Encoding.UTF8);
-            }
-            catch { }
-        }
-    }
-
-    public class StatusChangedEventArgs : EventArgs
-    {
-        public string Status { get; }
-        public StatusChangedEventArgs(string status) { Status = status; }
     }
 }
 ----------------------------------------

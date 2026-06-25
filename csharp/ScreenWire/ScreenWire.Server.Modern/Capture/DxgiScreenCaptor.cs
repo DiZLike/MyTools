@@ -86,7 +86,7 @@ namespace ScreenWire.Server.Capture
             return outputCount > 0 ? _adapter.GetOutput(0) : null;
         }
 
-        public override byte[] CaptureScreen(int quality)
+        public override byte[] CaptureScreen(int quality, float reductionRatio)
         {
             if (_disposed || !_initialized || _duplication == null || _device == null)
                 return Array.Empty<byte>();
@@ -163,10 +163,7 @@ namespace ScreenWire.Server.Capture
 
                             bitmap.UnlockBits(bitmapData);
 
-                            UpdateJpegQuality(quality);
-                            using var ms = new MemoryStream();
-                            bitmap.Save(ms, _jpeg, _jpegParams);
-                            return ms.ToArray();
+                            return CompressToJpeg(bitmap, quality, reductionRatio);
                         }
                         finally
                         {

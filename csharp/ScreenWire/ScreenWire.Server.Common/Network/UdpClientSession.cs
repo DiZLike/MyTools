@@ -14,6 +14,7 @@ namespace ScreenWire.Server.Network
         public bool Authenticated { get; set; }
         public byte[] Salt { get; set; }
         public int Quality { get; set; } = 50;
+        public float ReductionRatio { get; set; } = 1;
         public int TargetFps { get; set; } = 10;
         public int LastFrameSent { get; set; }
 

@@ -23,6 +23,7 @@ public static class UdpProtocol
     public const byte MsgFpsRequest = 0x0F;
     public const byte MsgDisplaySelect = 0x10;
     public const byte MsgDisplayInfo = 0x11;
+    public const byte MsgReductionRatio = 0x12;
     public const byte MsgAck = 0xFF;
 
     public const byte AuthOk = 0x00;
@@ -62,7 +63,7 @@ public static class UdpProtocol
     public const byte UpdateErrorInstall = 0x04;
     public const byte UpdateErrorTimeout = 0x05;
 
-    public static byte[] CreateCommandPacket(ushort msgId, byte type, byte[]? payload)
+    public static byte[] CreateCommandPacket(ushort msgId, byte type, byte[] payload)
     {
         int plen = payload?.Length ?? 0;
         byte[] p = new byte[CmdHeaderSize + plen];

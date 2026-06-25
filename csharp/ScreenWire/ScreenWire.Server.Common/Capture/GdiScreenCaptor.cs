@@ -49,7 +49,7 @@ namespace ScreenWire.Server.Capture
             _desktopHwnd = GetDesktopWindow();
         }
 
-        public override byte[] CaptureScreen(int quality)
+        public override byte[] CaptureScreen(int quality, float reductionRatio)
         {
             if (_disposed) return null;
 
@@ -90,12 +90,7 @@ namespace ScreenWire.Server.Capture
                 Marshal.Copy(_pixelBuffer, 0, bmpData.Scan0, _pixelBuffer.Length);
                 _bitmap.UnlockBits(bmpData);
 
-                UpdateJpegQuality(quality);
-                using (var ms = new MemoryStream())
-                {
-                    _bitmap.Save(ms, _jpeg, _jpegParams);
-                    return ms.ToArray();
-                }
+                return CompressToJpeg(_bitmap, quality, reductionRatio);
             }
             catch { return null; }
             finally

@@ -175,6 +175,7 @@ namespace ScreenWire.Server.Network
                 case UdpProtocol.MsgMouseEvent: MouseEvent(key, payload); break;
                 case UdpProtocol.MsgKeyboardEvent: KeyEvent(key, payload); break;
                 case UdpProtocol.MsgQualityRequest: Quality(key, payload); break;
+                case UdpProtocol.MsgReductionRatio: ReductionRatio(key, payload); break;
                 case UdpProtocol.MsgClipboardText: ClipboardSet(key, payload); break;
                 case UdpProtocol.MsgPing: Ping(key); break;
                 case UdpProtocol.MsgUpdateRequest: HandleUpdateRequest(key); break;
@@ -354,7 +355,7 @@ namespace ScreenWire.Server.Network
                         if (!_tcpClients.TryGetValue(ip, out tcp)) break;
                     }
 
-                    byte[] jpeg = _captor.CaptureScreen(s.Quality);
+                    byte[] jpeg = _captor.CaptureScreen(s.Quality, s.ReductionRatio);
                     if (jpeg != null && jpeg.Length > 0)
                     {
                         byte[] frame = UdpProtocol.WrapTcpFrame(jpeg);
@@ -418,6 +419,18 @@ namespace ScreenWire.Server.Network
             short y = (short)(BitConverter.ToInt16(data, 3) + _displayOffsetY);
             short wheel = BitConverter.ToInt16(data, 5);
 
+            // Применяем коэффициент уменьшения
+            float ratio = s.ReductionRatio;
+            if (ratio > 1.0f)
+            {
+                x = (short)(x * ratio);
+                y = (short)(y * ratio);
+            }
+
+            // Добавляем смещение дисплея
+            x = (short)(x + _displayOffsetX);
+            y = (short)(y + _displayOffsetY);
+
             if ((flags & UdpProtocol.MouseMove) != 0) _input.MoveMouse(x, y);
             HandleMouseButton(flags, UdpProtocol.MouseLeftDown, InputSimulator.MOUSEEVENTF_LEFTDOWN, InputSimulator.MOUSEEVENTF_LEFTUP);
             HandleMouseButton(flags, UdpProtocol.MouseRightDown, InputSimulator.MOUSEEVENTF_RIGHTDOWN, InputSimulator.MOUSEEVENTF_RIGHTUP);
@@ -456,6 +469,18 @@ namespace ScreenWire.Server.Network
                     s.LastSeen = Environment.TickCount;
                     s.Quality = Math.Max(1, Math.Min(100, (int)data[0]));
                 }
+        }
+        private void ReductionRatio(string key, byte[] data)
+        {
+            lock ( _lock)
+            {
+                if (_clients.TryGetValue(key, out var s) && s.Authenticated && data.Length > 0)
+                {
+                    s.LastSeen = Environment.TickCount;
+                    int r = Math.Max(10, Math.Min(50, (int)data[0]));
+                    s.ReductionRatio = r / 10f;
+                }
+            }
         }
 
         private void ClipboardSet(string key, byte[] data)

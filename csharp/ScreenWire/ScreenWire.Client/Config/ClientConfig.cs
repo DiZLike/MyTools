@@ -13,6 +13,7 @@ public class ClientConfig
     public string Password { get; set; } = "";
     public int FrameRate { get; set; } = 20;
     public int JpegQuality { get; set; } = 50;
+    public int ReductionRatio { get; set; } = 10;
     public bool ScaleToFit { get; set; } = true;
 
     public ClientConfig()
@@ -56,6 +57,10 @@ public class ClientConfig
                     if (int.TryParse(value, out int q))
                         JpegQuality = Math.Clamp(q, 1, 100);
                     break;
+                case "reductionratio":
+                    if (int.TryParse(value, out int r))
+                        ReductionRatio = Math.Clamp(r, 10, 50);
+                    break;
                 case "scaletofit":
                     ScaleToFit = value.ToLowerInvariant() == "true";
                     break;
@@ -71,6 +76,7 @@ public class ClientConfig
         sb.AppendLine($"Password={Password}");
         sb.AppendLine($"FrameRate={FrameRate}");
         sb.AppendLine($"JpegQuality={JpegQuality}");
+        sb.AppendLine($"reductionratio={ReductionRatio}");
         sb.AppendLine($"ScaleToFit={ScaleToFit}");
         File.WriteAllText(_path, sb.ToString(), Encoding.UTF8);
     }

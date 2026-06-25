@@ -115,6 +115,7 @@ public class UdpClient : IDisposable
 
     public void SendFpsRequest(int fps) => Send(UdpProtocol.MsgFpsRequest, [(byte)Math.Clamp(fps, 1, 60)]);
     public void SendQuality(int q) => Send(UdpProtocol.MsgQualityRequest, [(byte)Math.Clamp(q, 1, 100)]);
+    public void SendReductionRatio(float r) => Send(UdpProtocol.MsgReductionRatio, [(byte)Math.Clamp(r, 10, 50)]);
     public void SendDisplaySelect(int index) => Send(UdpProtocol.MsgDisplaySelect, [(byte)index]);
 
     public void SendMouseEvent(byte flags, short x, short y, short wheel)

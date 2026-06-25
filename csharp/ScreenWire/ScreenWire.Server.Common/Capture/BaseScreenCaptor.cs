@@ -28,7 +28,7 @@ namespace ScreenWire.Server.Capture
             _jpegParams.Param[0] = new EncoderParameter(Encoder.Quality, (long)50);
         }
 
-        public abstract byte[] CaptureScreen(int quality);
+        public abstract byte[] CaptureScreen(int quality, float reductionRatio);
 
         public static Rectangle GetDisplayBounds(int index)
         {
@@ -52,6 +52,48 @@ namespace ScreenWire.Server.Capture
             var sorted = new List<Screen>(screens);
             sorted.Sort((a, b) => a.Bounds.X.CompareTo(b.Bounds.X));
             return sorted;
+        }
+
+        protected byte[] CompressToJpeg(Bitmap source, int quality, float reductionRatio)
+        {
+            Bitmap target = source;
+            bool needsDispose = false;
+
+            try
+            {
+                if (reductionRatio > 1) // Если нужно масштабирование
+                {
+                    int newWidth = (int)(source.Width / reductionRatio);
+                    int newHeight = (int)(source.Height / reductionRatio);
+
+                    // Минимальный размер кадра
+                    newWidth = Math.Max(1, newWidth);
+                    newHeight = Math.Max(1, newHeight);
+
+                    target = new Bitmap(newWidth, newHeight, PixelFormat.Format24bppRgb);
+                    needsDispose = true;
+
+                    using (var graphics = Graphics.FromImage(target))
+                    {
+                        graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBilinear;
+                        graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighSpeed;
+                        graphics.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighSpeed;
+                        graphics.DrawImage(source, 0, 0, newWidth, newHeight);
+                    }
+                }
+
+                UpdateJpegQuality(quality);
+                using (var ms = new MemoryStream())
+                {
+                    target.Save(ms, _jpeg, _jpegParams);
+                    return ms.ToArray();
+                }
+            }
+            finally
+            {
+                if (needsDispose)
+                    target.Dispose();
+            }
         }
 
         protected void UpdateJpegQuality(int q)

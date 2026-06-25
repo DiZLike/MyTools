@@ -1,0 +1,15 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="FrostWire.Core/FrostWire.Core.csproj" Id="6b022e3b-a110-4400-8af4-8e9b4c649675">
+    <Platform Solution="*|x86" Project="x86" />
+  </Project>
+  <Project Path="FrostWire.Server/FrostWire.Server.csproj" Id="c1c57292-f4c5-41f1-a8e7-8f1c3c8eac7e">
+    <Platform Solution="*|x86" Project="x86" />
+  </Project>
+  <Project Path="FrostWire.Source/FrostWire.Source.csproj" Id="e2a858ea-332f-49ad-9d49-44c7029d59ca">
+    <Platform Solution="*|x86" Project="x86" />
+  </Project>
+</Solution>
