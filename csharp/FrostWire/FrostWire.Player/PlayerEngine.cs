@@ -1,9 +1,10 @@
-﻿using System.Net;
-using System.Net.Sockets;
+﻿using Concentus;
 using Concentus.Structs;
 using FrostWire.Core.Configuration;
 using FrostWire.Core.Protocol;
 using FrostWire.Core.Protocol.Models;
+using System.Net;
+using System.Net.Sockets;
 using Un4seen.Bass;
 
 namespace FrostWire.Player;
@@ -17,6 +18,7 @@ public class PlayerEngine
 
     private JitterBuffer _jitterBuffer;
     private readonly object _stateLock = new();
+    private readonly SemaphoreSlim _udpLock = new(1, 1); // Для синхронизации доступа к UdpClient
 
     private volatile bool _running;
 
@@ -32,7 +34,7 @@ public class PlayerEngine
 
     private DateTime _lastPacketReceived = DateTime.MinValue;
 
-    private OpusDecoder _opusDecoder = null!;
+    private IOpusDecoder _opusDecoder = null!;
     private int _outputStream;
 
     public PlayerEngine(AppConfig config)
@@ -69,7 +71,14 @@ public class PlayerEngine
         {
             while (!ct.IsCancellationRequested)
             {
-                await ConnectAndListenAsync(ct);
+                try
+                {
+                    await ConnectAndListenAsync(ct);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ERROR] Connection error: {ex.Message}");
+                }
 
                 if (!ct.IsCancellationRequested)
                 {
@@ -77,7 +86,7 @@ public class PlayerEngine
                     _reconnects++;
                     _serverStatus = ServerInfoPacket.StatusNoSource;
 
-                    // ДОБАВЛЕНО: сброс состояния при реконнекте
+                    // Сброс состояния при реконнекте
                     ResetPlaybackState();
 
                     await Task.Delay(1000, ct);
@@ -91,11 +100,32 @@ public class PlayerEngine
             uiThread.Join(2000);
             Bass.BASS_StreamFree(_outputStream);
             Bass.BASS_Free();
-            _udp?.Close();
+
+            await DisposeUdpClientAsync();
         }
     }
 
-    // НОВЫЙ МЕТОД: сброс состояния воспроизведения
+    // Асинхронное освобождение UDP клиента
+    private async Task DisposeUdpClientAsync()
+    {
+        await _udpLock.WaitAsync();
+        try
+        {
+            _udp?.Close();
+            _udp?.Dispose();
+            _udp = null;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WARN] Error disposing UDP client: {ex.Message}");
+        }
+        finally
+        {
+            _udpLock.Release();
+        }
+    }
+
+    // Сброс состояния воспроизведения
     private void ResetPlaybackState()
     {
         lock (_stateLock)
@@ -115,12 +145,24 @@ public class PlayerEngine
 
     private async Task ConnectAndListenAsync(CancellationToken ct)
     {
-        _udp = new UdpClient();
-        _serverEndpoint = new IPEndPoint(IPAddress.Parse(_config.Player.ServerAddress), _config.Player.ServerPort);
+        await _udpLock.WaitAsync();
+        try
+        {
+            // Освобождаем старый клиент если есть
+            _udp?.Close();
+            _udp?.Dispose();
 
-        var subscribe = new SubscribePacket(_clientId);
-        await _udp.SendAsync(PacketWriter.WriteSubscribe(subscribe), _serverEndpoint, ct);
-        Console.WriteLine($"[CONNECT] Subscribed. GUID: {_clientId.ToString("N")[..8]}...");
+            _udp = new UdpClient();
+            _serverEndpoint = new IPEndPoint(IPAddress.Parse(_config.Player.ServerAddress), _config.Player.ServerPort);
+
+            var subscribe = new SubscribePacket(_clientId);
+            await _udp.SendAsync(PacketWriter.WriteSubscribe(subscribe), _serverEndpoint, ct);
+            Console.WriteLine($"[CONNECT] Subscribed. GUID: {_clientId.ToString("N")[..8]}...");
+        }
+        finally
+        {
+            _udpLock.Release();
+        }
 
         _lastPacketReceived = DateTime.UtcNow;
 
@@ -136,12 +178,25 @@ public class PlayerEngine
 
                 try
                 {
-                    var result = await _udp.ReceiveAsync(linked.Token);
+                    UdpReceiveResult result;
+
+                    await _udpLock.WaitAsync();
+                    try
+                    {
+                        if (_udp == null) break;
+                        result = await _udp.ReceiveAsync(linked.Token);
+                    }
+                    finally
+                    {
+                        _udpLock.Release();
+                    }
+
                     HandlePacket(result.Buffer);
                     _lastPacketReceived = DateTime.UtcNow;
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
+                    // Таймаут получения, проверяем общий таймаут
                 }
 
                 var silence = (DateTime.UtcNow - _lastPacketReceived).TotalMilliseconds;
@@ -156,8 +211,6 @@ public class PlayerEngine
         {
             keepAliveCts.Cancel();
             try { await keepAliveTask; } catch { }
-            _udp.Close();
-            // УБРАНО: _jitterBuffer.Clear(); — теперь очищаем в ResetPlaybackState()
         }
     }
 
@@ -219,10 +272,26 @@ public class PlayerEngine
         {
             await Task.Delay(_config.Player.KeepAliveIntervalMs, ct);
 
-            if (_udp != null && _serverEndpoint != null)
+            await _udpLock.WaitAsync();
+            try
             {
-                var keepAlive = new KeepAlivePacket(_clientId);
-                await _udp.SendAsync(PacketWriter.WriteKeepAlive(keepAlive), _serverEndpoint, ct);
+                if (_udp != null && _serverEndpoint != null)
+                {
+                    var keepAlive = new KeepAlivePacket(_clientId);
+                    await _udp.SendAsync(PacketWriter.WriteKeepAlive(keepAlive), _serverEndpoint, ct);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception)
+            {
+                // Игнорируем ошибки отправки keepalive
+            }
+            finally
+            {
+                _udpLock.Release();
             }
         }
     }
@@ -231,8 +300,11 @@ public class PlayerEngine
 
     private void PlaybackLoop()
     {
-        short[] pcmBuffer = new short[5760 * 2];
-        byte[] byteBuffer = new byte[5760 * 2 * 2];
+        const int MaxFrameSamples = 5760; // 120ms @ 48kHz
+        const int MaxChannels = 2;
+
+        short[] pcmBuffer = new short[MaxFrameSamples * MaxChannels];
+        byte[] byteBuffer = new byte[MaxFrameSamples * MaxChannels * sizeof(short)];
 
         while (_running)
         {
@@ -242,31 +314,47 @@ public class PlayerEngine
             {
                 try
                 {
+                    // Используем современный Span-based API
                     int frameSamples = _opusDecoder.Decode(
-                        opusFrame, 0, opusFrame.Length,
-                        pcmBuffer, 0, pcmBuffer.Length / 2,
+                        new ReadOnlySpan<byte>(opusFrame),
+                        new Span<short>(pcmBuffer),
+                        pcmBuffer.Length / 2,
                         false);
 
                     if (frameSamples > 0)
                     {
-                        Buffer.BlockCopy(pcmBuffer, 0, byteBuffer, 0, frameSamples * 2 * 2);
+                        int byteCount = frameSamples * 2 * sizeof(short);
+                        Buffer.BlockCopy(pcmBuffer, 0, byteBuffer, 0, byteCount);
 
                         // Ждём пока в буфере BASS не освободится место
                         while (_running)
                         {
                             int queued = Bass.BASS_StreamPutData(_outputStream, IntPtr.Zero, 0);
-                            if (queued < frameSamples * 2 * 2 * 20) // меньше 20 фреймов
+                            if (queued < byteCount * 20) // меньше 20 фреймов
                                 break;
                             Thread.Sleep(1);
                         }
 
-                        Bass.BASS_StreamPutData(_outputStream, byteBuffer, frameSamples * 2 * 2);
+                        if (_running)
+                        {
+                            Bass.BASS_StreamPutData(_outputStream, byteBuffer, byteCount);
+                        }
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    // Логируем ошибки декодирования, но продолжаем работу
+                    if (_running)
+                    {
+                        Console.WriteLine($"[DECODE] Error: {ex.Message}");
+                    }
+                }
             }
-
-            Thread.Sleep(1);
+            else
+            {
+                // Нет данных для воспроизведения, небольшая пауза
+                Thread.Sleep(1);
+            }
         }
     }
 
@@ -348,7 +436,11 @@ public class PlayerEngine
             return false;
         }
 
-        _opusDecoder = new OpusDecoder(_config.Opus.SampleRate, _config.Opus.Channels);
+        // Используем фабричный метод вместо устаревшего конструктора
+        _opusDecoder = OpusCodecFactory.CreateDecoder(
+            _config.Opus.SampleRate,
+            _config.Opus.Channels);
+
         Console.WriteLine($"Concentus Opus decoder: {_config.Opus.SampleRate}Hz, {_config.Opus.Channels}ch");
 
         _outputStream = Bass.BASS_StreamCreatePush(

@@ -11,7 +11,7 @@ using Un4seen.Bass;
 
 namespace FrostWire.Source;
 
-public class SourceEngine
+public class SourceEngine : IDisposable
 {
     private readonly AppConfig _config;
     private readonly UdpClient _udp;
@@ -22,9 +22,14 @@ public class SourceEngine
     private uint _sequence;
     private DateTime _lastStatusReceived = DateTime.MinValue;
 
-    private IOpusEncoder _opusEncoder = null!;
+    private IOpusEncoder? _opusEncoder;
     private bool _metadataSent;
     private TrackMetadata? _currentMetadata;
+    private bool _disposed;
+
+    // Для graceful shutdown
+    private CancellationTokenSource? _playbackCts;
+    private Task? _currentPlaybackTask;
 
     public SourceEngine(AppConfig config)
     {
@@ -47,7 +52,7 @@ public class SourceEngine
         Console.WriteLine("BASS initialized");
 
         using var statusCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _ = Task.Run(() => StatusListenerLoop(statusCts.Token), ct);
+        var statusTask = Task.Run(() => StatusListenerLoop(statusCts.Token), ct);
 
         try
         {
@@ -62,14 +67,38 @@ public class SourceEngine
                     continue;
                 }
 
-                await PlayTrackAsync(track, ct);
+                // Создаём отдельный CancellationToken для текущего трека
+                using (_playbackCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                {
+                    try
+                    {
+                        _currentPlaybackTask = PlayTrackAsync(track, _playbackCts.Token);
+                        await _currentPlaybackTask;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        Console.WriteLine("[INFO] Playback cancelled");
+                        break;
+                    }
+                }
             }
         }
         finally
         {
+            // Отменяем статус-листенер
             statusCts.Cancel();
-            Bass.BASS_Free();
-            _udp.Close();
+            try { await statusTask; } catch (OperationCanceledException) { }
+
+            // Дожидаемся завершения текущего трека если ещё играет
+            if (_currentPlaybackTask != null)
+            {
+                try
+                {
+                    _playbackCts?.Cancel();
+                    await Task.WhenAny(_currentPlaybackTask, Task.Delay(2000));
+                }
+                catch { }
+            }
         }
     }
 
@@ -92,26 +121,26 @@ public class SourceEngine
             return;
         }
 
-        _metadataSent = false;
-
-        int frameSamples = _config.Opus.SampleRate * _config.Opus.FrameSize / 1000;
-        int channels = _config.Opus.Channels;
-        int totalFrameSamples = frameSamples * channels; // общее количество сэмплов с учётом каналов
-        int frameSizeBytes = totalFrameSamples * 4;
-        int frameDurationMs = _config.Opus.FrameSize;
-
-        float[] pcmFloat = new float[totalFrameSamples];
-        short[] pcmShort = new short[totalFrameSamples];
-        byte[] opusBuf = new byte[65536];
-
-        long totalSamples = Bass.BASS_ChannelGetLength(stream);
-        double totalSeconds = Bass.BASS_ChannelBytes2Seconds(stream, totalSamples);
-        Console.WriteLine($"Duration: {totalSeconds:F1}s");
-
-        var nextFrameTime = DateTime.UtcNow;
-
         try
         {
+            _metadataSent = false;
+
+            int frameSamples = _config.Opus.SampleRate * _config.Opus.FrameSize / 1000;
+            int channels = _config.Opus.Channels;
+            int totalFrameSamples = frameSamples * channels;
+            int frameSizeBytes = totalFrameSamples * 4;
+            int frameDurationMs = _config.Opus.FrameSize;
+
+            float[] pcmFloat = new float[totalFrameSamples];
+            short[] pcmShort = new short[totalFrameSamples];
+            byte[] opusBuf = new byte[65536];
+
+            long totalSamples = Bass.BASS_ChannelGetLength(stream);
+            double totalSeconds = Bass.BASS_ChannelBytes2Seconds(stream, totalSamples);
+            Console.WriteLine($"Duration: {totalSeconds:F1}s");
+
+            var nextFrameTime = DateTime.UtcNow;
+
             while (!ct.IsCancellationRequested)
             {
                 long pos = Bass.BASS_ChannelGetPosition(stream);
@@ -137,34 +166,50 @@ public class SourceEngine
                 for (int i = samplesRead; i < pcmShort.Length; i++)
                     pcmShort[i] = 0;
 
-                int encoded = _opusEncoder.Encode(
-                    new ReadOnlySpan<short>(pcmShort, 0, totalFrameSamples),
-                    frameSamples,
-                    new Span<byte>(opusBuf),
-                    opusBuf.Length);
-
-                if (encoded > 0)
+                if (_opusEncoder != null)
                 {
-                    byte[] frame = new byte[encoded];
-                    Array.Copy(opusBuf, frame, encoded);
-                    SendAudioPacket(frame);
+                    // Используем современный Span-based API
+                    int encoded = _opusEncoder.Encode(
+                        new ReadOnlySpan<short>(pcmShort, 0, totalFrameSamples),
+                        frameSamples,
+                        new Span<byte>(opusBuf),
+                        opusBuf.Length);
+
+                    if (encoded > 0)
+                    {
+                        byte[] frame = new byte[encoded];
+                        Array.Copy(opusBuf, frame, encoded);
+                        SendAudioPacket(frame);
+                    }
                 }
 
-                // Точный тайминг
+                // Точный тайминг с проверкой на отмену
                 nextFrameTime = nextFrameTime.AddMilliseconds(frameDurationMs);
                 var delay = (int)(nextFrameTime - DateTime.UtcNow).TotalMilliseconds;
+
                 if (delay > 0)
-                    Thread.Sleep(delay);
+                {
+                    // Используем Task.Delay с поддержкой CancellationToken
+                    try
+                    {
+                        Task.Delay(Math.Min(delay, 100), ct).Wait(ct);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                }
                 else if (delay < -frameDurationMs)
+                {
                     nextFrameTime = DateTime.UtcNow; // сброс при сильном отставании
+                }
             }
         }
         finally
         {
             Bass.BASS_StreamFree(stream);
+            Console.WriteLine($"Track finished: {_currentMetadata.Title}");
         }
-
-        Console.WriteLine($"Track finished: {_currentMetadata.Title}");
     }
 
     private void SendAudioPacket(byte[] opusFrame)
@@ -240,6 +285,7 @@ public class SourceEngine
             return false;
         }
 
+        // Используем фабричный метод вместо устаревшего конструктора
         _opusEncoder = OpusCodecFactory.CreateEncoder(
             _config.Opus.SampleRate,
             _config.Opus.Channels,
@@ -248,9 +294,30 @@ public class SourceEngine
         _opusEncoder.Bitrate = _config.Opus.Bitrate;
         _opusEncoder.Complexity = _config.Opus.Complexity;
         _opusEncoder.UseVBR = true;
+        _opusEncoder.PacketLossPercent = 20;
+        _opusEncoder.UseInbandFEC = true;
+        _opusEncoder.UseDTX = true;
+        _opusEncoder.SignalType = OpusSignal.OPUS_SIGNAL_MUSIC;
+        _opusEncoder.Application = OpusApplication.OPUS_APPLICATION_AUDIO;
+        _opusEncoder.MaxBandwidth = OpusBandwidth.OPUS_BANDWIDTH_FULLBAND;
 
         Console.WriteLine($"Concentus Opus encoder: {_config.Opus.Bitrate / 1000}kbps, {_config.Opus.FrameSize}ms, complexity {_config.Opus.Complexity}");
 
         return true;
+    }
+
+    public void Dispose()
+    {
+        if (!_disposed)
+        {
+            _disposed = true;
+
+            _playbackCts?.Cancel();
+            _playbackCts?.Dispose();
+
+            _opusEncoder?.Dispose();
+            _udp?.Dispose();
+            Bass.BASS_Free();
+        }
     }
 }

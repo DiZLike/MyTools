@@ -23,6 +23,9 @@ public class ServerEngine
 
     private byte _status = ServerInfoPacket.StatusNoSource;
 
+    // Семафор для ограничения параллельной рассылки
+    private readonly SemaphoreSlim _broadcastSemaphore = new(1, 1);
+
     public ServerEngine(AppConfig config)
     {
         _config = config;
@@ -153,7 +156,7 @@ public class ServerEngine
             OpusFrame = packet.OpusFrame
         };
 
-        BroadcastToPlayers(PacketWriter.WriteAudioToPlayer(playerPacket));
+        _ = BroadcastToPlayersAsync(PacketWriter.WriteAudioToPlayer(playerPacket));
     }
 
     private void HandleSubscribe(byte[] data, IPEndPoint remote)
@@ -167,7 +170,7 @@ public class ServerEngine
 
         // Отправляем SERVER_INFO
         var serverInfo = BuildServerInfo();
-        SendTo(PacketWriter.WriteServerInfo(serverInfo), remote);
+        _ = SendToAsync(PacketWriter.WriteServerInfo(serverInfo), remote);
 
         // Отправляем последние метаданные (если есть) с пустым OpusFrame
         if (_lastMetadata != null && !_lastMetadata.IsEmpty)
@@ -179,7 +182,7 @@ public class ServerEngine
                 Metadata = _lastMetadata,
                 OpusFrame = Array.Empty<byte>()
             };
-            SendTo(PacketWriter.WriteAudioToPlayer(metaPacket), remote);
+            _ = SendToAsync(PacketWriter.WriteAudioToPlayer(metaPacket), remote);
         }
     }
 
@@ -206,7 +209,7 @@ public class ServerEngine
                     Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     ClientsCount = _clients.Count
                 };
-                SendTo(PacketWriter.WriteSourceStatus(status), _sourceEndpoint);
+                await SendToAsync(PacketWriter.WriteSourceStatus(status), _sourceEndpoint);
             }
 
             // Проверка таймаута source
@@ -241,7 +244,7 @@ public class ServerEngine
             if (_clients.Count > 0)
             {
                 var info = BuildServerInfo();
-                BroadcastToPlayers(PacketWriter.WriteServerInfo(info));
+                await BroadcastToPlayersAsync(PacketWriter.WriteServerInfo(info));
             }
         }
     }
@@ -268,25 +271,42 @@ public class ServerEngine
         };
     }
 
-    private void BroadcastToPlayers(byte[] data)
+    /// <summary>
+    /// Асинхронная рассылка всем плеерам с ограничением параллелизма
+    /// </summary>
+    private async Task BroadcastToPlayersAsync(byte[] data)
     {
-        List<IPEndPoint> deadClients = new();
-
-        foreach (var client in _clients.GetAllEndpoints())
+        await _broadcastSemaphore.WaitAsync();
+        try
         {
-            try
+            var clients = _clients.GetAllEndpoints().ToList();
+            var tasks = new List<Task>(clients.Count);
+
+            foreach (var client in clients)
             {
-                _udp.Send(data, data.Length, client);
+                tasks.Add(SendToClientSafeAsync(data, client));
             }
-            catch (SocketException)
-            {
-                deadClients.Add(client);
-            }
+
+            await Task.WhenAll(tasks);
         }
-
-        foreach (var dead in deadClients)
+        finally
         {
-            var entry = _clients.GetByEndpoint(dead);
+            _broadcastSemaphore.Release();
+        }
+    }
+
+    /// <summary>
+    /// Отправка одному клиенту с автоматическим удалением при ошибке
+    /// </summary>
+    private async Task SendToClientSafeAsync(byte[] data, IPEndPoint client)
+    {
+        try
+        {
+            await _udp.SendAsync(data, data.Length, client);
+        }
+        catch (SocketException)
+        {
+            var entry = _clients.GetByEndpoint(client);
             if (entry != null)
             {
                 _clients.Remove(entry.Value.Key);
@@ -295,11 +315,14 @@ public class ServerEngine
         }
     }
 
-    private void SendTo(byte[] data, IPEndPoint target)
+    /// <summary>
+    /// Асинхронная отправка конкретному адресату
+    /// </summary>
+    private async Task SendToAsync(byte[] data, IPEndPoint target)
     {
         try
         {
-            _udp.Send(data, data.Length, target);
+            await _udp.SendAsync(data, data.Length, target);
         }
         catch (SocketException)
         {

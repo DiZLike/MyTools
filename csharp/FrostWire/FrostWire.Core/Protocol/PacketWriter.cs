@@ -5,27 +5,40 @@ namespace FrostWire.Core.Protocol;
 
 public static class PacketWriter
 {
-    // ─── AUDIO (Source → Server) ───────────────────────────────
-    // [0x20] [MD5:16] [Seq:4] [Timestamp:8] [MetaLen:2] [MetaJSON:N] [OpusFrame:M]
+    // ─── Общие методы для записи в буфер ─────────────────────
 
-    public static byte[] WriteAudioFromSource(AudioPacket packet)
+    /// <summary>
+    /// Записывает базовую структуру Audio пакета (без MD5)
+    /// </summary>
+    private static byte[] WriteAudioPacketBase(AudioPacket packet, bool includePassword)
     {
-        if (packet.PasswordMD5 == null || packet.PasswordMD5.Length != 16)
-            throw new ArgumentException("PasswordMD5 must be 16 bytes");
+        if (includePassword)
+        {
+            if (packet.PasswordMD5 == null || packet.PasswordMD5.Length != 16)
+                throw new ArgumentException("PasswordMD5 must be 16 bytes");
+        }
 
         byte[] metaBytes = packet.Metadata?.Serialize() ?? Array.Empty<byte>();
         if (metaBytes.Length > ushort.MaxValue)
             throw new ArgumentException("Metadata too large");
 
-        int totalLen = 1 + 16 + 4 + 8 + 2 + metaBytes.Length + packet.OpusFrame.Length;
+        int headerSize = 1 + 4 + 8 + 2; // Type + Seq + Timestamp + MetaLen
+        if (includePassword)
+            headerSize += 16; // + MD5
+
+        int totalLen = headerSize + metaBytes.Length + packet.OpusFrame.Length;
         byte[] buffer = new byte[totalLen];
         int offset = 0;
 
+        // Type
         buffer[offset++] = PacketTypes.Audio;
 
-        // Password MD5
-        Buffer.BlockCopy(packet.PasswordMD5, 0, buffer, offset, 16);
-        offset += 16;
+        // Password MD5 (если нужно)
+        if (includePassword)
+        {
+            Buffer.BlockCopy(packet.PasswordMD5!, 0, buffer, offset, 16);
+            offset += 16;
+        }
 
         // Sequence
         BitConverter.TryWriteBytes(buffer.AsSpan(offset, 4), packet.Sequence);
@@ -51,39 +64,20 @@ public static class PacketWriter
         return buffer;
     }
 
+    // ─── AUDIO (Source → Server) ───────────────────────────────
+    // [0x20] [MD5:16] [Seq:4] [Timestamp:8] [MetaLen:2] [MetaJSON:N] [OpusFrame:M]
+
+    public static byte[] WriteAudioFromSource(AudioPacket packet)
+    {
+        return WriteAudioPacketBase(packet, includePassword: true);
+    }
+
     // ─── AUDIO (Server → Player) ──────────────────────────────
     // [0x20] [Seq:4] [Timestamp:8] [MetaLen:2] [MetaJSON:N] [OpusFrame:M]
 
     public static byte[] WriteAudioToPlayer(AudioPacket packet)
     {
-        byte[] metaBytes = packet.Metadata?.Serialize() ?? Array.Empty<byte>();
-        if (metaBytes.Length > ushort.MaxValue)
-            throw new ArgumentException("Metadata too large");
-
-        int totalLen = 1 + 4 + 8 + 2 + metaBytes.Length + packet.OpusFrame.Length;
-        byte[] buffer = new byte[totalLen];
-        int offset = 0;
-
-        buffer[offset++] = PacketTypes.Audio;
-
-        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 4), packet.Sequence);
-        offset += 4;
-
-        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 8), packet.Timestamp);
-        offset += 8;
-
-        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 2), (ushort)metaBytes.Length);
-        offset += 2;
-
-        if (metaBytes.Length > 0)
-        {
-            Buffer.BlockCopy(metaBytes, 0, buffer, offset, metaBytes.Length);
-            offset += metaBytes.Length;
-        }
-
-        Buffer.BlockCopy(packet.OpusFrame, 0, buffer, offset, packet.OpusFrame.Length);
-
-        return buffer;
+        return WriteAudioPacketBase(packet, includePassword: false);
     }
 
     // ─── SOURCE_STATUS ─────────────────────────────────────────
