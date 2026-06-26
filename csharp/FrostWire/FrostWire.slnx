@@ -6,6 +6,7 @@
   <Project Path="FrostWire.Core/FrostWire.Core.csproj" Id="6b022e3b-a110-4400-8af4-8e9b4c649675">
     <Platform Solution="*|x86" Project="x86" />
   </Project>
+  <Project Path="FrostWire.Player/FrostWire.Player.csproj" Id="6d186be6-6812-4eab-bc38-d175612329e1" />
   <Project Path="FrostWire.Server/FrostWire.Server.csproj" Id="c1c57292-f4c5-41f1-a8e7-8f1c3c8eac7e">
     <Platform Solution="*|x86" Project="x86" />
   </Project>

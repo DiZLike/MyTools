@@ -5,7 +5,6 @@
     <TargetFramework>net6.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Platforms>AnyCPU;x86</Platforms>
   </PropertyGroup>
 
   <ItemGroup>
@@ -18,21 +17,12 @@
 
   <ItemGroup>
     <Reference Include="Bass.Net">
-      <HintPath>Bass.Net.dll</HintPath>
+      <HintPath>..\FrostWire.Source\Bass.Net.dll</HintPath>
     </Reference>
   </ItemGroup>
 
   <ItemGroup>
     <None Update="appsettings.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Update="bassenc.dll">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Update="bassopus.dll">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Update="playlist.m3u">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

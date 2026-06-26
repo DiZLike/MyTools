@@ -48,9 +48,24 @@ public class ClientRegistry
         return removed;
     }
 
+    public void Remove(Guid clientId)
+    {
+        _clients.TryRemove(clientId, out _);
+    }
+
     public IEnumerable<IPEndPoint> GetAllEndpoints()
     {
         return _clients.Values.Select(e => e.Endpoint);
+    }
+
+    public KeyValuePair<Guid, IPEndPoint>? GetByEndpoint(IPEndPoint endpoint)
+    {
+        foreach (var kvp in _clients)
+        {
+            if (kvp.Value.Endpoint.Equals(endpoint))
+                return new KeyValuePair<Guid, IPEndPoint>(kvp.Key, kvp.Value.Endpoint);
+        }
+        return null;
     }
 
     private class ClientEntry

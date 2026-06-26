@@ -11,7 +11,7 @@ public class AppConfig
 public class ServerConfig
 {
     public int ListenPort { get; set; } = 5000;
-    public string PasswordMD5 { get; set; } = string.Empty;
+    public string Password { get; set; } = string.Empty;
     public int SourceStatusIntervalMs { get; set; } = 3000;
     public int SourceTimeoutMs { get; set; } = 5000;
     public int PlayerTimeoutMs { get; set; } = 10000;
@@ -22,7 +22,7 @@ public class SourceConfig
 {
     public string ServerAddress { get; set; } = "127.0.0.1";
     public int ServerPort { get; set; } = 5000;
-    public string PasswordMD5 { get; set; } = string.Empty;
+    public string Password { get; set; } = string.Empty;
     public string PlaylistPath { get; set; } = "playlist.m3u";
     public bool Shuffle { get; set; } = true;
 }

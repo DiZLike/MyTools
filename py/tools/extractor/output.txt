@@ -1,1006 +1,1056 @@
-Файл: D:\Evgeny\!src_actual\Apps\Likeman\Likeman\Models\PasswordEntry.cs
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Configuration\AppConfig.cs
 ----------------------------------------
-﻿using System;
+﻿namespace FrostWire.Core.Configuration;
 
-namespace Likeman.Models
+public class AppConfig
 {
-    public class PasswordEntry
+    public ServerConfig Server { get; set; } = new();
+    public SourceConfig Source { get; set; } = new();
+    public PlayerConfig Player { get; set; } = new();
+    public OpusConfig Opus { get; set; } = new();
+}
+
+public class ServerConfig
+{
+    public int ListenPort { get; set; } = 5000;
+    public string Password { get; set; } = string.Empty;
+    public int SourceStatusIntervalMs { get; set; } = 3000;
+    public int SourceTimeoutMs { get; set; } = 5000;
+    public int PlayerTimeoutMs { get; set; } = 10000;
+    public int ServerInfoIntervalMs { get; set; } = 5000;
+}
+
+public class SourceConfig
+{
+    public string ServerAddress { get; set; } = "127.0.0.1";
+    public int ServerPort { get; set; } = 5000;
+    public string Password { get; set; } = string.Empty;
+    public string PlaylistPath { get; set; } = "playlist.m3u";
+    public bool Shuffle { get; set; } = true;
+}
+
+public class PlayerConfig
+{
+    public string ServerAddress { get; set; } = "127.0.0.1";
+    public int ServerPort { get; set; } = 5000;
+    public int KeepAliveIntervalMs { get; set; } = 3000;
+}
+
+public class OpusConfig
+{
+    public int SampleRate { get; set; } = 48000;
+    public int Channels { get; set; } = 2;
+    public int Bitrate { get; set; } = 128000;
+    public int FrameSize { get; set; } = 20;
+    public int Complexity { get; set; } = 10;
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Configuration\ConfigLoader.cs
+----------------------------------------
+﻿using System.Text.Json;
+
+namespace FrostWire.Core.Configuration;
+
+public static class ConfigLoader
+{
+    public static AppConfig Load(string path)
     {
-        public string Id { get; set; } = Guid.NewGuid().ToString();
-        public string Name { get; set; } = string.Empty;
-        public string Website { get; set; } = string.Empty;
-        public string Username { get; set; } = string.Empty; // Добавлено поле Логин
-        public string Password { get; set; } = string.Empty;
-        public string Notes { get; set; } = string.Empty;
-        public DateTime CreatedAt { get; set; } = DateTime.Now;
-        public DateTime UpdatedAt { get; set; } = DateTime.Now;
+        if (!File.Exists(path))
+        {
+            var defaultConfig = new AppConfig();
+            Save(path, defaultConfig);
+            Console.WriteLine($"Config file created: {path}");
+            return defaultConfig;
+        }
+
+        var json = File.ReadAllText(path);
+        return JsonSerializer.Deserialize<AppConfig>(json) ?? new AppConfig();
+    }
+
+    public static void Save(string path, AppConfig config)
+    {
+        var options = new JsonSerializerOptions { WriteIndented = true };
+        var json = JsonSerializer.Serialize(config, options);
+        File.WriteAllText(path, json);
     }
 }
 ----------------------------------------
 
 ================================================================================
-Файл: D:\Evgeny\!src_actual\Apps\Likeman\Likeman\Models\SftpConfig.cs
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\PacketReader.cs
 ----------------------------------------
-﻿namespace Likeman.Models
+﻿using System.Text;
+using FrostWire.Core.Protocol.Models;
+
+namespace FrostWire.Core.Protocol;
+
+public static class PacketReader
 {
-    public class SftpConfig
+    public static byte GetPacketType(byte[] data)
     {
-        public string Host { get; set; } = String.Empty;
-        public int Port { get; set; } = 22;
-        public string Username { get; set; } = String.Empty;
-        public string Password { get; set; } = String.Empty;
-        public string RemoteFilePath { get; set; } = "/home/passwords/passwords.json";
+        if (data.Length < 1)
+            throw new ArgumentException("Packet too short");
+        return data[0];
+    }
+
+    // ─── AUDIO (от Source, с паролем) ─────────────────────────
+
+    public static AudioPacket ReadAudioFromSource(byte[] data)
+    {
+        // Минимум: Type(1) + MD5(16) + Seq(4) + Timestamp(8) + MetaLen(2) = 31
+        if (data.Length < 31)
+            throw new ArgumentException($"Audio packet too short: {data.Length}");
+
+        int offset = 1;
+
+        byte[] passwordMD5 = new byte[16];
+        Buffer.BlockCopy(data, offset, passwordMD5, 0, 16);
+        offset += 16;
+
+        uint sequence = BitConverter.ToUInt32(data, offset);
+        offset += 4;
+
+        long timestamp = BitConverter.ToInt64(data, offset);
+        offset += 8;
+
+        ushort metaLen = BitConverter.ToUInt16(data, offset);
+        offset += 2;
+
+        TrackMetadata? metadata = null;
+        if (metaLen > 0)
+        {
+            if (offset + metaLen > data.Length)
+                throw new ArgumentException("Metadata length exceeds packet size");
+
+            byte[] metaBytes = new byte[metaLen];
+            Buffer.BlockCopy(data, offset, metaBytes, 0, metaLen);
+            metadata = TrackMetadata.Deserialize(metaBytes);
+            offset += metaLen;
+        }
+
+        int opusLen = data.Length - offset;
+        byte[] opusFrame = new byte[opusLen];
+        Buffer.BlockCopy(data, offset, opusFrame, 0, opusLen);
+
+        return new AudioPacket
+        {
+            PasswordMD5 = passwordMD5,
+            Sequence = sequence,
+            Timestamp = timestamp,
+            Metadata = metadata,
+            OpusFrame = opusFrame
+        };
+    }
+
+    // ─── AUDIO (от Сервера, без пароля) ───────────────────────
+
+    public static AudioPacket ReadAudioFromServer(byte[] data)
+    {
+        // Минимум: Type(1) + Seq(4) + Timestamp(8) + MetaLen(2) = 15
+        if (data.Length < 15)
+            throw new ArgumentException($"Audio packet too short: {data.Length}");
+
+        int offset = 1;
+
+        uint sequence = BitConverter.ToUInt32(data, offset);
+        offset += 4;
+
+        long timestamp = BitConverter.ToInt64(data, offset);
+        offset += 8;
+
+        ushort metaLen = BitConverter.ToUInt16(data, offset);
+        offset += 2;
+
+        TrackMetadata? metadata = null;
+        if (metaLen > 0)
+        {
+            if (offset + metaLen > data.Length)
+                throw new ArgumentException("Metadata length exceeds packet size");
+
+            byte[] metaBytes = new byte[metaLen];
+            Buffer.BlockCopy(data, offset, metaBytes, 0, metaLen);
+            metadata = TrackMetadata.Deserialize(metaBytes);
+            offset += metaLen;
+        }
+
+        int opusLen = data.Length - offset;
+        byte[] opusFrame = new byte[opusLen];
+        Buffer.BlockCopy(data, offset, opusFrame, 0, opusLen);
+
+        return new AudioPacket
+        {
+            Sequence = sequence,
+            Timestamp = timestamp,
+            Metadata = metadata,
+            OpusFrame = opusFrame
+        };
+    }
+
+    // ─── SOURCE_STATUS ─────────────────────────────────────────
+
+    public static SourceStatusPacket ReadSourceStatus(byte[] data)
+    {
+        if (data.Length < 13)
+            throw new ArgumentException($"SourceStatus packet too short: {data.Length}");
+
+        return new SourceStatusPacket
+        {
+            Timestamp = BitConverter.ToInt64(data, 1),
+            ClientsCount = BitConverter.ToInt32(data, 9)
+        };
+    }
+
+    // ─── SUBSCRIBE ─────────────────────────────────────────────
+
+    public static SubscribePacket ReadSubscribe(byte[] data)
+    {
+        if (data.Length < 17)
+            throw new ArgumentException($"Subscribe packet too short: {data.Length}");
+
+        byte[] clientId = new byte[16];
+        Buffer.BlockCopy(data, 1, clientId, 0, 16);
+
+        return new SubscribePacket { ClientId = clientId };
+    }
+
+    // ─── KEEPALIVE ─────────────────────────────────────────────
+
+    public static KeepAlivePacket ReadKeepAlive(byte[] data)
+    {
+        if (data.Length < 17)
+            throw new ArgumentException($"KeepAlive packet too short: {data.Length}");
+
+        byte[] clientId = new byte[16];
+        Buffer.BlockCopy(data, 1, clientId, 0, 16);
+
+        return new KeepAlivePacket { ClientId = clientId };
+    }
+
+    // ─── SERVER_INFO ───────────────────────────────────────────
+
+    public static ServerInfoPacket ReadServerInfo(byte[] data)
+    {
+        if (data.Length < 22)
+            throw new ArgumentException($"ServerInfo packet too short: {data.Length}");
+
+        return new ServerInfoPacket
+        {
+            Timestamp = BitConverter.ToInt64(data, 1),
+            Uptime = BitConverter.ToUInt32(data, 9),
+            Status = data[13],
+            ClientsCount = BitConverter.ToInt32(data, 14),
+            TrackPosition = BitConverter.ToUInt32(data, 18)
+        };
     }
 }
 ----------------------------------------
 
 ================================================================================
-Файл: D:\Evgeny\!src_actual\Apps\Likeman\Likeman\Services\AesEncryptionService.cs
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\PacketTypes.cs
 ----------------------------------------
-﻿using System;
-using System.IO;
-using System.Security.Cryptography;
+﻿namespace FrostWire.Core.Protocol;
+
+public static class PacketTypes
+{
+    public const byte Subscribe = 0x10;
+    public const byte KeepAlive = 0x12;
+    public const byte Audio = 0x20;
+    public const byte SourceStatus = 0x21;
+    public const byte ServerInfo = 0x30;
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\PacketWriter.cs
+----------------------------------------
+﻿using System.Text;
+using FrostWire.Core.Protocol.Models;
+
+namespace FrostWire.Core.Protocol;
+
+public static class PacketWriter
+{
+    // ─── AUDIO (Source → Server) ───────────────────────────────
+    // [0x20] [MD5:16] [Seq:4] [Timestamp:8] [MetaLen:2] [MetaJSON:N] [OpusFrame:M]
+
+    public static byte[] WriteAudioFromSource(AudioPacket packet)
+    {
+        if (packet.PasswordMD5 == null || packet.PasswordMD5.Length != 16)
+            throw new ArgumentException("PasswordMD5 must be 16 bytes");
+
+        byte[] metaBytes = packet.Metadata?.Serialize() ?? Array.Empty<byte>();
+        if (metaBytes.Length > ushort.MaxValue)
+            throw new ArgumentException("Metadata too large");
+
+        int totalLen = 1 + 16 + 4 + 8 + 2 + metaBytes.Length + packet.OpusFrame.Length;
+        byte[] buffer = new byte[totalLen];
+        int offset = 0;
+
+        buffer[offset++] = PacketTypes.Audio;
+
+        // Password MD5
+        Buffer.BlockCopy(packet.PasswordMD5, 0, buffer, offset, 16);
+        offset += 16;
+
+        // Sequence
+        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 4), packet.Sequence);
+        offset += 4;
+
+        // Timestamp
+        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 8), packet.Timestamp);
+        offset += 8;
+
+        // Metadata length + data
+        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 2), (ushort)metaBytes.Length);
+        offset += 2;
+
+        if (metaBytes.Length > 0)
+        {
+            Buffer.BlockCopy(metaBytes, 0, buffer, offset, metaBytes.Length);
+            offset += metaBytes.Length;
+        }
+
+        // Opus frame
+        Buffer.BlockCopy(packet.OpusFrame, 0, buffer, offset, packet.OpusFrame.Length);
+
+        return buffer;
+    }
+
+    // ─── AUDIO (Server → Player) ──────────────────────────────
+    // [0x20] [Seq:4] [Timestamp:8] [MetaLen:2] [MetaJSON:N] [OpusFrame:M]
+
+    public static byte[] WriteAudioToPlayer(AudioPacket packet)
+    {
+        byte[] metaBytes = packet.Metadata?.Serialize() ?? Array.Empty<byte>();
+        if (metaBytes.Length > ushort.MaxValue)
+            throw new ArgumentException("Metadata too large");
+
+        int totalLen = 1 + 4 + 8 + 2 + metaBytes.Length + packet.OpusFrame.Length;
+        byte[] buffer = new byte[totalLen];
+        int offset = 0;
+
+        buffer[offset++] = PacketTypes.Audio;
+
+        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 4), packet.Sequence);
+        offset += 4;
+
+        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 8), packet.Timestamp);
+        offset += 8;
+
+        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 2), (ushort)metaBytes.Length);
+        offset += 2;
+
+        if (metaBytes.Length > 0)
+        {
+            Buffer.BlockCopy(metaBytes, 0, buffer, offset, metaBytes.Length);
+            offset += metaBytes.Length;
+        }
+
+        Buffer.BlockCopy(packet.OpusFrame, 0, buffer, offset, packet.OpusFrame.Length);
+
+        return buffer;
+    }
+
+    // ─── SOURCE_STATUS ─────────────────────────────────────────
+    // [0x21] [Timestamp:8] [ClientsCount:4]
+
+    public static byte[] WriteSourceStatus(SourceStatusPacket packet)
+    {
+        byte[] buffer = new byte[1 + 8 + 4];
+        int offset = 0;
+
+        buffer[offset++] = PacketTypes.SourceStatus;
+        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 8), packet.Timestamp);
+        offset += 8;
+        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 4), packet.ClientsCount);
+
+        return buffer;
+    }
+
+    // ─── SUBSCRIBE ─────────────────────────────────────────────
+    // [0x10] [ClientId:16]
+
+    public static byte[] WriteSubscribe(SubscribePacket packet)
+    {
+        if (packet.ClientId.Length != 16)
+            throw new ArgumentException("ClientId must be 16 bytes");
+
+        byte[] buffer = new byte[1 + 16];
+        buffer[0] = PacketTypes.Subscribe;
+        Buffer.BlockCopy(packet.ClientId, 0, buffer, 1, 16);
+
+        return buffer;
+    }
+
+    // ─── KEEPALIVE ─────────────────────────────────────────────
+    // [0x12] [ClientId:16]
+
+    public static byte[] WriteKeepAlive(KeepAlivePacket packet)
+    {
+        if (packet.ClientId.Length != 16)
+            throw new ArgumentException("ClientId must be 16 bytes");
+
+        byte[] buffer = new byte[1 + 16];
+        buffer[0] = PacketTypes.KeepAlive;
+        Buffer.BlockCopy(packet.ClientId, 0, buffer, 1, 16);
+
+        return buffer;
+    }
+
+    // ─── SERVER_INFO ───────────────────────────────────────────
+    // [0x30] [Timestamp:8] [Uptime:4] [Status:1] [ClientsCount:4] [TrackPosition:4]
+
+    public static byte[] WriteServerInfo(ServerInfoPacket packet)
+    {
+        byte[] buffer = new byte[1 + 8 + 4 + 1 + 4 + 4];
+        int offset = 0;
+
+        buffer[offset++] = PacketTypes.ServerInfo;
+        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 8), packet.Timestamp);
+        offset += 8;
+        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 4), packet.Uptime);
+        offset += 4;
+        buffer[offset++] = packet.Status;
+        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 4), packet.ClientsCount);
+        offset += 4;
+        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 4), packet.TrackPosition);
+
+        return buffer;
+    }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\Models\AudioPacket.cs
+----------------------------------------
+﻿namespace FrostWire.Core.Protocol.Models;
+
+public class AudioPacket
+{
+    public byte[]? PasswordMD5 { get; set; }
+    public uint Sequence { get; set; }
+    public long Timestamp { get; set; }
+    public TrackMetadata? Metadata { get; set; }
+    public byte[] OpusFrame { get; set; } = Array.Empty<byte>();
+
+    public bool HasPassword => PasswordMD5 is { Length: 16 };
+    public bool HasMetadata => Metadata != null && !Metadata.IsEmpty;
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\Models\KeepAlivePacket.cs
+----------------------------------------
+﻿namespace FrostWire.Core.Protocol.Models;
+
+public class KeepAlivePacket
+{
+    public byte[] ClientId { get; set; } = Array.Empty<byte>();
+
+    public KeepAlivePacket()
+    {
+    }
+
+    public KeepAlivePacket(Guid clientId)
+    {
+        ClientId = clientId.ToByteArray();
+    }
+
+    public Guid GetClientId() => new Guid(ClientId);
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\Models\ServerInfoPacket.cs
+----------------------------------------
+﻿namespace FrostWire.Core.Protocol.Models;
+
+public class ServerInfoPacket
+{
+    public const byte StatusLive = 0x01;
+    public const byte StatusNoSource = 0x02;
+    public const byte StatusShuttingDown = 0x03;
+
+    public long Timestamp { get; set; }
+    public uint Uptime { get; set; }
+    public byte Status { get; set; }
+    public int ClientsCount { get; set; }
+    public uint TrackPosition { get; set; }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\Models\SourceStatusPacket.cs
+----------------------------------------
+﻿namespace FrostWire.Core.Protocol.Models;
+
+public class SourceStatusPacket
+{
+    public long Timestamp { get; set; }
+    public int ClientsCount { get; set; }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\Models\SubscribePacket.cs
+----------------------------------------
+﻿namespace FrostWire.Core.Protocol.Models;
+
+public class SubscribePacket
+{
+    public byte[] ClientId { get; set; } = Array.Empty<byte>();
+
+    public SubscribePacket()
+    {
+    }
+
+    public SubscribePacket(Guid clientId)
+    {
+        ClientId = clientId.ToByteArray();
+    }
+
+    public Guid GetClientId() => new Guid(ClientId);
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\Models\TrackMetadata.cs
+----------------------------------------
+﻿namespace FrostWire.Core.Protocol.Models;
+
+public class TrackMetadata
+{
+    public string Title { get; set; } = string.Empty;
+    public string Artist { get; set; } = string.Empty;
+    public string Album { get; set; } = string.Empty;
+    public double Duration { get; set; }
+
+    public bool IsEmpty => string.IsNullOrEmpty(Title) && string.IsNullOrEmpty(Artist);
+
+    public byte[] Serialize()
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(this);
+        return System.Text.Encoding.UTF8.GetBytes(json);
+    }
+
+    public static TrackMetadata Deserialize(byte[] data)
+    {
+        var json = System.Text.Encoding.UTF8.GetString(data);
+        return System.Text.Json.JsonSerializer.Deserialize<TrackMetadata>(json) ?? new TrackMetadata();
+    }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Security\PasswordHasher.cs
+----------------------------------------
+﻿using System.Security.Cryptography;
 using System.Text;
-using System.Threading.Tasks;
 
-namespace Likeman.Services
+namespace FrostWire.Core.Security;
+
+public static class PasswordHasher
 {
-    public class AesEncryptionService : IEncryptionService
+    public static byte[] ComputeHash(string password)
     {
-        private byte[] _key;
-        private readonly string _keyFilePath;
+        if (string.IsNullOrEmpty(password))
+            throw new ArgumentException("Password cannot be empty");
 
-        public AesEncryptionService()
-        {
-            var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var appFolder = Path.Combine(appDataPath, "Likeman");
-            Directory.CreateDirectory(appFolder);
-            _keyFilePath = Path.Combine(appFolder, "encryption.key");
-        }
-
-        public async Task InitializeAsync()
-        {
-            if (File.Exists(_keyFilePath))
-            {
-                _key = await File.ReadAllBytesAsync(_keyFilePath);
-            }
-            else
-            {
-                // Генерируем новый ключ
-                using var aes = Aes.Create();
-                aes.GenerateKey();
-                _key = aes.Key;
-
-                await File.WriteAllBytesAsync(_keyFilePath, _key);
-                Console.WriteLine($"Сгенерирован новый ключ шифрования: {_keyFilePath}");
-            }
-        }
-
-        public string Encrypt(string plainText)
-        {
-            if (string.IsNullOrEmpty(plainText)) return plainText;
-
-            using var aes = Aes.Create();
-            aes.Key = _key;
-            aes.GenerateIV();
-
-            using var encryptor = aes.CreateEncryptor();
-            using var ms = new MemoryStream();
-
-            // Записываем IV в начало потока
-            ms.Write(aes.IV, 0, aes.IV.Length);
-
-            using (var cs = new CryptoStream(ms, encryptor, CryptoStreamMode.Write))
-            using (var sw = new StreamWriter(cs))
-            {
-                sw.Write(plainText);
-            }
-
-            var encrypted = ms.ToArray();
-            return Convert.ToBase64String(encrypted);
-        }
-
-        public string Decrypt(string encryptedText)
-        {
-            if (string.IsNullOrEmpty(encryptedText)) return encryptedText;
-
-            // Если текст не зашифрован, возвращаем как есть (для обратной совместимости)
-            if (!IsEncrypted(encryptedText))
-            {
-                Console.WriteLine("Обнаружен незашифрованный пароль, будет зашифрован при следующем сохранении");
-                return encryptedText;
-            }
-
-            try
-            {
-                var encryptedBytes = Convert.FromBase64String(encryptedText);
-
-                using var aes = Aes.Create();
-                aes.Key = _key;
-
-                // Извлекаем IV из начала данных
-                var iv = new byte[16];
-                Array.Copy(encryptedBytes, 0, iv, 0, iv.Length);
-                aes.IV = iv;
-
-                using var decryptor = aes.CreateDecryptor();
-                using var ms = new MemoryStream(encryptedBytes, iv.Length, encryptedBytes.Length - iv.Length);
-                using var cs = new CryptoStream(ms, decryptor, CryptoStreamMode.Read);
-                using var sr = new StreamReader(cs);
-
-                return sr.ReadToEnd();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка дешифрования: {ex.Message}");
-                // Возвращаем оригинальный текст, чтобы не потерять данные
-                return encryptedText;
-            }
-        }
-
-        public bool IsEncrypted(string text)
-        {
-            if (string.IsNullOrEmpty(text)) return false;
-
-            try
-            {
-                // Проверяем, является ли текст валидной base64 строкой достаточной длины
-                if (text.Length < 24) return false;
-
-                var bytes = Convert.FromBase64String(text);
-                return bytes.Length >= 16; // IV + хотя бы 1 байт данных
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        public async Task<bool> ExportKeyAsync(string filePath)
-        {
-            try
-            {
-                await File.WriteAllBytesAsync(filePath, _key);
-                Console.WriteLine($"Ключ экспортирован: {filePath}");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка экспорта ключа: {ex.Message}");
-                return false;
-            }
-        }
-
-        public async Task<bool> ImportKeyAsync(string filePath)
-        {
-            try
-            {
-                if (!File.Exists(filePath))
-                {
-                    Console.WriteLine($"Файл ключа не найден: {filePath}");
-                    return false;
-                }
-
-                var key = await File.ReadAllBytesAsync(filePath);
-                if (key.Length != 32) // 256-bit key
-                {
-                    Console.WriteLine("Неверный формат ключа");
-                    return false;
-                }
-
-                _key = key;
-                // Сохраняем ключ в стандартное расположение
-                await File.WriteAllBytesAsync(_keyFilePath, _key);
-                Console.WriteLine($"Ключ импортирован: {filePath} -> {_keyFilePath}");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка импорта ключа: {ex.Message}");
-                return false;
-            }
-        }
+        byte[] inputBytes = Encoding.UTF8.GetBytes(password);
+        return MD5.HashData(inputBytes);
     }
 }
 ----------------------------------------
 
 ================================================================================
-Файл: D:\Evgeny\!src_actual\Apps\Likeman\Likeman\Services\IEncryptionService.cs
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Player\JitterBuffer.cs
 ----------------------------------------
-﻿namespace Likeman.Services
+﻿namespace FrostWire.Player;
+
+public class JitterBuffer
 {
-    public interface IEncryptionService
+    private readonly object _lock = new();
+    private readonly SortedDictionary<uint, byte[]> _buffer = new();
+    private uint _nextSequence;
+    private bool _initialized;
+
+    private const int MaxBufferSize = 10; // 200ms при 20ms фреймах
+
+    public void Add(uint sequence, byte[] opusFrame)
     {
-        string Encrypt(string plainText);
-        string Decrypt(string encryptedText);
-        bool IsEncrypted(string text);
-        Task InitializeAsync();
-        Task<bool> ExportKeyAsync(string filePath);
-        Task<bool> ImportKeyAsync(string filePath);
-    }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\!src_actual\Apps\Likeman\Likeman\Services\ILocalStorageService.cs
-----------------------------------------
-﻿using System.Collections.Generic;
-using System.Threading.Tasks;
-using Likeman.Models;
-
-namespace Likeman.Services
-{
-    public interface ILocalStorageService
-    {
-        Task<List<PasswordEntry>> LoadPasswordsAsync();
-        Task SavePasswordsAsync(List<PasswordEntry> passwords);
-        string GetLocalFilePath();
-    }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\!src_actual\Apps\Likeman\Likeman\Services\ISftpService.cs
-----------------------------------------
-﻿using System.Collections.Generic;
-using System.Threading.Tasks;
-using Likeman.Models;
-
-namespace Likeman.Services
-{
-    public interface ISftpService
-    {
-        Task<bool> TestConnectionAsync();
-        Task<List<PasswordEntry>> LoadPasswordsAsync();
-        Task SavePasswordsAsync(List<PasswordEntry> passwords);
-        Task<bool> EnsurePathExists();
-    }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\!src_actual\Apps\Likeman\Likeman\Services\LocalStorageService.cs
-----------------------------------------
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Text.Json;
-using System.Threading.Tasks;
-using Likeman.Models;
-
-namespace Likeman.Services
-{
-    public class LocalStorageService : ILocalStorageService
-    {
-        private readonly string _localFilePath;
-        private readonly IEncryptionService _encryptionService;
-
-        public LocalStorageService(IEncryptionService encryptionService)
+        lock (_lock)
         {
-            var appDataPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var appFolder = Path.Combine(appDataPath, "Likeman");
-            Directory.CreateDirectory(appFolder);
-            _localFilePath = Path.Combine(appFolder, "passwords.json");
-            _encryptionService = encryptionService;
-        }
-
-        public async Task<List<PasswordEntry>> LoadPasswordsAsync()
-        {
-            try
+            if (!_initialized)
             {
-                if (!File.Exists(_localFilePath))
-                {
-                    return new List<PasswordEntry>();
-                }
-
-                var json = await File.ReadAllTextAsync(_localFilePath);
-                if (string.IsNullOrEmpty(json))
-                {
-                    return new List<PasswordEntry>();
-                }
-
-                var passwords = JsonSerializer.Deserialize<List<PasswordEntry>>(json) ?? new List<PasswordEntry>();
-
-                // Дешифруем пароли при загрузке
-                foreach (var password in passwords)
-                {
-                    password.Password = _encryptionService.Decrypt(password.Password);
-                }
-
-                return passwords;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка загрузки локальных паролей: {ex.Message}");
-                return new List<PasswordEntry>();
-            }
-        }
-
-        public async Task SavePasswordsAsync(List<PasswordEntry> passwords)
-        {
-            try
-            {
-                var passwordsToSave = new List<PasswordEntry>();
-
-                foreach (var password in passwords)
-                {
-                    var passwordToSave = new PasswordEntry
-                    {
-                        Id = password.Id,
-                        Name = password.Name,
-                        Website = password.Website,
-                        Username = password.Username,
-                        Notes = password.Notes,
-                        CreatedAt = password.CreatedAt,
-                        UpdatedAt = DateTime.Now
-                    };
-
-                    // Всегда шифруем пароль
-                    passwordToSave.Password = _encryptionService.Encrypt(password.Password);
-
-                    passwordsToSave.Add(passwordToSave);
-                }
-
-                var json = JsonSerializer.Serialize(passwordsToSave, new JsonSerializerOptions { WriteIndented = true });
-                await File.WriteAllTextAsync(_localFilePath, json);
-                Console.WriteLine($"Пароли сохранены локально с шифрованием: {_localFilePath}");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка сохранения локальных паролей: {ex.Message}");
-                throw;
-            }
-        }
-
-        public string GetLocalFilePath() => _localFilePath;
-    }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\!src_actual\Apps\Likeman\Likeman\Services\SftpService.cs
-----------------------------------------
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Text.Json;
-using System.Threading.Tasks;
-using Likeman.Models;
-using Renci.SshNet;
-
-namespace Likeman.Services
-{
-    public class SftpService : ISftpService
-    {
-        private readonly SftpConfig _config;
-        private readonly IEncryptionService _encryptionService;
-
-        public SftpService(SftpConfig config, IEncryptionService encryptionService)
-        {
-            _config = config;
-            _encryptionService = encryptionService;
-        }
-
-        public async Task<bool> TestConnectionAsync()
-        {
-            try
-            {
-                using var client = new SftpClient(_config.Host, _config.Port, _config.Username, _config.Password);
-                await Task.Run(() => client.Connect());
-                client.Disconnect();
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка подключения: {ex.Message}");
-                return false;
-            }
-        }
-
-        public async Task<List<PasswordEntry>> LoadPasswordsAsync()
-        {
-            try
-            {
-                using var client = new SftpClient(_config.Host, _config.Port, _config.Username, _config.Password);
-                await Task.Run(() => client.Connect());
-
-                if (!client.Exists(_config.RemoteFilePath))
-                {
-                    Console.WriteLine($"Файл {_config.RemoteFilePath} не существует, создаем пустой список");
-                    return new List<PasswordEntry>();
-                }
-
-                using var stream = new MemoryStream();
-                await Task.Run(() => client.DownloadFile(_config.RemoteFilePath, stream));
-                stream.Position = 0;
-
-                using var reader = new StreamReader(stream);
-                var json = await reader.ReadToEndAsync();
-
-                if (string.IsNullOrWhiteSpace(json))
-                {
-                    return new List<PasswordEntry>();
-                }
-
-                var passwords = JsonSerializer.Deserialize<List<PasswordEntry>>(json) ?? new List<PasswordEntry>();
-
-                // Дешифруем пароли при загрузке
-                foreach (var password in passwords)
-                {
-                    password.Password = _encryptionService.Decrypt(password.Password);
-                }
-
-                return passwords;
-            }
-            catch (Renci.SshNet.Common.SftpPathNotFoundException)
-            {
-                Console.WriteLine($"Файл {_config.RemoteFilePath} не найден");
-                return new List<PasswordEntry>();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка загрузки паролей: {ex.Message}");
-                return new List<PasswordEntry>();
-            }
-        }
-
-        public async Task SavePasswordsAsync(List<PasswordEntry> passwords)
-        {
-            try
-            {
-                using var client = new SftpClient(_config.Host, _config.Port, _config.Username, _config.Password);
-                await Task.Run(() => client.Connect());
-
-                await CreateDirectoriesIfNotExist(client, _config.RemoteFilePath);
-
-                var passwordsToSave = new List<PasswordEntry>();
-
-                foreach (var password in passwords)
-                {
-                    var passwordToSave = new PasswordEntry
-                    {
-                        Id = password.Id,
-                        Name = password.Name,
-                        Website = password.Website,
-                        Username = password.Username,
-                        Notes = password.Notes,
-                        CreatedAt = password.CreatedAt,
-                        UpdatedAt = DateTime.Now
-                    };
-
-                    // Всегда шифруем пароль
-                    passwordToSave.Password = _encryptionService.Encrypt(password.Password);
-
-                    passwordsToSave.Add(passwordToSave);
-                }
-
-                var json = JsonSerializer.Serialize(passwordsToSave, new JsonSerializerOptions { WriteIndented = true });
-                using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
-
-                await Task.Run(() => client.UploadFile(stream, _config.RemoteFilePath, true));
-                Console.WriteLine($"Файл успешно сохранен с шифрованием: {_config.RemoteFilePath}");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка сохранения паролей: {ex.Message}");
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Создает все необходимые директории для указанного пути
-        /// </summary>
-        private async Task CreateDirectoriesIfNotExist(SftpClient client, string remoteFilePath)
-        {
-            try
-            {
-                // Получаем директорию из полного пути к файлу
-                var directoryPath = Path.GetDirectoryName(remoteFilePath);
-                directoryPath = directoryPath.Replace("\\", "/");
-
-                if (string.IsNullOrEmpty(directoryPath) || directoryPath == "/")
-                {
-                    Console.WriteLine("Корневая директория, создание не требуется");
-                    return;
-                }
-
-                // Разбиваем путь на части
-                var pathParts = directoryPath.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
-                var currentPath = "";
-
-                // Последовательно проверяем и создаем каждую директорию в пути
-                foreach (var part in pathParts)
-                {
-                    currentPath = currentPath + "/" + part;
-
-                    if (!client.Exists(currentPath))
-                    {
-                        Console.WriteLine($"Создаем директорию: {currentPath}");
-                        await Task.Run(() => client.CreateDirectory(currentPath));
-                    }
-                    else
-                    {
-                        Console.WriteLine($"Директория существует: {currentPath}");
-                    }
-                }
-
-                Console.WriteLine($"Все директории для пути {directoryPath} проверены/созданы");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка при создании директорий: {ex.Message}");
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Проверяет корректность пути и создает директории при необходимости
-        /// </summary>
-        public async Task<bool> EnsurePathExists()
-        {
-            try
-            {
-                using var client = new SftpClient(_config.Host, _config.Port, _config.Username, _config.Password);
-                await Task.Run(() => client.Connect());
-
-                await CreateDirectoriesIfNotExist(client, _config.RemoteFilePath);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Ошибка при проверке пути: {ex.Message}");
-                return false;
-            }
-        }
-    }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\!src_actual\Apps\Likeman\Likeman\ViewModels\MainViewModel.cs
-----------------------------------------
-﻿using Likeman.Models;
-using Likeman.Services;
-using System.Collections.ObjectModel;
-using System.ComponentModel;
-using System.Runtime.CompilerServices;
-using System.Threading.Tasks;
-using System.Windows;
-using System.Windows.Input;
-
-namespace Likeman.ViewModels
-{
-    public class MainViewModel : INotifyPropertyChanged
-    {
-        private readonly ISftpService _sftpService;
-        private readonly ILocalStorageService _localStorageService;
-        private readonly IEncryptionService _encryptionService;
-        private string _statusMessage = "Загрузка...";
-        private PasswordEntryViewModel _selectedPassword;
-
-        public ObservableCollection<PasswordEntryViewModel> Passwords { get; } = new();
-        public PasswordEntryViewModel NewPassword { get; private set; }
-
-        public PasswordEntryViewModel SelectedPassword
-        {
-            get => _selectedPassword;
-            set
-            {
-                _selectedPassword = value;
-                OnPropertyChanged();
-                OnPropertyChanged(nameof(IsPasswordSelected));
-                CommandManager.InvalidateRequerySuggested();
-            }
-        }
-
-        public bool IsPasswordSelected => SelectedPassword != null;
-
-        public string StatusMessage
-        {
-            get => _statusMessage;
-            set
-            {
-                _statusMessage = value;
-                OnPropertyChanged();
-            }
-        }
-
-        // Команды
-        public ICommand AddPasswordCommand { get; }
-        public ICommand DeletePasswordCommand { get; }
-        public ICommand SaveAllCommand { get; }
-        public ICommand LoadFromServerCommand { get; }
-        public ICommand ExportKeyCommand { get; }
-        public ICommand ImportKeyCommand { get; }
-
-        public MainViewModel(ISftpService sftpService, ILocalStorageService localStorageService, IEncryptionService encryptionService)
-        {
-            _sftpService = sftpService;
-            _localStorageService = localStorageService;
-            _encryptionService = encryptionService;
-
-            NewPassword = new PasswordEntryViewModel(new PasswordEntry());
-
-            AddPasswordCommand = new RelayCommand(AddPassword);
-            DeletePasswordCommand = new RelayCommand(DeletePassword, () => IsPasswordSelected);
-            SaveAllCommand = new RelayCommand(async () => await SaveAllPasswordsAsync());
-            LoadFromServerCommand = new RelayCommand(async () => await LoadFromServerAsync());
-            ExportKeyCommand = new RelayCommand(async () => await ExportKeyAsync());
-            ImportKeyCommand = new RelayCommand(async () => await ImportKeyAsync());
-
-            _ = InitializeAsync();
-        }
-
-        private async Task InitializeAsync()
-        {
-            await _encryptionService.InitializeAsync();
-            await LoadPasswordsAsync();
-
-            foreach (var password in Passwords)
-            {
-                password.SetMainViewModel(this);
+                _nextSequence = sequence;
+                _initialized = true;
             }
 
-            StatusMessage = "Готово. Все пароли защищены шифрованием.";
-        }
-
-        private async Task LoadPasswordsAsync()
-        {
-            try
-            {
-                StatusMessage = "Загрузка паролей...";
-                List<PasswordEntry> passwords;
-
-                try
-                {
-                    passwords = await _sftpService.LoadPasswordsAsync();
-                    StatusMessage = $"Загружено {passwords.Count} паролей с сервера";
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Ошибка загрузки с сервера: {ex.Message}");
-                    StatusMessage = "Ошибка сервера, загружаем локальные пароли...";
-                    passwords = await _localStorageService.LoadPasswordsAsync();
-                    StatusMessage = $"Загружено {passwords.Count} паролей из локального хранилища";
-                }
-
-                Passwords.Clear();
-                foreach (var password in passwords)
-                {
-                    var vm = new PasswordEntryViewModel(password);
-                    vm.SetMainViewModel(this);
-                    Passwords.Add(vm);
-                }
-
-                // Автоматически сохраняем в локальное хранилище (с шифрованием)
-                await _localStorageService.SavePasswordsAsync(passwords);
-            }
-            catch (Exception ex)
-            {
-                StatusMessage = $"Ошибка загрузки: {ex.Message}";
-                MessageBox.Show($"Не удалось загрузить пароли: {ex.Message}", "Ошибка",
-                               MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
-        private void AddPassword()
-        {
-            if (string.IsNullOrWhiteSpace(NewPassword.Name))
-            {
-                MessageBox.Show("Введите название пароля");
+            // Игнорируем старые пакеты
+            if (sequence < _nextSequence && _initialized)
                 return;
+
+            // Не храним слишком много
+            if (_buffer.Count >= MaxBufferSize)
+            {
+                // Удаляем самый старый
+                var oldest = _buffer.Keys.First();
+                _buffer.Remove(oldest);
+                _nextSequence = Math.Max(_nextSequence, oldest + 1);
             }
 
-            var newEntry = new PasswordEntry
-            {
-                Name = NewPassword.Name,
-                Website = NewPassword.Website,
-                Username = NewPassword.Username,
-                Password = NewPassword.Password,
-                Notes = NewPassword.Notes
-            };
-
-            var newViewModel = new PasswordEntryViewModel(newEntry);
-            newViewModel.SetMainViewModel(this);
-            Passwords.Add(newViewModel);
-
-            // Автоматическое сохранение с шифрованием
-            _ = SaveAllPasswordsAsync();
-
-            // Сброс формы
-            NewPassword.Name = string.Empty;
-            NewPassword.Website = string.Empty;
-            NewPassword.Username = string.Empty;
-            NewPassword.Password = string.Empty;
-            NewPassword.Notes = string.Empty;
-
-            StatusMessage = "Пароль добавлен и зашифрован";
-        }
-
-        private void DeletePassword()
-        {
-            if (SelectedPassword != null)
-            {
-                var result = MessageBox.Show($"Удалить пароль '{SelectedPassword.Name}'?",
-                                           "Подтверждение удаления",
-                                           MessageBoxButton.YesNo,
-                                           MessageBoxImage.Question);
-
-                if (result == MessageBoxResult.Yes)
-                {
-                    Passwords.Remove(SelectedPassword);
-                    SelectedPassword = null;
-                    _ = SaveAllPasswordsAsync();
-                    StatusMessage = "Пароль удален";
-                }
-            }
-        }
-
-        private async Task SaveAllPasswordsAsync()
-        {
-            try
-            {
-                StatusMessage = "Сохранение зашифрованных паролей...";
-                var passwords = new List<PasswordEntry>();
-                foreach (var vm in Passwords)
-                {
-                    passwords.Add(vm.ToModel());
-                }
-
-                // Сохраняем в оба хранилища с шифрованием
-                await _localStorageService.SavePasswordsAsync(passwords);
-
-                try
-                {
-                    await _sftpService.SavePasswordsAsync(passwords);
-                    StatusMessage = $"Сохранено {passwords.Count} зашифрованных паролей";
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"Ошибка сохранения на сервер: {ex.Message}");
-                    StatusMessage = $"Сохранено {passwords.Count} паролей (только локально)";
-                    MessageBox.Show($"Не удалось сохранить на сервер: {ex.Message}\nПароли сохранены локально.",
-                                   "Внимание", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
-            }
-            catch (Exception ex)
-            {
-                StatusMessage = $"Ошибка сохранения: {ex.Message}";
-                MessageBox.Show($"Не удалось сохранить пароли: {ex.Message}", "Ошибка",
-                               MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
-        private async Task LoadFromServerAsync()
-        {
-            try
-            {
-                StatusMessage = "Загрузка с сервера...";
-                var passwords = await _sftpService.LoadPasswordsAsync();
-
-                Passwords.Clear();
-                foreach (var password in passwords)
-                {
-                    var vm = new PasswordEntryViewModel(password);
-                    vm.SetMainViewModel(this);
-                    Passwords.Add(vm);
-                }
-
-                await _localStorageService.SavePasswordsAsync(passwords);
-                StatusMessage = $"Загружено {passwords.Count} паролей с сервера";
-            }
-            catch (Exception ex)
-            {
-                StatusMessage = $"Ошибка загрузки с сервера: {ex.Message}";
-                MessageBox.Show($"Не удалось загрузить с сервера: {ex.Message}", "Ошибка",
-                               MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
-        private async Task ExportKeyAsync()
-        {
-            try
-            {
-                var dialog = new Microsoft.Win32.SaveFileDialog
-                {
-                    FileName = "likeman_encryption.key",
-                    Filter = "Key files (*.key)|*.key|All files (*.*)|*.*",
-                    DefaultExt = ".key"
-                };
-
-                if (dialog.ShowDialog() == true)
-                {
-                    if (await _encryptionService.ExportKeyAsync(dialog.FileName))
-                    {
-                        StatusMessage = "Ключ экспортирован";
-                        MessageBox.Show("Ключ шифрования успешно экспортирован. Сохраните его в безопасном месте!",
-                                       "Экспорт ключа", MessageBoxButton.OK, MessageBoxImage.Information);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                StatusMessage = $"Ошибка экспорта ключа: {ex.Message}";
-                MessageBox.Show($"Не удалось экспортировать ключ: {ex.Message}", "Ошибка",
-                               MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
-        private async Task ImportKeyAsync()
-        {
-            try
-            {
-                var dialog = new Microsoft.Win32.OpenFileDialog
-                {
-                    Filter = "Key files (*.key)|*.key|All files (*.*)|*.*",
-                    DefaultExt = ".key"
-                };
-
-                if (dialog.ShowDialog() == true)
-                {
-                    if (await _encryptionService.ImportKeyAsync(dialog.FileName))
-                    {
-                        StatusMessage = "Ключ импортирован";
-                        MessageBox.Show("Ключ шифрования успешно импортирован! Теперь вы можете работать с вашими паролями на этом компьютере.",
-                                       "Импорт ключа", MessageBoxButton.OK, MessageBoxImage.Information);
-
-                        // Перезагружаем пароли с новым ключом
-                        await LoadPasswordsAsync();
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                StatusMessage = $"Ошибка импорта ключа: {ex.Message}";
-                MessageBox.Show($"Не удалось импортировать ключ: {ex.Message}", "Ошибка",
-                               MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
-
-        public async void OnPasswordEdited()
-        {
-            if (Passwords.Count > 0)
-            {
-                await SaveAllPasswordsAsync();
-            }
-        }
-
-        public event PropertyChangedEventHandler? PropertyChanged;
-        protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-        {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+            _buffer[sequence] = opusFrame;
         }
     }
 
-    // Простая реализация ICommand
-    public class RelayCommand : ICommand
+    public byte[]? GetNext()
     {
-        private readonly Action _execute;
-        private readonly Func<bool> _canExecute;
-
-        public RelayCommand(Action execute, Func<bool> canExecute = null)
+        lock (_lock)
         {
-            _execute = execute ?? throw new ArgumentNullException(nameof(execute));
-            _canExecute = canExecute;
+            if (!_initialized)
+                return null;
+
+            if (_buffer.TryGetValue(_nextSequence, out var frame))
+            {
+                _buffer.Remove(_nextSequence);
+                _nextSequence++;
+                return frame;
+            }
+
+            // Пакет не пришёл — пропускаем (PLC отработает)
+            if (_buffer.Count > 0 && _buffer.Keys.First() > _nextSequence)
+            {
+                _nextSequence++;
+                return null; // дырка
+            }
+
+            return null;
         }
+    }
 
-        public bool CanExecute(object parameter) => _canExecute?.Invoke() ?? true;
-
-        public void Execute(object parameter) => _execute();
-
-        public event EventHandler CanExecuteChanged
+    public void Clear()
+    {
+        lock (_lock)
         {
-            add { CommandManager.RequerySuggested += value; }
-            remove { CommandManager.RequerySuggested -= value; }
+            _buffer.Clear();
+            _initialized = false;
+            _nextSequence = 0;
         }
     }
 }
 ----------------------------------------
 
 ================================================================================
-Файл: D:\Evgeny\!src_actual\Apps\Likeman\Likeman\ViewModels\PasswordEntryViewModel.cs
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Player\PlayerEngine.cs
 ----------------------------------------
-﻿using Likeman.Models;
-using System.ComponentModel;
+﻿using System.Net;
+using System.Net.Sockets;
+using Concentus.Structs;
+using FrostWire.Core.Configuration;
+using FrostWire.Core.Protocol;
+using FrostWire.Core.Protocol.Models;
+using Un4seen.Bass;
 
-namespace Likeman.ViewModels
+namespace FrostWire.Player;
+
+public class PlayerEngine
 {
-    public class PasswordEntryViewModel : INotifyPropertyChanged
+    private readonly AppConfig _config;
+    private readonly Guid _clientId;
+    private UdpClient? _udp;
+    private IPEndPoint? _serverEndpoint;
+
+    private JitterBuffer _jitterBuffer;
+    private readonly object _stateLock = new();
+
+    private volatile bool _running;
+
+    private string _title = "—";
+    private string _artist = "—";
+    private string _album = "—";
+    private double _duration;
+    private uint _trackPosition;
+    private byte _serverStatus = ServerInfoPacket.StatusNoSource;
+    private uint _serverUptime;
+    private int _listenersCount;
+    private int _reconnects;
+
+    private DateTime _lastPacketReceived = DateTime.MinValue;
+
+    private OpusDecoder _opusDecoder = null!;
+    private int _outputStream;
+
+    public PlayerEngine(AppConfig config)
     {
-        private readonly PasswordEntry _passwordEntry;
-        private MainViewModel _mainViewModel;
+        _config = config;
+        _clientId = Guid.NewGuid();
+        _jitterBuffer = new JitterBuffer();
+    }
 
-        public string Id => _passwordEntry.Id;
-
-        public string Name
+    public async Task RunAsync(CancellationToken ct)
+    {
+        if (!InitBass())
         {
-            get => _passwordEntry.Name;
-            set
+            Console.WriteLine("[FATAL] Failed to initialize BASS");
+            return;
+        }
+
+        _running = true;
+        _lastPacketReceived = DateTime.MinValue;
+
+        var playbackThread = new Thread(PlaybackLoop)
+        {
+            IsBackground = true
+        };
+        playbackThread.Start();
+
+        var uiThread = new Thread(UiLoop)
+        {
+            IsBackground = true
+        };
+        uiThread.Start();
+
+        try
+        {
+            while (!ct.IsCancellationRequested)
             {
-                if (_passwordEntry.Name != value)
+                await ConnectAndListenAsync(ct);
+
+                if (!ct.IsCancellationRequested)
                 {
-                    _passwordEntry.Name = value;
-                    OnPropertyChanged(nameof(Name));
-                    _mainViewModel?.OnPasswordEdited();
+                    Console.WriteLine("[RECONNECT] Connection lost, reconnecting in 1s...");
+                    _reconnects++;
+                    _serverStatus = ServerInfoPacket.StatusNoSource;
+
+                    // ДОБАВЛЕНО: сброс состояния при реконнекте
+                    ResetPlaybackState();
+
+                    await Task.Delay(1000, ct);
                 }
             }
         }
-
-        public string Website
+        finally
         {
-            get => _passwordEntry.Website;
-            set
-            {
-                if (_passwordEntry.Website != value)
-                {
-                    _passwordEntry.Website = value;
-                    OnPropertyChanged(nameof(Website));
-                    _mainViewModel?.OnPasswordEdited();
-                }
-            }
-        }
-
-        public string Username
-        {
-            get => _passwordEntry.Username;
-            set
-            {
-                if (_passwordEntry.Username != value)
-                {
-                    _passwordEntry.Username = value;
-                    OnPropertyChanged(nameof(Username));
-                    _mainViewModel?.OnPasswordEdited();
-                }
-            }
-        }
-
-        public string Password
-        {
-            get => _passwordEntry.Password;
-            set
-            {
-                if (_passwordEntry.Password != value)
-                {
-                    _passwordEntry.Password = value;
-                    OnPropertyChanged(nameof(Password));
-                    _mainViewModel?.OnPasswordEdited();
-                }
-            }
-        }
-
-        public string Notes
-        {
-            get => _passwordEntry.Notes;
-            set
-            {
-                if (_passwordEntry.Notes != value)
-                {
-                    _passwordEntry.Notes = value;
-                    OnPropertyChanged(nameof(Notes));
-                    _mainViewModel?.OnPasswordEdited();
-                }
-            }
-        }
-
-        public PasswordEntryViewModel(PasswordEntry passwordEntry)
-        {
-            _passwordEntry = passwordEntry;
-        }
-
-        // Метод для установки ссылки на MainViewModel после создания
-        public void SetMainViewModel(MainViewModel mainViewModel)
-        {
-            _mainViewModel = mainViewModel;
-        }
-
-        public PasswordEntry ToModel() => _passwordEntry;
-
-        public event PropertyChangedEventHandler? PropertyChanged;
-        protected virtual void OnPropertyChanged(string propertyName)
-        {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+            _running = false;
+            playbackThread.Join(2000);
+            uiThread.Join(2000);
+            Bass.BASS_StreamFree(_outputStream);
+            Bass.BASS_Free();
+            _udp?.Close();
         }
     }
+
+    // НОВЫЙ МЕТОД: сброс состояния воспроизведения
+    private void ResetPlaybackState()
+    {
+        lock (_stateLock)
+        {
+            _title = "—";
+            _artist = "—";
+            _album = "—";
+            _duration = 0;
+            _trackPosition = 0;
+        }
+
+        // Очищаем jitter buffer при реконнекте
+        _jitterBuffer.Clear();
+
+        Console.WriteLine("[STATE] Playback state reset for reconnection");
+    }
+
+    private async Task ConnectAndListenAsync(CancellationToken ct)
+    {
+        _udp = new UdpClient();
+        _serverEndpoint = new IPEndPoint(IPAddress.Parse(_config.Player.ServerAddress), _config.Player.ServerPort);
+
+        var subscribe = new SubscribePacket(_clientId);
+        await _udp.SendAsync(PacketWriter.WriteSubscribe(subscribe), _serverEndpoint, ct);
+        Console.WriteLine($"[CONNECT] Subscribed. GUID: {_clientId.ToString("N")[..8]}...");
+
+        _lastPacketReceived = DateTime.UtcNow;
+
+        using var keepAliveCts = new CancellationTokenSource();
+        var keepAliveTask = KeepAliveLoop(keepAliveCts.Token);
+
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                using var receiveCts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, receiveCts.Token);
+
+                try
+                {
+                    var result = await _udp.ReceiveAsync(linked.Token);
+                    HandlePacket(result.Buffer);
+                    _lastPacketReceived = DateTime.UtcNow;
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                }
+
+                var silence = (DateTime.UtcNow - _lastPacketReceived).TotalMilliseconds;
+                if (silence > _config.Player.KeepAliveIntervalMs * 3)
+                {
+                    Console.WriteLine($"[TIMEOUT] No data from server for {silence:F0}ms");
+                    break;
+                }
+            }
+        }
+        finally
+        {
+            keepAliveCts.Cancel();
+            try { await keepAliveTask; } catch { }
+            _udp.Close();
+            // УБРАНО: _jitterBuffer.Clear(); — теперь очищаем в ResetPlaybackState()
+        }
+    }
+
+    private void HandlePacket(byte[] data)
+    {
+        if (data.Length < 1) return;
+
+        byte type = PacketReader.GetPacketType(data);
+
+        switch (type)
+        {
+            case PacketTypes.Audio:
+                HandleAudio(data);
+                break;
+            case PacketTypes.ServerInfo:
+                HandleServerInfo(data);
+                break;
+        }
+    }
+
+    private void HandleAudio(byte[] data)
+    {
+        var packet = PacketReader.ReadAudioFromServer(data);
+
+        if (packet.Metadata != null && !packet.Metadata.IsEmpty)
+        {
+            lock (_stateLock)
+            {
+                _title = packet.Metadata.Title;
+                _artist = packet.Metadata.Artist;
+                _album = packet.Metadata.Album;
+                _duration = packet.Metadata.Duration;
+                _trackPosition = 0;
+            }
+        }
+
+        if (packet.OpusFrame.Length > 0)
+        {
+            _jitterBuffer.Add(packet.Sequence, packet.OpusFrame);
+        }
+    }
+
+    private void HandleServerInfo(byte[] data)
+    {
+        var info = PacketReader.ReadServerInfo(data);
+
+        lock (_stateLock)
+        {
+            _serverStatus = info.Status;
+            _serverUptime = info.Uptime;
+            _listenersCount = info.ClientsCount;
+            _trackPosition = info.TrackPosition;
+        }
+    }
+
+    private async Task KeepAliveLoop(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            await Task.Delay(_config.Player.KeepAliveIntervalMs, ct);
+
+            if (_udp != null && _serverEndpoint != null)
+            {
+                var keepAlive = new KeepAlivePacket(_clientId);
+                await _udp.SendAsync(PacketWriter.WriteKeepAlive(keepAlive), _serverEndpoint, ct);
+            }
+        }
+    }
+
+    // ─── Воспроизведение ──────────────────────────────────────
+
+    private void PlaybackLoop()
+    {
+        short[] pcmBuffer = new short[5760 * 2];
+        byte[] byteBuffer = new byte[5760 * 2 * 2];
+
+        while (_running)
+        {
+            var opusFrame = _jitterBuffer.GetNext();
+
+            if (opusFrame != null && _outputStream != 0)
+            {
+                try
+                {
+                    int frameSamples = _opusDecoder.Decode(
+                        opusFrame, 0, opusFrame.Length,
+                        pcmBuffer, 0, pcmBuffer.Length / 2,
+                        false);
+
+                    if (frameSamples > 0)
+                    {
+                        Buffer.BlockCopy(pcmBuffer, 0, byteBuffer, 0, frameSamples * 2 * 2);
+
+                        // Ждём пока в буфере BASS не освободится место
+                        while (_running)
+                        {
+                            int queued = Bass.BASS_StreamPutData(_outputStream, IntPtr.Zero, 0);
+                            if (queued < frameSamples * 2 * 2 * 20) // меньше 20 фреймов
+                                break;
+                            Thread.Sleep(1);
+                        }
+
+                        Bass.BASS_StreamPutData(_outputStream, byteBuffer, frameSamples * 2 * 2);
+                    }
+                }
+                catch { }
+            }
+
+            Thread.Sleep(1);
+        }
+    }
+
+    // ─── UI ───────────────────────────────────────────────────
+
+    private void UiLoop()
+    {
+        while (_running)
+        {
+            DrawUi();
+            Thread.Sleep(250);
+        }
+    }
+
+    private void DrawUi()
+    {
+        string statusText, statusIcon;
+        int listeners, reconnects;
+        string title, artist, album, trackPosStr;
+        string uptimeStr;
+        double duration;
+
+        lock (_stateLock)
+        {
+            statusIcon = _serverStatus switch
+            {
+                ServerInfoPacket.StatusLive => "🟢",
+                ServerInfoPacket.StatusShuttingDown => "🔴",
+                _ => "🟡"
+            };
+            statusText = _serverStatus switch
+            {
+                ServerInfoPacket.StatusLive => "Live",
+                ServerInfoPacket.StatusShuttingDown => "Shutdown",
+                _ => "No Source"
+            };
+            listeners = _listenersCount;
+            reconnects = _reconnects;
+            title = _title;
+            artist = _artist;
+            album = _album;
+            duration = _duration;
+
+            var pos = TimeSpan.FromSeconds(_trackPosition);
+            trackPosStr = $"{(int)pos.TotalMinutes:D2}:{pos.Seconds:D2}";
+
+            var dur = TimeSpan.FromSeconds(duration);
+            string durStr = duration > 0 ? $" / {(int)dur.TotalMinutes:D2}:{dur.Seconds:D2}" : "";
+
+            var up = TimeSpan.FromSeconds(_serverUptime);
+            uptimeStr = up.TotalHours >= 1
+                ? $"{(int)up.TotalHours}ч {up.Minutes:D2}м {up.Seconds:D2}с"
+                : $"{up.Minutes}м {up.Seconds:D2}с";
+
+            trackPosStr += durStr;
+        }
+
+        Console.SetCursorPosition(0, 0);
+        Console.WriteLine("┌──────────────────────────────────────────────────┐");
+        Console.WriteLine($"│ {statusIcon} {statusText,-8} │ Слушателей: {listeners,-5} Reconnects: {reconnects,-3} │");
+        Console.WriteLine($"│ Сервер: {uptimeStr,-33} │");
+        Console.WriteLine("├──────────────────────────────────────────────────┤");
+        Console.WriteLine($"│ {Truncate(artist, 48)} │");
+        Console.WriteLine($"│ {Truncate(title, 48)} │");
+        Console.WriteLine($"│ {Truncate(album, 48)} │");
+        Console.WriteLine($"│ {trackPosStr,-48} │");
+        Console.WriteLine("├──────────────────────────────────────────────────┤");
+        Console.WriteLine("│ [Q] Выход                                        │");
+        Console.WriteLine("└──────────────────────────────────────────────────┘");
+    }
+
+    // ─── BASS ────────────────────────────────────────────────
+
+    private bool InitBass()
+    {
+        if (!Bass.BASS_Init(-1, _config.Opus.SampleRate, BASSInit.BASS_DEVICE_DEFAULT, IntPtr.Zero))
+        {
+            Console.WriteLine($"BASS_Init error: {Bass.BASS_ErrorGetCode()}");
+            return false;
+        }
+
+        _opusDecoder = new OpusDecoder(_config.Opus.SampleRate, _config.Opus.Channels);
+        Console.WriteLine($"Concentus Opus decoder: {_config.Opus.SampleRate}Hz, {_config.Opus.Channels}ch");
+
+        _outputStream = Bass.BASS_StreamCreatePush(
+            _config.Opus.SampleRate,
+            _config.Opus.Channels,
+            BASSFlag.BASS_DEFAULT,
+            IntPtr.Zero);
+
+        if (_outputStream == 0)
+        {
+            Console.WriteLine($"[ERROR] Cannot create output stream: {Bass.BASS_ErrorGetCode()}");
+            return false;
+        }
+
+        Bass.BASS_ChannelPlay(_outputStream, false);
+        Console.WriteLine("BASS output started");
+
+        return true;
+    }
+
+    private static string Truncate(string str, int maxLen)
+    {
+        if (string.IsNullOrEmpty(str)) return new string(' ', maxLen);
+        return str.Length > maxLen ? str[..(maxLen - 1)] + "…" : str.PadRight(maxLen);
+    }
 }
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Player\Program.cs
+----------------------------------------
+﻿using FrostWire.Core.Configuration;
+using FrostWire.Player;
+
+var configPath = args.Length > 0 ? args[0] : "appsettings.json";
+var config = ConfigLoader.Load(configPath);
+
+Console.WriteLine("FrostWire Player");
+Console.WriteLine($"Server: {config.Player.ServerAddress}:{config.Player.ServerPort}");
+
+using var cts = new CancellationTokenSource();
+var engine = new PlayerEngine(config);
+
+Console.CancelKeyPress += (_, e) =>
+{
+    e.Cancel = true;
+    cts.Cancel();
+};
+
+try
+{
+    await engine.RunAsync(cts.Token);
+}
+catch (OperationCanceledException) { }
+
+Console.WriteLine("Player stopped.");
 ----------------------------------------
 

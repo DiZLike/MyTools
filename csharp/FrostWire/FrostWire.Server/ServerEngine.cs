@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using FrostWire.Core.Configuration;
 using FrostWire.Core.Protocol;
 using FrostWire.Core.Protocol.Models;
+using FrostWire.Core.Security;
 
 namespace FrostWire.Server;
 
@@ -11,7 +12,7 @@ public class ServerEngine
     private readonly AppConfig _config;
     private readonly UdpClient _udp;
     private readonly ClientRegistry _clients;
-    private readonly byte[] _expectedPasswordMD5;
+    private readonly byte[] _expectedPasswordHash;
 
     private IPEndPoint? _sourceEndpoint;
     private TrackMetadata? _lastMetadata;
@@ -26,14 +27,27 @@ public class ServerEngine
     {
         _config = config;
         _udp = new UdpClient(config.Server.ListenPort);
+
+        // Отключаем ICMP Port Unreachable для UDP
+        try
+        {
+            _udp.Client.IOControl(
+                (IOControlCode)(-1744830452), // SIO_UDP_CONNRESET
+                new byte[] { 0 }, // false
+                null);
+        }
+        catch
+        {
+            // Не критично, если не получилось
+        }
+
         _clients = new ClientRegistry();
-        _expectedPasswordMD5 = StringToMD5Bytes(config.Server.PasswordMD5);
+        _expectedPasswordHash = PasswordHasher.ComputeHash(config.Server.Password);
     }
 
     public async Task RunAsync(CancellationToken ct)
     {
         Console.WriteLine($"Listening on UDP port {_config.Server.ListenPort}");
-        Console.WriteLine($"Expected password MD5: {_config.Server.PasswordMD5}");
 
         using var timerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
@@ -45,8 +59,15 @@ public class ServerEngine
         {
             while (!ct.IsCancellationRequested)
             {
-                var result = await _udp.ReceiveAsync(ct);
-                _ = Task.Run(() => HandlePacket(result.Buffer, result.RemoteEndPoint), ct);
+                try
+                {
+                    var result = await _udp.ReceiveAsync(ct);
+                    _ = Task.Run(() => HandlePacket(result.Buffer, result.RemoteEndPoint), ct);
+                }
+                catch (SocketException ex)
+                {
+                    Console.WriteLine($"[WARN] Receive error: {ex.Message}");
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -92,7 +113,7 @@ public class ServerEngine
         var packet = PacketReader.ReadAudioFromSource(data);
 
         // Проверка пароля
-        if (packet.PasswordMD5 == null || !packet.PasswordMD5.SequenceEqual(_expectedPasswordMD5))
+        if (packet.PasswordMD5 == null || !packet.PasswordMD5.SequenceEqual(_expectedPasswordHash))
         {
             Console.WriteLine($"[WARN] Invalid password from {remote}");
             return;
@@ -249,9 +270,28 @@ public class ServerEngine
 
     private void BroadcastToPlayers(byte[] data)
     {
+        List<IPEndPoint> deadClients = new();
+
         foreach (var client in _clients.GetAllEndpoints())
         {
-            SendTo(data, client);
+            try
+            {
+                _udp.Send(data, data.Length, client);
+            }
+            catch (SocketException)
+            {
+                deadClients.Add(client);
+            }
+        }
+
+        foreach (var dead in deadClients)
+        {
+            var entry = _clients.GetByEndpoint(dead);
+            if (entry != null)
+            {
+                _clients.Remove(entry.Value.Key);
+                Console.WriteLine($"[PLAYER] Removed dead client: {entry.Value.Key.ToString("N")[..8]}...");
+            }
         }
     }
 
@@ -261,17 +301,9 @@ public class ServerEngine
         {
             _udp.Send(data, data.Length, target);
         }
-        catch (Exception ex)
+        catch (SocketException)
         {
-            Console.WriteLine($"[ERROR] Send to {target}: {ex.Message}");
+            // клиент мёртв, удалится при следующей рассылке
         }
-    }
-
-    private static byte[] StringToMD5Bytes(string hex)
-    {
-        byte[] bytes = new byte[16];
-        for (int i = 0; i < 16; i++)
-            bytes[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
-        return bytes;
     }
 }

@@ -1,396 +1,863 @@
-Файл: D:\Evgeny\!src_actual\Apps\Likeman\Likeman\Views\MainWindow.xaml
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Server\ClientRegistry.cs
 ----------------------------------------
-﻿<Window x:Class="Likeman.Views.MainWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Likeman - Менеджер паролей" Height="550" Width="850"
-        WindowStartupLocation="CenterScreen"
-        Background="White">
+﻿using System.Collections.Concurrent;
+using System.Net;
 
-    <Window.Resources>
-        <!-- Стили для текстовых полей -->
-        <Style x:Key="ModernTextBox" TargetType="TextBox">
-            <Setter Property="Background" Value="#FAFAFA"/>
-            <Setter Property="Foreground" Value="#333333"/>
-            <Setter Property="BorderBrush" Value="#DDDDDD"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="6"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/>
-        </Style>
+namespace FrostWire.Server;
 
-        <!-- Базовый стиль для кнопок -->
-        <Style x:Key="BaseButtonStyle" TargetType="Button">
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="8,6"/>
-            <Setter Property="FontSize" Value="11"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="2">
-                            <ContentPresenter HorizontalAlignment="Center" 
-                                              VerticalAlignment="Center"
-                                              Margin="{TemplateBinding Padding}"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+public class ClientRegistry
+{
+    private readonly ConcurrentDictionary<Guid, ClientEntry> _clients = new();
 
-        <!-- Стили для кнопок -->
-        <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource BaseButtonStyle}">
-            <Setter Property="Background" Value="#007ACC"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#106EBE"/>
-                </Trigger>
-                <Trigger Property="IsPressed" Value="True">
-                    <Setter Property="Background" Value="#005A9E"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
+    public int Count => _clients.Count;
 
-        <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource BaseButtonStyle}">
-            <Setter Property="Background" Value="#D13438"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#B02A2E"/>
-                </Trigger>
-                <Trigger Property="IsPressed" Value="True">
-                    <Setter Property="Background" Value="#8E2225"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
+    public bool AddOrUpdate(Guid clientId, IPEndPoint endpoint)
+    {
+        bool isNew = !_clients.ContainsKey(clientId);
 
-        <Style x:Key="SuccessButton" TargetType="Button" BasedOn="{StaticResource BaseButtonStyle}">
-            <Setter Property="Background" Value="#107C10"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#0E6A0E"/>
-                </Trigger>
-                <Trigger Property="IsPressed" Value="True">
-                    <Setter Property="Background" Value="#0B570B"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
+        _clients.AddOrUpdate(clientId,
+            _ => new ClientEntry { Endpoint = endpoint, LastSeen = DateTime.UtcNow },
+            (_, entry) =>
+            {
+                entry.Endpoint = endpoint;
+                entry.LastSeen = DateTime.UtcNow;
+                return entry;
+            });
 
-        <!-- Стиль для DataGrid -->
-        <Style x:Key="ModernDataGrid" TargetType="DataGrid">
-            <Setter Property="Background" Value="White"/>
-            <Setter Property="Foreground" Value="#333333"/>
-            <Setter Property="BorderBrush" Value="#DDDDDD"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="RowBackground" Value="White"/>
-            <Setter Property="AlternatingRowBackground" Value="#F8F8F8"/>
-            <Setter Property="HorizontalGridLinesBrush" Value="#EEEEEE"/>
-            <Setter Property="VerticalGridLinesBrush" Value="#EEEEEE"/>
-            <Setter Property="HeadersVisibility" Value="Column"/>
-            <Setter Property="CanUserAddRows" Value="False"/>
-            <Setter Property="IsReadOnly" Value="False"/>
-            <Setter Property="AutoGenerateColumns" Value="False"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="RowHeight" Value="32"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/>
-        </Style>
+        return isNew;
+    }
 
-        <!-- Стиль для заголовков колонок -->
-        <Style x:Key="DataGridColumnHeaderStyle" TargetType="DataGridColumnHeader">
-            <Setter Property="Background" Value="#F5F5F5"/>
-            <Setter Property="Foreground" Value="#333333"/>
-            <Setter Property="BorderBrush" Value="#DDDDDD"/>
-            <Setter Property="BorderThickness" Value="0,0,1,1"/>
-            <Setter Property="Padding" Value="8,6"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="HorizontalContentAlignment" Value="Left"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/>
-            <Setter Property="Height" Value="32"/>
-            <Setter Property="FontSize" Value="11"/>
-        </Style>
+    public void Refresh(Guid clientId)
+    {
+        if (_clients.TryGetValue(clientId, out var entry))
+            entry.LastSeen = DateTime.UtcNow;
+    }
 
-        <!-- Стиль для ячеек -->
-        <Style x:Key="DataGridCellStyle" TargetType="DataGridCell">
-            <Setter Property="BorderBrush" Value="#EEEEEE"/>
-            <Setter Property="BorderThickness" Value="0,0,1,1"/>
-            <Setter Property="Padding" Value="8,0,8,0"/>
-            <Setter Property="Foreground" Value="#333333"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="DataGridCell">
-                        <Grid Background="{TemplateBinding Background}">
-                            <ContentPresenter VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
-                                            HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                            Margin="{TemplateBinding Padding}"/>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsSelected" Value="True">
-                    <Setter Property="Background" Value="#E3F2FD"/>
-                    <Setter Property="BorderBrush" Value="#007ACC"/>
-                    <Setter Property="Foreground" Value="#333333"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
+    public int RemoveTimedOut(int timeoutMs)
+    {
+        var cutoff = DateTime.UtcNow.AddMilliseconds(-timeoutMs);
+        int removed = 0;
 
-        <!-- Стиль для текстовых колонок DataGrid -->
-        <Style x:Key="CenteredDataGridTextColumn" TargetType="TextBlock">
-            <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
-            <Setter Property="Padding" Value="0"/>
-            <Setter Property="Margin" Value="0"/>
-            <Setter Property="FontSize" Value="12"/>
-        </Style>
+        foreach (var kvp in _clients)
+        {
+            if (kvp.Value.LastSeen < cutoff)
+            {
+                if (_clients.TryRemove(kvp.Key, out _))
+                    removed++;
+            }
+        }
 
-        <!-- Компактный стиль для GroupBox -->
-        <Style x:Key="CompactGroupBox" TargetType="GroupBox">
-            <Setter Property="BorderBrush" Value="#DDDDDD"/>
-            <Setter Property="Background" Value="#FAFAFA"/>
-            <Setter Property="Foreground" Value="#333333"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Padding" Value="6"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Margin" Value="0,0,0,8"/>
-            <Setter Property="FontSize" Value="11"/>
-        </Style>
-    </Window.Resources>
+        return removed;
+    }
 
-    <DockPanel>
-        <!-- Статусбар -->
-        <StatusBar DockPanel.Dock="Bottom" 
-                   Background="#F5F5F5" 
-                   BorderBrush="#DDDDDD" 
-                   BorderThickness="0,1,0,0"
-                   Height="24">
-            <StatusBarItem>
-                <TextBlock Text="{Binding StatusMessage}" 
-                           Foreground="#333333"
-                           FontSize="11"
-                           VerticalAlignment="Center"/>
-            </StatusBarItem>
-        </StatusBar>
+    public void Remove(Guid clientId)
+    {
+        _clients.TryRemove(clientId, out _);
+    }
 
-        <!-- Основное содержимое -->
-        <Grid Margin="10">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
+    public IEnumerable<IPEndPoint> GetAllEndpoints()
+    {
+        return _clients.Values.Select(e => e.Endpoint);
+    }
 
-            <!-- Форма добавления нового пароля -->
-            <GroupBox Grid.Row="0" Header="Добавить новый пароль" 
-                      Style="{StaticResource CompactGroupBox}">
-                <Grid Margin="4">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
+    public KeyValuePair<Guid, IPEndPoint>? GetByEndpoint(IPEndPoint endpoint)
+    {
+        foreach (var kvp in _clients)
+        {
+            if (kvp.Value.Endpoint.Equals(endpoint))
+                return new KeyValuePair<Guid, IPEndPoint>(kvp.Key, kvp.Value.Endpoint);
+        }
+        return null;
+    }
 
-                    <!-- Подписи полей -->
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Название" Margin="2,0,2,2" FontSize="10" Foreground="#666666"/>
-                    <TextBlock Grid.Row="0" Grid.Column="1" Text="URL сайта" Margin="2,0,2,2" FontSize="10" Foreground="#666666"/>
-                    <TextBlock Grid.Row="0" Grid.Column="2" Text="Логин" Margin="2,0,2,2" FontSize="10" Foreground="#666666"/>
-                    <TextBlock Grid.Row="0" Grid.Column="3" Text="Пароль" Margin="2,0,2,2" FontSize="10" Foreground="#666666"/>
-                    <TextBlock Grid.Row="0" Grid.Column="4" Text="Примечание" Margin="2,0,2,2" FontSize="10" Foreground="#666666"/>
-
-                    <!-- Поля ввода -->
-                    <TextBox Grid.Row="1" Grid.Column="0" 
-                             Text="{Binding NewPassword.Name}" 
-                             Style="{StaticResource ModernTextBox}"
-                             Margin="2"
-                             ToolTip="Название пароля"/>
-
-                    <TextBox Grid.Row="1" Grid.Column="1" 
-                             Text="{Binding NewPassword.Website}" 
-                             Style="{StaticResource ModernTextBox}"
-                             Margin="2"
-                             ToolTip="URL сайта"/>
-
-                    <TextBox Grid.Row="1" Grid.Column="2" 
-                             Text="{Binding NewPassword.Username}" 
-                             Style="{StaticResource ModernTextBox}"
-                             Margin="2"
-                             ToolTip="Логин/Имя пользователя"/>
-
-                    <TextBox Grid.Row="1" Grid.Column="3" 
-                             Text="{Binding NewPassword.Password}" 
-                             Style="{StaticResource ModernTextBox}"
-                             Margin="2"
-                             FontFamily="Consolas"
-                             ToolTip="Пароль"/>
-
-                    <TextBox Grid.Row="1" Grid.Column="4" 
-                             Text="{Binding NewPassword.Notes}" 
-                             Style="{StaticResource ModernTextBox}"
-                             Margin="2"
-                             ToolTip="Примечание"/>
-
-                    <Button Grid.Row="1" Grid.Column="5" 
-                            Content="Добавить" 
-                            Command="{Binding AddPasswordCommand}" 
-                            Style="{StaticResource PrimaryButton}"
-                            Margin="2" 
-                            Width="80"
-                            Height="28"/>
-                </Grid>
-            </GroupBox>
-
-            <!-- Таблица паролей -->
-            <DataGrid Grid.Row="1"
-                      ItemsSource="{Binding Passwords}"
-                      SelectedItem="{Binding SelectedPassword}"
-                      Style="{StaticResource ModernDataGrid}"
-                      ColumnHeaderStyle="{StaticResource DataGridColumnHeaderStyle}"
-                      CellStyle="{StaticResource DataGridCellStyle}"
-                      Margin="0,8,0,0">
-
-                <DataGrid.Columns>
-                    <DataGridTextColumn Header="Название" 
-                                       Binding="{Binding Name}" 
-                                       Width="Auto"
-                                       ElementStyle="{StaticResource CenteredDataGridTextColumn}"/>
-
-                    <DataGridTextColumn Header="Сайт" 
-                                       Binding="{Binding Website}" 
-                                       Width="Auto"
-                                       ElementStyle="{StaticResource CenteredDataGridTextColumn}"/>
-
-                    <DataGridTextColumn Header="Логин" 
-                                       Binding="{Binding Username}" 
-                                       Width="Auto"
-                                       ElementStyle="{StaticResource CenteredDataGridTextColumn}"/>
-
-                    <DataGridTextColumn Header="Пароль" 
-                                       Binding="{Binding Password}" 
-                                       Width="Auto"
-                                       ElementStyle="{StaticResource CenteredDataGridTextColumn}"
-                                       FontFamily="Consolas"/>
-
-                    <DataGridTextColumn Header="Примечание" 
-                                       Binding="{Binding Notes}" 
-                                       Width="*"
-                                       ElementStyle="{StaticResource CenteredDataGridTextColumn}"/>
-
-                    <DataGridTemplateColumn Header="Действия" 
-                                           Width="Auto" 
-                                           MinWidth="80">
-                        <DataGridTemplateColumn.CellTemplate>
-                            <DataTemplate>
-                                <Button Content="✕" 
-                                        Command="{Binding DataContext.DeletePasswordCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
-                                        CommandParameter="{Binding}" 
-                                        Style="{StaticResource DangerButton}"
-                                        Margin="2" 
-                                        Width="30"
-                                        Height="24"
-                                        FontSize="12"
-                                        FontWeight="Bold"
-                                        Padding="0"
-                                        VerticalAlignment="Center"
-                                        HorizontalAlignment="Center"
-                                        ToolTip="Удалить запись"/>
-                            </DataTemplate>
-                        </DataGridTemplateColumn.CellTemplate>
-                    </DataGridTemplateColumn>
-                </DataGrid.Columns>
-            </DataGrid>
-
-            <!-- Панель управления -->
-            <StackPanel Grid.Row="2" 
-                        Orientation="Horizontal" 
-                        HorizontalAlignment="Left"
-                        Margin="0,8,0,0">
-                <Button Content="🔄 Загрузить с сервера" 
-                        Command="{Binding LoadFromServerCommand}" 
-                        Style="{StaticResource PrimaryButton}"
-                        Margin="2" 
-                        Width="140"
-                        Height="26"/>
-
-                <Button Content="💾 Сохранить все" 
-                        Command="{Binding SaveAllCommand}" 
-                        Style="{StaticResource SuccessButton}"
-                        Margin="2" 
-                        Width="120"
-                        Height="26"/>
-                <Button Content="📤 Экспорт ключа" 
-                        Command="{Binding ExportKeyCommand}" 
-                        Style="{StaticResource PrimaryButton}"
-                        Margin="2" 
-                        Width="120"
-                        Height="26"
-                        ToolTip="Экспортировать ключ шифрования для использования на других ПК"/>
-
-                <Button Content="📥 Импорт ключа" 
-                        Command="{Binding ImportKeyCommand}" 
-                        Style="{StaticResource PrimaryButton}"
-                        Margin="2" 
-                        Width="120"
-                        Height="26"
-                        ToolTip="Импортировать ключ шифрования с другого ПК"/>
-            </StackPanel>
-        </Grid>
-    </DockPanel>
-</Window>
+    private class ClientEntry
+    {
+        public IPEndPoint Endpoint { get; set; } = new(IPAddress.Any, 0);
+        public DateTime LastSeen { get; set; }
+    }
+}
 ----------------------------------------
 
 ================================================================================
-Файл: D:\Evgeny\!src_actual\Apps\Likeman\Likeman\Views\MainWindow.xaml.cs
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Server\Program.cs
 ----------------------------------------
-﻿using likecfg;
-using Likeman.Services;
-using Likeman.ViewModels;
-using System.Windows;
+﻿using FrostWire.Core.Configuration;
+using FrostWire.Server;
 
-namespace Likeman.Views
+var configPath = args.Length > 0 ? args[0] : "appsettings.json";
+var config = ConfigLoader.Load(configPath);
+
+Console.WriteLine($"FrostWire Server starting on port {config.Server.ListenPort}...");
+
+using var cts = new CancellationTokenSource();
+var engine = new ServerEngine(config);
+
+Console.CancelKeyPress += (_, e) =>
 {
-    public partial class MainWindow : Window
+    e.Cancel = true;
+    Console.WriteLine("Shutting down...");
+    cts.Cancel();
+};
+
+try
+{
+    await engine.RunAsync(cts.Token);
+}
+catch (OperationCanceledException)
+{
+    // нормальное завершение
+}
+
+Console.WriteLine("Server stopped.");
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Server\ServerEngine.cs
+----------------------------------------
+﻿using System.Net;
+using System.Net.Sockets;
+using FrostWire.Core.Configuration;
+using FrostWire.Core.Protocol;
+using FrostWire.Core.Protocol.Models;
+using FrostWire.Core.Security;
+
+namespace FrostWire.Server;
+
+public class ServerEngine
+{
+    private readonly AppConfig _config;
+    private readonly UdpClient _udp;
+    private readonly ClientRegistry _clients;
+    private readonly byte[] _expectedPasswordHash;
+
+    private IPEndPoint? _sourceEndpoint;
+    private TrackMetadata? _lastMetadata;
+    private DateTime _lastAudioTime = DateTime.MinValue;
+    private DateTime _serverStartTime = DateTime.UtcNow;
+    private DateTime _currentTrackStart = DateTime.MinValue;
+    private double _currentTrackDuration;
+
+    private byte _status = ServerInfoPacket.StatusNoSource;
+
+    public ServerEngine(AppConfig config)
     {
-        public MainWindow()
+        _config = config;
+        _udp = new UdpClient(config.Server.ListenPort);
+
+        // Отключаем ICMP Port Unreachable для UDP
+        try
         {
-            InitializeComponent();
-            // загрузка конфигурации приложения
-            var app_config = LikeCfg.FromFile("app.cfg");
-            var host = app_config["sftp"].GetString("host");
-            var login = app_config["sftp"].GetString("login");
-            var password = app_config["sftp"].GetString("password");
-            var pass_file = app_config["sftp"].GetString("pass_file");
-
-            // Конфигурация SFTP
-            var config = new Models.SftpConfig
-            {
-                Host = host,
-                Username = login,
-                Password = password,
-                RemoteFilePath = pass_file
-            };
-
-            // Создаем сервис шифрования
-            var encryptionService = new AesEncryptionService();
-
-            // Передаем encryptionService в оба сервиса
-            var sftpService = new SftpService(config, encryptionService);
-            var localStorageService = new LocalStorageService(encryptionService);
-
-            // Передаем все три зависимости в MainViewModel
-            DataContext = new MainViewModel(sftpService, localStorageService, encryptionService);
+            _udp.Client.IOControl(
+                (IOControlCode)(-1744830452), // SIO_UDP_CONNRESET
+                new byte[] { 0 }, // false
+                null);
         }
+        catch
+        {
+            // Не критично, если не получилось
+        }
+
+        _clients = new ClientRegistry();
+        _expectedPasswordHash = PasswordHasher.ComputeHash(config.Server.Password);
+    }
+
+    public async Task RunAsync(CancellationToken ct)
+    {
+        Console.WriteLine($"Listening on UDP port {_config.Server.ListenPort}");
+
+        using var timerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+
+        _ = Task.Run(() => SourceStatusLoop(timerCts.Token), ct);
+        _ = Task.Run(() => PlayerTimeoutLoop(timerCts.Token), ct);
+        _ = Task.Run(() => ServerInfoLoop(timerCts.Token), ct);
+
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    var result = await _udp.ReceiveAsync(ct);
+                    _ = Task.Run(() => HandlePacket(result.Buffer, result.RemoteEndPoint), ct);
+                }
+                catch (SocketException ex)
+                {
+                    Console.WriteLine($"[WARN] Receive error: {ex.Message}");
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            timerCts.Cancel();
+            _udp.Close();
+        }
+    }
+
+    private void HandlePacket(byte[] data, IPEndPoint remote)
+    {
+        if (data.Length < 1) return;
+
+        byte type = PacketReader.GetPacketType(data);
+
+        try
+        {
+            switch (type)
+            {
+                case PacketTypes.Audio:
+                    HandleAudio(data, remote);
+                    break;
+                case PacketTypes.Subscribe:
+                    HandleSubscribe(data, remote);
+                    break;
+                case PacketTypes.KeepAlive:
+                    HandleKeepAlive(data, remote);
+                    break;
+                default:
+                    // неизвестный тип — игнорируем
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ERROR] Processing packet type 0x{type:X2} from {remote}: {ex.Message}");
+        }
+    }
+
+    private void HandleAudio(byte[] data, IPEndPoint remote)
+    {
+        var packet = PacketReader.ReadAudioFromSource(data);
+
+        // Проверка пароля
+        if (packet.PasswordMD5 == null || !packet.PasswordMD5.SequenceEqual(_expectedPasswordHash))
+        {
+            Console.WriteLine($"[WARN] Invalid password from {remote}");
+            return;
+        }
+
+        // Новый source или подтверждение существующего
+        if (_sourceEndpoint == null || !_sourceEndpoint.Equals(remote))
+        {
+            Console.WriteLine($"[INFO] Source connected: {remote}");
+            _sourceEndpoint = remote;
+        }
+
+        _lastAudioTime = DateTime.UtcNow;
+
+        // Обновляем метаданные если есть
+        if (packet.Metadata != null && !packet.Metadata.IsEmpty)
+        {
+            _lastMetadata = packet.Metadata;
+            _currentTrackStart = DateTime.UtcNow;
+            _currentTrackDuration = packet.Metadata.Duration;
+            Console.WriteLine($"[TRACK] {packet.Metadata.Artist} - {packet.Metadata.Title} [{packet.Metadata.Duration:F0}s]");
+        }
+
+        // Статус Live
+        if (_status != ServerInfoPacket.StatusLive)
+        {
+            _status = ServerInfoPacket.StatusLive;
+            Console.WriteLine("[STATUS] Live");
+        }
+
+        // Ретрансляция плеерам (вырезаем MD5)
+        var playerPacket = new AudioPacket
+        {
+            Sequence = packet.Sequence,
+            Timestamp = packet.Timestamp,
+            Metadata = packet.Metadata,
+            OpusFrame = packet.OpusFrame
+        };
+
+        BroadcastToPlayers(PacketWriter.WriteAudioToPlayer(playerPacket));
+    }
+
+    private void HandleSubscribe(byte[] data, IPEndPoint remote)
+    {
+        var packet = PacketReader.ReadSubscribe(data);
+        var clientId = packet.GetClientId();
+
+        bool isNew = _clients.AddOrUpdate(clientId, remote);
+        string action = isNew ? "connected" : "reconnected";
+        Console.WriteLine($"[PLAYER] {action}: {clientId.ToString("N")[..8]}... from {remote}");
+
+        // Отправляем SERVER_INFO
+        var serverInfo = BuildServerInfo();
+        SendTo(PacketWriter.WriteServerInfo(serverInfo), remote);
+
+        // Отправляем последние метаданные (если есть) с пустым OpusFrame
+        if (_lastMetadata != null && !_lastMetadata.IsEmpty)
+        {
+            var metaPacket = new AudioPacket
+            {
+                Sequence = 0,
+                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                Metadata = _lastMetadata,
+                OpusFrame = Array.Empty<byte>()
+            };
+            SendTo(PacketWriter.WriteAudioToPlayer(metaPacket), remote);
+        }
+    }
+
+    private void HandleKeepAlive(byte[] data, IPEndPoint remote)
+    {
+        var packet = PacketReader.ReadKeepAlive(data);
+        var clientId = packet.GetClientId();
+
+        _clients.Refresh(clientId);
+    }
+
+    // ─── Фоновые циклы ─────────────────────────────────────────
+
+    private async Task SourceStatusLoop(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            await Task.Delay(_config.Server.SourceStatusIntervalMs, ct);
+
+            if (_sourceEndpoint != null)
+            {
+                var status = new SourceStatusPacket
+                {
+                    Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    ClientsCount = _clients.Count
+                };
+                SendTo(PacketWriter.WriteSourceStatus(status), _sourceEndpoint);
+            }
+
+            // Проверка таймаута source
+            if (_status == ServerInfoPacket.StatusLive &&
+                (DateTime.UtcNow - _lastAudioTime).TotalMilliseconds > _config.Server.SourceTimeoutMs)
+            {
+                _status = ServerInfoPacket.StatusNoSource;
+                _sourceEndpoint = null;
+                Console.WriteLine("[STATUS] NoSource — source timeout");
+            }
+        }
+    }
+
+    private async Task PlayerTimeoutLoop(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            await Task.Delay(5000, ct);
+
+            int removed = _clients.RemoveTimedOut(_config.Server.PlayerTimeoutMs);
+            if (removed > 0)
+                Console.WriteLine($"[PLAYER] Removed {removed} timed out, total: {_clients.Count}");
+        }
+    }
+
+    private async Task ServerInfoLoop(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            await Task.Delay(_config.Server.ServerInfoIntervalMs, ct);
+
+            if (_clients.Count > 0)
+            {
+                var info = BuildServerInfo();
+                BroadcastToPlayers(PacketWriter.WriteServerInfo(info));
+            }
+        }
+    }
+
+    // ─── Helpers ───────────────────────────────────────────────
+
+    private ServerInfoPacket BuildServerInfo()
+    {
+        uint trackPosition = 0;
+        if (_status == ServerInfoPacket.StatusLive && _currentTrackDuration > 0)
+        {
+            trackPosition = (uint)(DateTime.UtcNow - _currentTrackStart).TotalSeconds;
+            if (trackPosition > _currentTrackDuration)
+                trackPosition = (uint)_currentTrackDuration;
+        }
+
+        return new ServerInfoPacket
+        {
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Uptime = (uint)(DateTime.UtcNow - _serverStartTime).TotalSeconds,
+            Status = _status,
+            ClientsCount = _clients.Count,
+            TrackPosition = trackPosition
+        };
+    }
+
+    private void BroadcastToPlayers(byte[] data)
+    {
+        List<IPEndPoint> deadClients = new();
+
+        foreach (var client in _clients.GetAllEndpoints())
+        {
+            try
+            {
+                _udp.Send(data, data.Length, client);
+            }
+            catch (SocketException)
+            {
+                deadClients.Add(client);
+            }
+        }
+
+        foreach (var dead in deadClients)
+        {
+            var entry = _clients.GetByEndpoint(dead);
+            if (entry != null)
+            {
+                _clients.Remove(entry.Value.Key);
+                Console.WriteLine($"[PLAYER] Removed dead client: {entry.Value.Key.ToString("N")[..8]}...");
+            }
+        }
+    }
+
+    private void SendTo(byte[] data, IPEndPoint target)
+    {
+        try
+        {
+            _udp.Send(data, data.Length, target);
+        }
+        catch (SocketException)
+        {
+            // клиент мёртв, удалится при следующей рассылке
+        }
+    }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Source\MetadataExtractor.cs
+----------------------------------------
+﻿using FrostWire.Core.Protocol.Models;
+using Un4seen.Bass;
+using Un4seen.Bass.AddOn.Tags;
+
+namespace FrostWire.Source;
+
+public static class MetadataExtractor
+{
+    public static TrackMetadata Extract(string filePath)
+    {
+        var metadata = new TrackMetadata
+        {
+            Title = Path.GetFileNameWithoutExtension(filePath),
+            Artist = "Unknown",
+            Album = "",
+            Duration = 0
+        };
+
+        try
+        {
+            int stream = Bass.BASS_StreamCreateFile(filePath, 0, 0, BASSFlag.BASS_STREAM_DECODE);
+            if (stream != 0)
+            {
+                // Длительность
+                long length = Bass.BASS_ChannelGetLength(stream);
+                double seconds = Bass.BASS_ChannelBytes2Seconds(stream, length);
+                metadata.Duration = Math.Round(seconds, 1);
+
+                // ID3v2 теги через TAG_INFO
+                var tagInfo = new TAG_INFO();
+                tagInfo = BassTags.BASS_TAG_GetFromFile(stream, tagInfo) ? tagInfo : null;
+
+                if (tagInfo != null)
+                {
+                    if (!string.IsNullOrEmpty(tagInfo.title))
+                        metadata.Title = tagInfo.title;
+                    if (!string.IsNullOrEmpty(tagInfo.artist))
+                        metadata.Artist = tagInfo.artist;
+                    if (!string.IsNullOrEmpty(tagInfo.album))
+                        metadata.Album = tagInfo.album;
+                }
+
+                Bass.BASS_StreamFree(stream);
+            }
+        }
+        catch
+        {
+            // fallback to filename
+        }
+
+        return metadata;
+    }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Source\PlaylistManager.cs
+----------------------------------------
+﻿namespace FrostWire.Source;
+
+public class PlaylistManager
+{
+    private readonly string _playlistPath;
+    private readonly bool _shuffle;
+    private List<string> _tracks = new();
+    private int _currentIndex;
+    private readonly Random _rng = new();
+
+    public PlaylistManager(string playlistPath, bool shuffle)
+    {
+        _playlistPath = playlistPath;
+        _shuffle = shuffle;
+        Load();
+    }
+
+    private void Load()
+    {
+        if (!File.Exists(_playlistPath))
+        {
+            Console.WriteLine($"[WARN] Playlist not found: {_playlistPath}");
+            File.WriteAllText(_playlistPath, "# Add file paths here, one per line\n");
+            return;
+        }
+
+        _tracks = File.ReadAllLines(_playlistPath)
+            .Select(line => line.Trim())
+            .Where(line => !string.IsNullOrEmpty(line) && !line.StartsWith("#"))
+            .ToList();
+
+        if (_tracks.Count == 0)
+        {
+            Console.WriteLine("[WARN] Playlist is empty");
+            return;
+        }
+
+        // Проверяем существование файлов
+        var missing = _tracks.Where(t => !File.Exists(t)).ToList();
+        foreach (var m in missing)
+            Console.WriteLine($"[WARN] File not found: {m}");
+
+        _tracks = _tracks.Where(File.Exists).ToList();
+
+        if (_shuffle)
+            Shuffle();
+
+        Console.WriteLine($"Playlist loaded: {_tracks.Count} tracks");
+    }
+
+    public string? GetNext()
+    {
+        if (_tracks.Count == 0)
+            return null;
+
+        if (_currentIndex >= _tracks.Count)
+        {
+            _currentIndex = 0;
+            if (_shuffle)
+                Shuffle();
+        }
+
+        return _tracks[_currentIndex++];
+    }
+
+    public void Reset()
+    {
+        _currentIndex = 0;
+        if (_shuffle)
+            Shuffle();
+    }
+
+    private void Shuffle()
+    {
+        for (int i = _tracks.Count - 1; i > 0; i--)
+        {
+            int j = _rng.Next(i + 1);
+            (_tracks[i], _tracks[j]) = (_tracks[j], _tracks[i]);
+        }
+    }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Source\Program.cs
+----------------------------------------
+﻿using FrostWire.Core.Configuration;
+using FrostWire.Source;
+
+var configPath = args.Length > 0 ? args[0] : "appsettings.json";
+var config = ConfigLoader.Load(configPath);
+
+Console.WriteLine($"FrostWire Source starting...");
+Console.WriteLine($"Server: {config.Source.ServerAddress}:{config.Source.ServerPort}");
+Console.WriteLine($"Playlist: {config.Source.PlaylistPath}");
+
+using var cts = new CancellationTokenSource();
+var engine = new SourceEngine(config);
+
+Console.CancelKeyPress += (_, e) =>
+{
+    e.Cancel = true;
+    Console.WriteLine("Stopping...");
+    cts.Cancel();
+};
+
+try
+{
+    await engine.RunAsync(cts.Token);
+}
+catch (OperationCanceledException) { }
+
+Console.WriteLine("Source stopped.");
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Source\SourceEngine.cs
+----------------------------------------
+﻿using System.Net;
+using System.Net.Sockets;
+using Concentus;
+using Concentus.Enums;
+using Concentus.Structs;
+using FrostWire.Core.Configuration;
+using FrostWire.Core.Protocol;
+using FrostWire.Core.Protocol.Models;
+using FrostWire.Core.Security;
+using Un4seen.Bass;
+
+namespace FrostWire.Source;
+
+public class SourceEngine
+{
+    private readonly AppConfig _config;
+    private readonly UdpClient _udp;
+    private readonly byte[] _passwordHash;
+    private readonly PlaylistManager _playlist;
+    private readonly IPEndPoint _serverEndpoint;
+
+    private uint _sequence;
+    private DateTime _lastStatusReceived = DateTime.MinValue;
+
+    private IOpusEncoder _opusEncoder = null!;
+    private bool _metadataSent;
+    private TrackMetadata? _currentMetadata;
+
+    public SourceEngine(AppConfig config)
+    {
+        _config = config;
+        _udp = new UdpClient(0);
+        _passwordHash = PasswordHasher.ComputeHash(config.Source.Password);
+        _playlist = new PlaylistManager(config.Source.PlaylistPath, config.Source.Shuffle);
+        _serverEndpoint = new IPEndPoint(IPAddress.Parse(config.Source.ServerAddress), config.Source.ServerPort);
+        Console.WriteLine($"[DEBUG] Source local endpoint: {_udp.Client.LocalEndPoint}");
+    }
+
+    public async Task RunAsync(CancellationToken ct)
+    {
+        if (!InitBass())
+        {
+            Console.WriteLine("[FATAL] Failed to initialize BASS");
+            return;
+        }
+
+        Console.WriteLine("BASS initialized");
+
+        using var statusCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _ = Task.Run(() => StatusListenerLoop(statusCts.Token), ct);
+
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                var track = _playlist.GetNext();
+                if (track == null)
+                {
+                    Console.WriteLine("[WARN] Playlist empty, waiting...");
+                    await Task.Delay(5000, ct);
+                    _playlist.Reset();
+                    continue;
+                }
+
+                await PlayTrackAsync(track, ct);
+            }
+        }
+        finally
+        {
+            statusCts.Cancel();
+            Bass.BASS_Free();
+            _udp.Close();
+        }
+    }
+
+    private Task PlayTrackAsync(string filePath, CancellationToken ct)
+    {
+        return Task.Run(() => PlayTrack(filePath, ct), ct);
+    }
+
+    private void PlayTrack(string filePath, CancellationToken ct)
+    {
+        Console.WriteLine($"Loading: {Path.GetFileName(filePath)}");
+
+        _currentMetadata = MetadataExtractor.Extract(filePath);
+        Console.WriteLine($"[NOW PLAYING] {_currentMetadata.Artist} - {_currentMetadata.Title} [{_currentMetadata.Duration:F0}s]");
+
+        int stream = Bass.BASS_StreamCreateFile(filePath, 0, 0, BASSFlag.BASS_STREAM_DECODE | BASSFlag.BASS_SAMPLE_FLOAT);
+        if (stream == 0)
+        {
+            Console.WriteLine($"[ERROR] Cannot open file: {filePath} — {Bass.BASS_ErrorGetCode()}");
+            return;
+        }
+
+        _metadataSent = false;
+
+        int frameSamples = _config.Opus.SampleRate * _config.Opus.FrameSize / 1000;
+        int channels = _config.Opus.Channels;
+        int totalFrameSamples = frameSamples * channels; // общее количество сэмплов с учётом каналов
+        int frameSizeBytes = totalFrameSamples * 4;
+        int frameDurationMs = _config.Opus.FrameSize;
+
+        float[] pcmFloat = new float[totalFrameSamples];
+        short[] pcmShort = new short[totalFrameSamples];
+        byte[] opusBuf = new byte[65536];
+
+        long totalSamples = Bass.BASS_ChannelGetLength(stream);
+        double totalSeconds = Bass.BASS_ChannelBytes2Seconds(stream, totalSamples);
+        Console.WriteLine($"Duration: {totalSeconds:F1}s");
+
+        var nextFrameTime = DateTime.UtcNow;
+
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                long pos = Bass.BASS_ChannelGetPosition(stream);
+                double currentSec = Bass.BASS_ChannelBytes2Seconds(stream, pos);
+
+                if (currentSec >= totalSeconds)
+                    break;
+
+                int read = Bass.BASS_ChannelGetData(stream, pcmFloat, frameSizeBytes);
+                if (read <= 0)
+                    break;
+
+                int samplesRead = read / 4;
+
+                for (int i = 0; i < samplesRead; i++)
+                {
+                    float s = pcmFloat[i];
+                    if (s > 1f) s = 1f;
+                    if (s < -1f) s = -1f;
+                    pcmShort[i] = (short)(s * 32767f);
+                }
+
+                for (int i = samplesRead; i < pcmShort.Length; i++)
+                    pcmShort[i] = 0;
+
+                int encoded = _opusEncoder.Encode(
+                    new ReadOnlySpan<short>(pcmShort, 0, totalFrameSamples),
+                    frameSamples,
+                    new Span<byte>(opusBuf),
+                    opusBuf.Length);
+
+                if (encoded > 0)
+                {
+                    byte[] frame = new byte[encoded];
+                    Array.Copy(opusBuf, frame, encoded);
+                    SendAudioPacket(frame);
+                }
+
+                // Точный тайминг
+                nextFrameTime = nextFrameTime.AddMilliseconds(frameDurationMs);
+                var delay = (int)(nextFrameTime - DateTime.UtcNow).TotalMilliseconds;
+                if (delay > 0)
+                    Thread.Sleep(delay);
+                else if (delay < -frameDurationMs)
+                    nextFrameTime = DateTime.UtcNow; // сброс при сильном отставании
+            }
+        }
+        finally
+        {
+            Bass.BASS_StreamFree(stream);
+        }
+
+        Console.WriteLine($"Track finished: {_currentMetadata.Title}");
+    }
+
+    private void SendAudioPacket(byte[] opusFrame)
+    {
+        var packet = new AudioPacket
+        {
+            PasswordMD5 = _passwordHash,
+            Sequence = _sequence++,
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Metadata = _metadataSent ? null : _currentMetadata,
+            OpusFrame = opusFrame
+        };
+
+        _metadataSent = true;
+
+        byte[] data = PacketWriter.WriteAudioFromSource(packet);
+
+        try
+        {
+            int sent = _udp.Send(data, data.Length, _serverEndpoint);
+            if (_sequence % 100 == 0)
+                Console.WriteLine($"[DEBUG] Sent seq={packet.Sequence}, frame={opusFrame.Length} bytes");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ERROR] Send failed: {ex.Message}");
+        }
+    }
+
+    private async Task StatusListenerLoop(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    var result = await _udp.ReceiveAsync(ct);
+
+                    if (result.Buffer.Length > 0 && PacketReader.GetPacketType(result.Buffer) == PacketTypes.SourceStatus)
+                    {
+                        var status = PacketReader.ReadSourceStatus(result.Buffer);
+                        _lastStatusReceived = DateTime.UtcNow;
+                        Console.WriteLine($"[STATUS] Server OK | Listeners: {status.ClientsCount}");
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (SocketException)
+                {
+                    await Task.Delay(1000, ct);
+                }
+
+                var since = (DateTime.UtcNow - _lastStatusReceived).TotalSeconds;
+                if (_lastStatusReceived != DateTime.MinValue && since > 30)
+                {
+                    Console.WriteLine($"[WARN] No status from server for {since:F0}s");
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private bool InitBass()
+    {
+        BassNet.Registration("email@example.com", "key");
+
+        if (!Bass.BASS_Init(-1, _config.Opus.SampleRate, BASSInit.BASS_DEVICE_DEFAULT, IntPtr.Zero))
+        {
+            Console.WriteLine($"BASS_Init error: {Bass.BASS_ErrorGetCode()}");
+            return false;
+        }
+
+        _opusEncoder = OpusCodecFactory.CreateEncoder(
+            _config.Opus.SampleRate,
+            _config.Opus.Channels,
+            OpusApplication.OPUS_APPLICATION_AUDIO);
+
+        _opusEncoder.Bitrate = _config.Opus.Bitrate;
+        _opusEncoder.Complexity = _config.Opus.Complexity;
+        _opusEncoder.UseVBR = true;
+
+        Console.WriteLine($"Concentus Opus encoder: {_config.Opus.Bitrate / 1000}kbps, {_config.Opus.FrameSize}ms, complexity {_config.Opus.Complexity}");
+
+        return true;
     }
 }
 ----------------------------------------

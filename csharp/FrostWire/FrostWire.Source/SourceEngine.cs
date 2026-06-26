@@ -1,12 +1,13 @@
-﻿using FrostWire.Core.Configuration;
+﻿using System.Net;
+using System.Net.Sockets;
+using Concentus;
+using Concentus.Enums;
+using Concentus.Structs;
+using FrostWire.Core.Configuration;
 using FrostWire.Core.Protocol;
 using FrostWire.Core.Protocol.Models;
-using System.Net;
-using System.Net.Sockets;
+using FrostWire.Core.Security;
 using Un4seen.Bass;
-using Un4seen.Bass.AddOn.Enc;
-using Un4seen.Bass.AddOn.EncOpus;
-using Un4seen.Bass.AddOn.Opus;
 
 namespace FrostWire.Source;
 
@@ -14,20 +15,25 @@ public class SourceEngine
 {
     private readonly AppConfig _config;
     private readonly UdpClient _udp;
-    private readonly byte[] _passwordMD5;
+    private readonly byte[] _passwordHash;
     private readonly PlaylistManager _playlist;
     private readonly IPEndPoint _serverEndpoint;
 
     private uint _sequence;
     private DateTime _lastStatusReceived = DateTime.MinValue;
 
+    private IOpusEncoder _opusEncoder = null!;
+    private bool _metadataSent;
+    private TrackMetadata? _currentMetadata;
+
     public SourceEngine(AppConfig config)
     {
         _config = config;
-        _udp = new UdpClient();
-        _passwordMD5 = StringToMD5Bytes(config.Source.PasswordMD5);
+        _udp = new UdpClient(0);
+        _passwordHash = PasswordHasher.ComputeHash(config.Source.Password);
         _playlist = new PlaylistManager(config.Source.PlaylistPath, config.Source.Shuffle);
         _serverEndpoint = new IPEndPoint(IPAddress.Parse(config.Source.ServerAddress), config.Source.ServerPort);
+        Console.WriteLine($"[DEBUG] Source local endpoint: {_udp.Client.LocalEndPoint}");
     }
 
     public async Task RunAsync(CancellationToken ct)
@@ -69,26 +75,8 @@ public class SourceEngine
 
     private Task PlayTrackAsync(string filePath, CancellationToken ct)
     {
-        var tcs = new TaskCompletionSource();
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                PlayTrack(filePath, ct);
-                tcs.SetResult();
-            }
-            catch (Exception ex)
-            {
-                tcs.SetException(ex);
-            }
-        });
-        thread.Start();
-        return tcs.Task;
+        return Task.Run(() => PlayTrack(filePath, ct), ct);
     }
-
-    private byte[] _pendingData = Array.Empty<byte>();
-    private bool _metadataSent;
-    private TrackMetadata? _currentMetadata;
 
     private void PlayTrack(string filePath, CancellationToken ct)
     {
@@ -105,66 +93,75 @@ public class SourceEngine
         }
 
         _metadataSent = false;
-        _pendingData = Array.Empty<byte>();
 
-        string options = $"--bitrate {_config.Opus.Bitrate / 1000} " +
-                         $"--comp {_config.Opus.Complexity} " +
-                         $"--framesize {_config.Opus.FrameSize} " +
-                         $"--sample-rate {_config.Opus.SampleRate} " +
-                         $"--channels {_config.Opus.Channels}";
+        int frameSamples = _config.Opus.SampleRate * _config.Opus.FrameSize / 1000;
+        int channels = _config.Opus.Channels;
+        int totalFrameSamples = frameSamples * channels; // общее количество сэмплов с учётом каналов
+        int frameSizeBytes = totalFrameSamples * 4;
+        int frameDurationMs = _config.Opus.FrameSize;
 
-        var encodeProc = new ENCODEPROC((int handle, int channel, IntPtr buffer, int length, IntPtr user) =>
-        {
-            if (length <= 0) return;
+        float[] pcmFloat = new float[totalFrameSamples];
+        short[] pcmShort = new short[totalFrameSamples];
+        byte[] opusBuf = new byte[65536];
 
-            byte[] data = new byte[length];
-            System.Runtime.InteropServices.Marshal.Copy(buffer, data, 0, length);
-            _pendingData = ConcatArrays(_pendingData, data);
-        });
+        long totalSamples = Bass.BASS_ChannelGetLength(stream);
+        double totalSeconds = Bass.BASS_ChannelBytes2Seconds(stream, totalSamples);
+        Console.WriteLine($"Duration: {totalSeconds:F1}s");
 
-        int encoderHandle = BassEnc_Opus.BASS_Encode_OPUS_Start(
-            stream,
-            options,
-            BASSEncode.BASS_ENCODE_AUTOFREE,
-            encodeProc,
-            IntPtr.Zero);
-
-        if (encoderHandle == 0)
-        {
-            Console.WriteLine($"[ERROR] Cannot start Opus encoder: {Bass.BASS_ErrorGetCode()}");
-            Bass.BASS_StreamFree(stream);
-            return;
-        }
-
-        Console.WriteLine($"Opus encoder started: {_config.Opus.SampleRate}Hz, {_config.Opus.Channels}ch, {_config.Opus.Bitrate / 1000}kbps");
+        var nextFrameTime = DateTime.UtcNow;
 
         try
         {
             while (!ct.IsCancellationRequested)
             {
-                // Process encoding
-                BassEnc.BASS_Encode_Write(encoderHandle, IntPtr.Zero, 0);
+                long pos = Bass.BASS_ChannelGetPosition(stream);
+                double currentSec = Bass.BASS_ChannelBytes2Seconds(stream, pos);
 
-                // Send accumulated data
-                if (_pendingData.Length > 0)
-                {
-                    SendAudioPacket(_pendingData);
-                    _pendingData = Array.Empty<byte>();
-                }
-
-                // Check if stream still active
-                var active = Bass.BASS_ChannelIsActive(stream);
-                if (active != BASSActive.BASS_ACTIVE_PLAYING &&
-                    active != BASSActive.BASS_ACTIVE_STALLED &&
-                    _pendingData.Length == 0)
+                if (currentSec >= totalSeconds)
                     break;
 
-                Thread.Sleep(1);
+                int read = Bass.BASS_ChannelGetData(stream, pcmFloat, frameSizeBytes);
+                if (read <= 0)
+                    break;
+
+                int samplesRead = read / 4;
+
+                for (int i = 0; i < samplesRead; i++)
+                {
+                    float s = pcmFloat[i];
+                    if (s > 1f) s = 1f;
+                    if (s < -1f) s = -1f;
+                    pcmShort[i] = (short)(s * 32767f);
+                }
+
+                for (int i = samplesRead; i < pcmShort.Length; i++)
+                    pcmShort[i] = 0;
+
+                int encoded = _opusEncoder.Encode(
+                    new ReadOnlySpan<short>(pcmShort, 0, totalFrameSamples),
+                    frameSamples,
+                    new Span<byte>(opusBuf),
+                    opusBuf.Length);
+
+                if (encoded > 0)
+                {
+                    byte[] frame = new byte[encoded];
+                    Array.Copy(opusBuf, frame, encoded);
+                    SendAudioPacket(frame);
+                }
+
+                // Точный тайминг
+                nextFrameTime = nextFrameTime.AddMilliseconds(frameDurationMs);
+                var delay = (int)(nextFrameTime - DateTime.UtcNow).TotalMilliseconds;
+                if (delay > 0)
+                    Thread.Sleep(delay);
+                else if (delay < -frameDurationMs)
+                    nextFrameTime = DateTime.UtcNow; // сброс при сильном отставании
             }
         }
         finally
         {
-            BassEnc.BASS_Encode_Stop(encoderHandle);
+            Bass.BASS_StreamFree(stream);
         }
 
         Console.WriteLine($"Track finished: {_currentMetadata.Title}");
@@ -174,7 +171,7 @@ public class SourceEngine
     {
         var packet = new AudioPacket
         {
-            PasswordMD5 = _passwordMD5,
+            PasswordMD5 = _passwordHash,
             Sequence = _sequence++,
             Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             Metadata = _metadataSent ? null : _currentMetadata,
@@ -184,7 +181,17 @@ public class SourceEngine
         _metadataSent = true;
 
         byte[] data = PacketWriter.WriteAudioFromSource(packet);
-        _udp.Send(data, data.Length, _serverEndpoint);
+
+        try
+        {
+            int sent = _udp.Send(data, data.Length, _serverEndpoint);
+            if (_sequence % 100 == 0)
+                Console.WriteLine($"[DEBUG] Sent seq={packet.Sequence}, frame={opusFrame.Length} bytes");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ERROR] Send failed: {ex.Message}");
+        }
     }
 
     private async Task StatusListenerLoop(CancellationToken ct)
@@ -225,39 +232,25 @@ public class SourceEngine
 
     private bool InitBass()
     {
+        BassNet.Registration("email@example.com", "key");
+
         if (!Bass.BASS_Init(-1, _config.Opus.SampleRate, BASSInit.BASS_DEVICE_DEFAULT, IntPtr.Zero))
         {
             Console.WriteLine($"BASS_Init error: {Bass.BASS_ErrorGetCode()}");
             return false;
         }
 
-        int opusPlugin = Bass.BASS_PluginLoad("bassopus.dll");
-        if (opusPlugin == 0)
-            opusPlugin = Bass.BASS_PluginLoad("libbassopus.so");
+        _opusEncoder = OpusCodecFactory.CreateEncoder(
+            _config.Opus.SampleRate,
+            _config.Opus.Channels,
+            OpusApplication.OPUS_APPLICATION_AUDIO);
 
-        if (opusPlugin == 0)
-        {
-            Console.WriteLine($"[ERROR] Cannot load Opus plugin: {Bass.BASS_ErrorGetCode()}");
-            return false;
-        }
+        _opusEncoder.Bitrate = _config.Opus.Bitrate;
+        _opusEncoder.Complexity = _config.Opus.Complexity;
+        _opusEncoder.UseVBR = true;
 
-        Console.WriteLine("Opus plugin loaded");
+        Console.WriteLine($"Concentus Opus encoder: {_config.Opus.Bitrate / 1000}kbps, {_config.Opus.FrameSize}ms, complexity {_config.Opus.Complexity}");
+
         return true;
-    }
-
-    private static byte[] ConcatArrays(byte[] a, byte[] b)
-    {
-        byte[] result = new byte[a.Length + b.Length];
-        Buffer.BlockCopy(a, 0, result, 0, a.Length);
-        Buffer.BlockCopy(b, 0, result, a.Length, b.Length);
-        return result;
-    }
-
-    private static byte[] StringToMD5Bytes(string hex)
-    {
-        byte[] bytes = new byte[16];
-        for (int i = 0; i < 16; i++)
-            bytes[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
-        return bytes;
     }
 }
