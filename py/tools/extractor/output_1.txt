@@ -1,3 +1,824 @@
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Player\JitterBuffer.cs
+----------------------------------------
+﻿namespace FrostWire.Player;
+
+public class JitterBuffer
+{
+    private readonly object _lock = new();
+    private readonly SortedDictionary<uint, byte[]> _buffer = new();
+    private uint _nextSequence;
+    private bool _initialized;
+    private byte[]? _lastFrame;
+
+    private const int MaxBufferSize = 10;
+    private const uint MaxSequenceGap = 100;
+
+    private static readonly Random _rng = new();
+    private double _lossRate;
+
+    public void SetSimulatedLoss(double percent)
+    {
+        _lossRate = Math.Clamp(percent, 0, 100) / 100.0;
+        Console.WriteLine($"[SIM] Packet loss simulation: {percent:F0}%");
+    }
+
+    public void Add(uint sequence, byte[] opusFrame)
+    {
+        if (_lossRate > 0 && _rng.NextDouble() < _lossRate)
+            return;
+
+        lock (_lock)
+        {
+            if (!_initialized)
+            {
+                _nextSequence = sequence;
+                _initialized = true;
+            }
+
+            if (sequence < _nextSequence)
+            {
+                if (_nextSequence - sequence > MaxBufferSize * 2)
+                    return;
+            }
+
+            if (_buffer.Count > 0)
+            {
+                var lastKey = _buffer.Keys.Last();
+                if (sequence > lastKey && sequence - lastKey > MaxSequenceGap)
+                {
+                    Console.WriteLine($"[JITTER] Large sequence gap detected ({lastKey} -> {sequence}), resetting buffer");
+                    Clear();
+                    _nextSequence = sequence;
+                }
+            }
+
+            if (_buffer.Count >= MaxBufferSize)
+            {
+                var oldest = _buffer.Keys.First();
+                _buffer.Remove(oldest);
+                _nextSequence = Math.Max(_nextSequence, oldest + 1);
+            }
+
+            _buffer[sequence] = opusFrame;
+        }
+    }
+
+    public enum ResultType
+    {
+        Empty,
+        Normal,
+        Missing
+    }
+
+    public struct Result
+    {
+        public ResultType Type;
+        public byte[]? Data;
+    }
+
+    public Result GetNext()
+    {
+        lock (_lock)
+        {
+            if (!_initialized)
+                return new Result { Type = ResultType.Empty };
+
+            if (_buffer.TryGetValue(_nextSequence, out var frame))
+            {
+                _buffer.Remove(_nextSequence);
+                _nextSequence++;
+                return new Result { Type = ResultType.Normal, Data = frame };
+            }
+
+            if (_buffer.Count > 0)
+            {
+                var firstKey = _buffer.Keys.First();
+
+                if (firstKey < _nextSequence)
+                {
+                    _buffer.Remove(firstKey);
+                    return new Result { Type = ResultType.Empty };
+                }
+
+                if (firstKey > _nextSequence)
+                {
+                    if (firstKey - _nextSequence > MaxBufferSize)
+                    {
+                        _nextSequence = firstKey;
+                        if (_buffer.TryGetValue(firstKey, out var jumpFrame))
+                        {
+                            _buffer.Remove(firstKey);
+                            _nextSequence = firstKey + 1;
+                            return new Result { Type = ResultType.Normal, Data = jumpFrame };
+                        }
+                    }
+
+                    _nextSequence++;
+                    return new Result { Type = ResultType.Missing };
+                }
+            }
+
+            return new Result { Type = ResultType.Empty };
+        }
+    }
+
+    /// <summary>
+    /// Подсмотреть следующий доступный пакет (не обязательно _nextSequence).
+    /// Используется для FEC-восстановления.
+    /// </summary>
+    public byte[]? PeekNextAvailable()
+    {
+        lock (_lock)
+        {
+            if (_buffer.Count == 0)
+                return null;
+
+            var nextKey = _buffer.Keys.FirstOrDefault(k => k >= _nextSequence);
+            if (nextKey == 0 && !_buffer.ContainsKey(0))
+                return null;
+
+            return _buffer[nextKey];
+        }
+    }
+
+    public void SetLastFrame(byte[] frame)
+    {
+        _lastFrame = frame;
+    }
+
+    public byte[]? GetLastFrame()
+    {
+        return _lastFrame;
+    }
+
+    public int QueuedFrames
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _buffer.Count;
+            }
+        }
+    }
+
+    public void Clear()
+    {
+        lock (_lock)
+        {
+            _buffer.Clear();
+            _initialized = false;
+            _nextSequence = 0;
+            _lastFrame = null;
+        }
+    }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Player\PlayerEngine.cs
+----------------------------------------
+﻿using FrostWire.Core.Configuration;
+using FrostWire.Core.Native;
+using FrostWire.Core.Protocol;
+using FrostWire.Core.Protocol.Models;
+using System.Net;
+using System.Net.Sockets;
+using Un4seen.Bass;
+
+namespace FrostWire.Player;
+
+public class PlayerEngine
+{
+    private readonly AppConfig _config;
+    private readonly Guid _clientId;
+    private UdpClient? _udp;
+    private IPEndPoint? _serverEndpoint;
+
+    private JitterBuffer _jitterBuffer;
+    private readonly object _stateLock = new();
+    private readonly SemaphoreSlim _udpLock = new(1, 1);
+
+    private volatile bool _running;
+
+    private string _title = "—";
+    private string _artist = "—";
+    private string _album = "—";
+    private double _duration;
+    private uint _trackPosition;
+    private byte _serverStatus = ServerInfoPacket.StatusNoSource;
+    private uint _serverUptime;
+    private int _listenersCount;
+    private int _reconnects;
+
+    private int _lastFrameMs;
+    private int _lastPacketSize;
+    private string _lastBandwidth = "—";
+    private int _plcCount;
+    private double _simLossPercent;
+
+    private DateTime _lastPacketReceived = DateTime.MinValue;
+
+    private OpusDecoder? _opusDecoder;
+    private int _outputStream;
+
+    public PlayerEngine(AppConfig config)
+    {
+        _config = config;
+        _clientId = Guid.NewGuid();
+        _jitterBuffer = new JitterBuffer();
+    }
+
+    public void SetSimulatedLoss(double percent)
+    {
+        _simLossPercent = Math.Clamp(percent, 0, 100);
+        _jitterBuffer.SetSimulatedLoss(_simLossPercent);
+    }
+
+    public async Task RunAsync(CancellationToken ct)
+    {
+        if (!InitBass())
+        {
+            Console.WriteLine("[FATAL] Failed to initialize BASS");
+            return;
+        }
+
+        _running = true;
+        _lastPacketReceived = DateTime.MinValue;
+
+        var playbackThread = new Thread(PlaybackLoop)
+        {
+            IsBackground = true
+        };
+        playbackThread.Start();
+
+        var uiThread = new Thread(UiLoop)
+        {
+            IsBackground = true
+        };
+        uiThread.Start();
+
+        var inputThread = new Thread(InputLoop)
+        {
+            IsBackground = true
+        };
+        inputThread.Start(ct);
+
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    await ConnectAndListenAsync(ct);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ERROR] Connection error: {ex.Message}");
+                }
+
+                if (!ct.IsCancellationRequested)
+                {
+                    Console.WriteLine("[RECONNECT] Connection lost, reconnecting in 1s...");
+                    _reconnects++;
+                    _serverStatus = ServerInfoPacket.StatusNoSource;
+
+                    ResetPlaybackState();
+
+                    await Task.Delay(1000, ct);
+                }
+            }
+        }
+        finally
+        {
+            _running = false;
+            playbackThread.Join(2000);
+            uiThread.Join(2000);
+            inputThread.Join(1000);
+            Bass.BASS_StreamFree(_outputStream);
+            Bass.BASS_Free();
+
+            await DisposeUdpClientAsync();
+        }
+    }
+
+    private async Task DisposeUdpClientAsync()
+    {
+        await _udpLock.WaitAsync();
+        try
+        {
+            _udp?.Close();
+            _udp?.Dispose();
+            _udp = null;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WARN] Error disposing UDP client: {ex.Message}");
+        }
+        finally
+        {
+            _udpLock.Release();
+        }
+    }
+
+    private void ResetPlaybackState()
+    {
+        lock (_stateLock)
+        {
+            _title = "—";
+            _artist = "—";
+            _album = "—";
+            _duration = 0;
+            _trackPosition = 0;
+            _lastFrameMs = 0;
+            _lastPacketSize = 0;
+            _lastBandwidth = "—";
+            _plcCount = 0;
+        }
+
+        _jitterBuffer.Clear();
+
+        Console.WriteLine("[STATE] Playback state reset for reconnection");
+    }
+
+    private async Task ConnectAndListenAsync(CancellationToken ct)
+    {
+        await _udpLock.WaitAsync();
+        try
+        {
+            _udp?.Close();
+            _udp?.Dispose();
+
+            _udp = new UdpClient();
+            _serverEndpoint = new IPEndPoint(IPAddress.Parse(_config.Player.ServerAddress), _config.Player.ServerPort);
+
+            var subscribe = new SubscribePacket(_clientId);
+            await _udp.SendAsync(PacketWriter.WriteSubscribe(subscribe), _serverEndpoint, ct);
+            Console.WriteLine($"[CONNECT] Subscribed. GUID: {_clientId.ToString("N")[..8]}...");
+        }
+        finally
+        {
+            _udpLock.Release();
+        }
+
+        _lastPacketReceived = DateTime.UtcNow;
+
+        using var keepAliveCts = new CancellationTokenSource();
+        var keepAliveTask = KeepAliveLoop(keepAliveCts.Token);
+
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                using var receiveCts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, receiveCts.Token);
+
+                try
+                {
+                    UdpReceiveResult result;
+
+                    await _udpLock.WaitAsync();
+                    try
+                    {
+                        if (_udp == null) break;
+                        result = await _udp.ReceiveAsync(linked.Token);
+                    }
+                    finally
+                    {
+                        _udpLock.Release();
+                    }
+
+                    HandlePacket(result.Buffer);
+                    _lastPacketReceived = DateTime.UtcNow;
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    // Таймаут получения
+                }
+
+                var silence = (DateTime.UtcNow - _lastPacketReceived).TotalMilliseconds;
+                if (silence > _config.Player.KeepAliveIntervalMs * 3)
+                {
+                    Console.WriteLine($"[TIMEOUT] No data from server for {silence:F0}ms");
+                    break;
+                }
+            }
+        }
+        finally
+        {
+            keepAliveCts.Cancel();
+            try { await keepAliveTask; } catch { }
+        }
+    }
+
+    private void HandlePacket(byte[] data)
+    {
+        if (data.Length < 1) return;
+
+        byte type = PacketReader.GetPacketType(data);
+
+        switch (type)
+        {
+            case PacketTypes.Audio:
+                HandleAudio(data);
+                break;
+            case PacketTypes.ServerInfo:
+                HandleServerInfo(data);
+                break;
+        }
+    }
+
+    private void HandleAudio(byte[] data)
+    {
+        var packet = PacketReader.ReadAudioFromServer(data);
+
+        if (packet.Metadata != null && !packet.Metadata.IsEmpty)
+        {
+            lock (_stateLock)
+            {
+                _title = packet.Metadata.Title;
+                _artist = packet.Metadata.Artist;
+                _album = packet.Metadata.Album;
+                _duration = packet.Metadata.Duration;
+                _trackPosition = 0;
+            }
+        }
+
+        if (packet.OpusFrame.Length > 0)
+        {
+            _jitterBuffer.Add(packet.Sequence, packet.OpusFrame);
+        }
+    }
+
+    private void HandleServerInfo(byte[] data)
+    {
+        var info = PacketReader.ReadServerInfo(data);
+
+        lock (_stateLock)
+        {
+            _serverStatus = info.Status;
+            _serverUptime = info.Uptime;
+            _listenersCount = info.ClientsCount;
+            _trackPosition = info.TrackPosition;
+        }
+    }
+
+    private async Task KeepAliveLoop(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            await Task.Delay(_config.Player.KeepAliveIntervalMs, ct);
+
+            await _udpLock.WaitAsync();
+            try
+            {
+                if (_udp != null && _serverEndpoint != null)
+                {
+                    var keepAlive = new KeepAlivePacket(_clientId);
+                    await _udp.SendAsync(PacketWriter.WriteKeepAlive(keepAlive), _serverEndpoint, ct);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception)
+            {
+                // Игнорируем ошибки отправки keepalive
+            }
+            finally
+            {
+                _udpLock.Release();
+            }
+        }
+    }
+
+    // ─── Управление с клавиатуры ──────────────────────────────
+
+    private void InputLoop(object? ctObj)
+    {
+        var ct = (CancellationToken)ctObj!;
+
+        while (!ct.IsCancellationRequested)
+        {
+            if (Console.KeyAvailable)
+            {
+                var key = Console.ReadKey(true);
+
+                lock (_stateLock)
+                {
+                    switch (key.Key)
+                    {
+                        case ConsoleKey.Oem4:      // [
+                            _simLossPercent = Math.Max(0, _simLossPercent - 5);
+                            _jitterBuffer.SetSimulatedLoss(_simLossPercent);
+                            break;
+
+                        case ConsoleKey.Oem6:      // ]
+                            _simLossPercent = Math.Min(100, _simLossPercent + 5);
+                            _jitterBuffer.SetSimulatedLoss(_simLossPercent);
+                            break;
+
+                        case ConsoleKey.L:         // L — включить/выключить
+                            if (_simLossPercent > 0)
+                            {
+                                _simLossPercent = 0;
+                                _jitterBuffer.SetSimulatedLoss(0);
+                            }
+                            else
+                            {
+                                _simLossPercent = 10;
+                                _jitterBuffer.SetSimulatedLoss(10);
+                            }
+                            break;
+
+                        case ConsoleKey.Q:
+                            Environment.Exit(0);
+                            break;
+                    }
+                }
+            }
+
+            Thread.Sleep(50);
+        }
+    }
+
+    // ─── Воспроизведение ──────────────────────────────────────
+
+    private void PlaybackLoop()
+    {
+        int channels = _config.Opus.Channels;
+        int maxFrameSamples = _config.Opus.SampleRate * 120 / 1000;
+        int maxTotalSamples = maxFrameSamples * channels;
+
+        short[] pcmBuffer = new short[maxTotalSamples];
+        byte[] byteBuffer = new byte[maxTotalSamples * sizeof(short)];
+
+        while (_running)
+        {
+            var jitterResult = _jitterBuffer.GetNext();
+
+            if (jitterResult.Type == JitterBuffer.ResultType.Empty)
+            {
+                Thread.Sleep(1);
+                continue;
+            }
+
+            if (_outputStream != 0 && _opusDecoder != null)
+            {
+                try
+                {
+                    if (jitterResult.Type == JitterBuffer.ResultType.Missing)
+                    {
+                        // Пробуем FEC из следующего доступного пакета
+                        var nextFrame = _jitterBuffer.PeekNextAvailable();
+
+                        if (nextFrame != null)
+                        {
+                            var fecResult = _opusDecoder.Decode(nextFrame, pcmBuffer, fec: true);
+                            if (fecResult != null)
+                            {
+                                _plcCount++;
+                                lock (_stateLock)
+                                {
+                                    _lastFrameMs = fecResult.Value.frameMs;
+                                    _lastPacketSize = 0;
+                                    _lastBandwidth = "FEC";
+                                }
+                                WriteToBass(fecResult.Value.decodedSamples, channels, pcmBuffer, byteBuffer);
+                            }
+                        }
+                        else
+                        {
+                            // PLC из последнего успешного пакета
+                            var lastFrame = _jitterBuffer.GetLastFrame();
+                            if (lastFrame != null)
+                            {
+                                var plcResult = _opusDecoder.Decode(lastFrame, pcmBuffer, fec: true);
+                                if (plcResult != null)
+                                {
+                                    _plcCount++;
+                                    lock (_stateLock)
+                                    {
+                                        _lastFrameMs = plcResult.Value.frameMs;
+                                        _lastPacketSize = 0;
+                                        _lastBandwidth = "PLC";
+                                    }
+                                    WriteToBass(plcResult.Value.decodedSamples, channels, pcmBuffer, byteBuffer);
+                                }
+                            }
+                        }
+                    }
+                    else if (jitterResult.Data != null)
+                    {
+                        // Нормальное декодирование
+                        var result = _opusDecoder.Decode(jitterResult.Data, pcmBuffer, false);
+
+                        if (result != null)
+                        {
+                            _jitterBuffer.SetLastFrame(jitterResult.Data);
+                            lock (_stateLock)
+                            {
+                                _lastFrameMs = result.Value.frameMs;
+                                _lastPacketSize = result.Value.packetBytes;
+                                _lastBandwidth = result.Value.bandwidth;
+                            }
+
+                            WriteToBass(result.Value.decodedSamples, channels, pcmBuffer, byteBuffer);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (_running)
+                    {
+                        Console.WriteLine($"[DECODE] Error: {ex.Message}");
+                    }
+                }
+            }
+            else
+            {
+                Thread.Sleep(1);
+            }
+        }
+    }
+
+    private void WriteToBass(int decodedSamples, int channels, short[] pcmBuffer, byte[] byteBuffer)
+    {
+        int samplesToWrite = decodedSamples * channels;
+        int byteCount = samplesToWrite * sizeof(short);
+        Buffer.BlockCopy(pcmBuffer, 0, byteBuffer, 0, byteCount);
+
+        while (_running)
+        {
+            int queued = Bass.BASS_StreamPutData(_outputStream, IntPtr.Zero, 0);
+            if (queued < byteCount * 20)
+                break;
+            Thread.Sleep(1);
+        }
+
+        if (_running)
+        {
+            Bass.BASS_StreamPutData(_outputStream, byteBuffer, byteCount);
+        }
+    }
+
+    // ─── UI ───────────────────────────────────────────────────
+
+    private void UiLoop()
+    {
+        while (_running)
+        {
+            DrawUi();
+            Thread.Sleep(250);
+        }
+    }
+
+    private void DrawUi()
+    {
+        string statusText, statusIcon;
+        int listeners, reconnects;
+        string title, artist, album, trackPosStr;
+        string uptimeStr;
+        double duration;
+        string codecInfo;
+        int plcCount;
+        double simLoss;
+
+        lock (_stateLock)
+        {
+            statusIcon = _serverStatus switch
+            {
+                ServerInfoPacket.StatusLive => "🟢",
+                ServerInfoPacket.StatusShuttingDown => "🔴",
+                _ => "🟡"
+            };
+            statusText = _serverStatus switch
+            {
+                ServerInfoPacket.StatusLive => "Live",
+                ServerInfoPacket.StatusShuttingDown => "Shutdown",
+                _ => "No Source"
+            };
+            listeners = _listenersCount;
+            reconnects = _reconnects;
+            title = _title;
+            artist = _artist;
+            album = _album;
+            duration = _duration;
+            plcCount = _plcCount;
+            simLoss = _simLossPercent;
+
+            var pos = TimeSpan.FromSeconds(_trackPosition);
+            trackPosStr = $"{(int)pos.TotalMinutes:D2}:{pos.Seconds:D2}";
+
+            var dur = TimeSpan.FromSeconds(duration);
+            string durStr = duration > 0 ? $" / {(int)dur.TotalMinutes:D2}:{dur.Seconds:D2}" : "";
+
+            var up = TimeSpan.FromSeconds(_serverUptime);
+            uptimeStr = up.TotalHours >= 1
+                ? $"{(int)up.TotalHours}ч {up.Minutes:D2}м {up.Seconds:D2}с"
+                : $"{up.Minutes}м {up.Seconds:D2}с";
+
+            trackPosStr += durStr;
+
+            codecInfo = _lastPacketSize > 0
+                ? $"{_lastFrameMs}ms {_lastPacketSize}B {_lastBandwidth}"
+                : _lastBandwidth == "PLC" || _lastBandwidth == "FEC" ? $"{_lastFrameMs}ms {_lastBandwidth}" : "—";
+        }
+
+        string simStr = simLoss > 0 ? $"SIM: {simLoss:F0}%" : "SIM: OFF";
+
+        Console.SetCursorPosition(0, 0);
+        Console.WriteLine("┌──────────────────────────────────────────────────┐");
+        Console.WriteLine($"│ {statusIcon} {statusText,-8} │ Слушателей: {listeners,-5} Reconnects: {reconnects,-3} │");
+        Console.WriteLine($"│ Сервер: {uptimeStr,-33} │");
+        Console.WriteLine("├──────────────────────────────────────────────────┤");
+        Console.WriteLine($"│ {Truncate(artist, 48)} │");
+        Console.WriteLine($"│ {Truncate(title, 48)} │");
+        Console.WriteLine($"│ {Truncate(album, 48)} │");
+        Console.WriteLine($"│ {trackPosStr,-48} │");
+        Console.WriteLine($"│ Opus: {codecInfo} PLC: {plcCount,-5} │");
+        Console.WriteLine($"│ {simStr,-48} │");
+        Console.WriteLine("├──────────────────────────────────────────────────┤");
+        Console.WriteLine("│ [Q] Выход  [[]/[]] Loss  [L] Toggle              │");
+        Console.WriteLine("└──────────────────────────────────────────────────┘");
+    }
+
+    // ─── BASS ────────────────────────────────────────────────
+
+    private bool InitBass()
+    {
+        if (!Bass.BASS_Init(-1, _config.Opus.SampleRate, BASSInit.BASS_DEVICE_DEFAULT, IntPtr.Zero))
+        {
+            Console.WriteLine($"BASS_Init error: {Bass.BASS_ErrorGetCode()}");
+            return false;
+        }
+
+        Console.WriteLine($"[Opus] Version: {OpusNative.opus_get_version_string()}");
+
+        _opusDecoder = new OpusDecoder(
+            _config.Opus.SampleRate,
+            _config.Opus.Channels);
+
+        Console.WriteLine($"Native Opus decoder: {_config.Opus.SampleRate}Hz, {_config.Opus.Channels}ch");
+
+        _outputStream = Bass.BASS_StreamCreatePush(
+            _config.Opus.SampleRate,
+            _config.Opus.Channels,
+            BASSFlag.BASS_DEFAULT,
+            IntPtr.Zero);
+
+        if (_outputStream == 0)
+        {
+            Console.WriteLine($"[ERROR] Cannot create output stream: {Bass.BASS_ErrorGetCode()}");
+            return false;
+        }
+
+        Bass.BASS_ChannelPlay(_outputStream, false);
+        Console.WriteLine("BASS output started");
+
+        return true;
+    }
+
+    private static string Truncate(string str, int maxLen)
+    {
+        if (string.IsNullOrEmpty(str)) return new string(' ', maxLen);
+        return str.Length > maxLen ? str[..(maxLen - 1)] + "…" : str.PadRight(maxLen);
+    }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Player\Program.cs
+----------------------------------------
+﻿using FrostWire.Core.Configuration;
+using FrostWire.Player;
+
+var configPath = args.Length > 0 ? args[0] : "appsettings.json";
+var config = ConfigLoader.Load(configPath);
+
+Console.WriteLine("FrostWire Player");
+Console.WriteLine($"Server: {config.Player.ServerAddress}:{config.Player.ServerPort}");
+
+using var cts = new CancellationTokenSource();
+var engine = new PlayerEngine(config);
+
+Console.CancelKeyPress += (_, e) =>
+{
+    e.Cancel = true;
+    cts.Cancel();
+};
+
+try
+{
+    await engine.RunAsync(cts.Token);
+}
+catch (OperationCanceledException) { }
+
+Console.WriteLine("Player stopped.");
+----------------------------------------
+
+================================================================================
 Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Server\ClientRegistry.cs
 ----------------------------------------
 ﻿using System.Collections.Concurrent;
@@ -109,756 +930,5 @@ catch (OperationCanceledException)
 }
 
 Console.WriteLine("Server stopped.");
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Server\ServerEngine.cs
-----------------------------------------
-﻿using System.Net;
-using System.Net.Sockets;
-using FrostWire.Core.Configuration;
-using FrostWire.Core.Protocol;
-using FrostWire.Core.Protocol.Models;
-using FrostWire.Core.Security;
-
-namespace FrostWire.Server;
-
-public class ServerEngine
-{
-    private readonly AppConfig _config;
-    private readonly UdpClient _udp;
-    private readonly ClientRegistry _clients;
-    private readonly byte[] _expectedPasswordHash;
-
-    private IPEndPoint? _sourceEndpoint;
-    private TrackMetadata? _lastMetadata;
-    private DateTime _lastAudioTime = DateTime.MinValue;
-    private DateTime _serverStartTime = DateTime.UtcNow;
-    private DateTime _currentTrackStart = DateTime.MinValue;
-    private double _currentTrackDuration;
-
-    private byte _status = ServerInfoPacket.StatusNoSource;
-
-    public ServerEngine(AppConfig config)
-    {
-        _config = config;
-        _udp = new UdpClient(config.Server.ListenPort);
-
-        // Отключаем ICMP Port Unreachable для UDP
-        try
-        {
-            _udp.Client.IOControl(
-                (IOControlCode)(-1744830452), // SIO_UDP_CONNRESET
-                new byte[] { 0 }, // false
-                null);
-        }
-        catch
-        {
-            // Не критично, если не получилось
-        }
-
-        _clients = new ClientRegistry();
-        _expectedPasswordHash = PasswordHasher.ComputeHash(config.Server.Password);
-    }
-
-    public async Task RunAsync(CancellationToken ct)
-    {
-        Console.WriteLine($"Listening on UDP port {_config.Server.ListenPort}");
-
-        using var timerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-
-        _ = Task.Run(() => SourceStatusLoop(timerCts.Token), ct);
-        _ = Task.Run(() => PlayerTimeoutLoop(timerCts.Token), ct);
-        _ = Task.Run(() => ServerInfoLoop(timerCts.Token), ct);
-
-        try
-        {
-            while (!ct.IsCancellationRequested)
-            {
-                try
-                {
-                    var result = await _udp.ReceiveAsync(ct);
-                    _ = Task.Run(() => HandlePacket(result.Buffer, result.RemoteEndPoint), ct);
-                }
-                catch (SocketException ex)
-                {
-                    Console.WriteLine($"[WARN] Receive error: {ex.Message}");
-                }
-            }
-        }
-        catch (OperationCanceledException) { }
-        finally
-        {
-            timerCts.Cancel();
-            _udp.Close();
-        }
-    }
-
-    private void HandlePacket(byte[] data, IPEndPoint remote)
-    {
-        if (data.Length < 1) return;
-
-        byte type = PacketReader.GetPacketType(data);
-
-        try
-        {
-            switch (type)
-            {
-                case PacketTypes.Audio:
-                    HandleAudio(data, remote);
-                    break;
-                case PacketTypes.Subscribe:
-                    HandleSubscribe(data, remote);
-                    break;
-                case PacketTypes.KeepAlive:
-                    HandleKeepAlive(data, remote);
-                    break;
-                default:
-                    // неизвестный тип — игнорируем
-                    break;
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[ERROR] Processing packet type 0x{type:X2} from {remote}: {ex.Message}");
-        }
-    }
-
-    private void HandleAudio(byte[] data, IPEndPoint remote)
-    {
-        var packet = PacketReader.ReadAudioFromSource(data);
-
-        // Проверка пароля
-        if (packet.PasswordMD5 == null || !packet.PasswordMD5.SequenceEqual(_expectedPasswordHash))
-        {
-            Console.WriteLine($"[WARN] Invalid password from {remote}");
-            return;
-        }
-
-        // Новый source или подтверждение существующего
-        if (_sourceEndpoint == null || !_sourceEndpoint.Equals(remote))
-        {
-            Console.WriteLine($"[INFO] Source connected: {remote}");
-            _sourceEndpoint = remote;
-        }
-
-        _lastAudioTime = DateTime.UtcNow;
-
-        // Обновляем метаданные если есть
-        if (packet.Metadata != null && !packet.Metadata.IsEmpty)
-        {
-            _lastMetadata = packet.Metadata;
-            _currentTrackStart = DateTime.UtcNow;
-            _currentTrackDuration = packet.Metadata.Duration;
-            Console.WriteLine($"[TRACK] {packet.Metadata.Artist} - {packet.Metadata.Title} [{packet.Metadata.Duration:F0}s]");
-        }
-
-        // Статус Live
-        if (_status != ServerInfoPacket.StatusLive)
-        {
-            _status = ServerInfoPacket.StatusLive;
-            Console.WriteLine("[STATUS] Live");
-        }
-
-        // Ретрансляция плеерам (вырезаем MD5)
-        var playerPacket = new AudioPacket
-        {
-            Sequence = packet.Sequence,
-            Timestamp = packet.Timestamp,
-            Metadata = packet.Metadata,
-            OpusFrame = packet.OpusFrame
-        };
-
-        BroadcastToPlayers(PacketWriter.WriteAudioToPlayer(playerPacket));
-    }
-
-    private void HandleSubscribe(byte[] data, IPEndPoint remote)
-    {
-        var packet = PacketReader.ReadSubscribe(data);
-        var clientId = packet.GetClientId();
-
-        bool isNew = _clients.AddOrUpdate(clientId, remote);
-        string action = isNew ? "connected" : "reconnected";
-        Console.WriteLine($"[PLAYER] {action}: {clientId.ToString("N")[..8]}... from {remote}");
-
-        // Отправляем SERVER_INFO
-        var serverInfo = BuildServerInfo();
-        SendTo(PacketWriter.WriteServerInfo(serverInfo), remote);
-
-        // Отправляем последние метаданные (если есть) с пустым OpusFrame
-        if (_lastMetadata != null && !_lastMetadata.IsEmpty)
-        {
-            var metaPacket = new AudioPacket
-            {
-                Sequence = 0,
-                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                Metadata = _lastMetadata,
-                OpusFrame = Array.Empty<byte>()
-            };
-            SendTo(PacketWriter.WriteAudioToPlayer(metaPacket), remote);
-        }
-    }
-
-    private void HandleKeepAlive(byte[] data, IPEndPoint remote)
-    {
-        var packet = PacketReader.ReadKeepAlive(data);
-        var clientId = packet.GetClientId();
-
-        _clients.Refresh(clientId);
-    }
-
-    // ─── Фоновые циклы ─────────────────────────────────────────
-
-    private async Task SourceStatusLoop(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            await Task.Delay(_config.Server.SourceStatusIntervalMs, ct);
-
-            if (_sourceEndpoint != null)
-            {
-                var status = new SourceStatusPacket
-                {
-                    Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    ClientsCount = _clients.Count
-                };
-                SendTo(PacketWriter.WriteSourceStatus(status), _sourceEndpoint);
-            }
-
-            // Проверка таймаута source
-            if (_status == ServerInfoPacket.StatusLive &&
-                (DateTime.UtcNow - _lastAudioTime).TotalMilliseconds > _config.Server.SourceTimeoutMs)
-            {
-                _status = ServerInfoPacket.StatusNoSource;
-                _sourceEndpoint = null;
-                Console.WriteLine("[STATUS] NoSource — source timeout");
-            }
-        }
-    }
-
-    private async Task PlayerTimeoutLoop(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            await Task.Delay(5000, ct);
-
-            int removed = _clients.RemoveTimedOut(_config.Server.PlayerTimeoutMs);
-            if (removed > 0)
-                Console.WriteLine($"[PLAYER] Removed {removed} timed out, total: {_clients.Count}");
-        }
-    }
-
-    private async Task ServerInfoLoop(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            await Task.Delay(_config.Server.ServerInfoIntervalMs, ct);
-
-            if (_clients.Count > 0)
-            {
-                var info = BuildServerInfo();
-                BroadcastToPlayers(PacketWriter.WriteServerInfo(info));
-            }
-        }
-    }
-
-    // ─── Helpers ───────────────────────────────────────────────
-
-    private ServerInfoPacket BuildServerInfo()
-    {
-        uint trackPosition = 0;
-        if (_status == ServerInfoPacket.StatusLive && _currentTrackDuration > 0)
-        {
-            trackPosition = (uint)(DateTime.UtcNow - _currentTrackStart).TotalSeconds;
-            if (trackPosition > _currentTrackDuration)
-                trackPosition = (uint)_currentTrackDuration;
-        }
-
-        return new ServerInfoPacket
-        {
-            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            Uptime = (uint)(DateTime.UtcNow - _serverStartTime).TotalSeconds,
-            Status = _status,
-            ClientsCount = _clients.Count,
-            TrackPosition = trackPosition
-        };
-    }
-
-    private void BroadcastToPlayers(byte[] data)
-    {
-        List<IPEndPoint> deadClients = new();
-
-        foreach (var client in _clients.GetAllEndpoints())
-        {
-            try
-            {
-                _udp.Send(data, data.Length, client);
-            }
-            catch (SocketException)
-            {
-                deadClients.Add(client);
-            }
-        }
-
-        foreach (var dead in deadClients)
-        {
-            var entry = _clients.GetByEndpoint(dead);
-            if (entry != null)
-            {
-                _clients.Remove(entry.Value.Key);
-                Console.WriteLine($"[PLAYER] Removed dead client: {entry.Value.Key.ToString("N")[..8]}...");
-            }
-        }
-    }
-
-    private void SendTo(byte[] data, IPEndPoint target)
-    {
-        try
-        {
-            _udp.Send(data, data.Length, target);
-        }
-        catch (SocketException)
-        {
-            // клиент мёртв, удалится при следующей рассылке
-        }
-    }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Source\MetadataExtractor.cs
-----------------------------------------
-﻿using FrostWire.Core.Protocol.Models;
-using Un4seen.Bass;
-using Un4seen.Bass.AddOn.Tags;
-
-namespace FrostWire.Source;
-
-public static class MetadataExtractor
-{
-    public static TrackMetadata Extract(string filePath)
-    {
-        var metadata = new TrackMetadata
-        {
-            Title = Path.GetFileNameWithoutExtension(filePath),
-            Artist = "Unknown",
-            Album = "",
-            Duration = 0
-        };
-
-        try
-        {
-            int stream = Bass.BASS_StreamCreateFile(filePath, 0, 0, BASSFlag.BASS_STREAM_DECODE);
-            if (stream != 0)
-            {
-                // Длительность
-                long length = Bass.BASS_ChannelGetLength(stream);
-                double seconds = Bass.BASS_ChannelBytes2Seconds(stream, length);
-                metadata.Duration = Math.Round(seconds, 1);
-
-                // ID3v2 теги через TAG_INFO
-                var tagInfo = new TAG_INFO();
-                tagInfo = BassTags.BASS_TAG_GetFromFile(stream, tagInfo) ? tagInfo : null;
-
-                if (tagInfo != null)
-                {
-                    if (!string.IsNullOrEmpty(tagInfo.title))
-                        metadata.Title = tagInfo.title;
-                    if (!string.IsNullOrEmpty(tagInfo.artist))
-                        metadata.Artist = tagInfo.artist;
-                    if (!string.IsNullOrEmpty(tagInfo.album))
-                        metadata.Album = tagInfo.album;
-                }
-
-                Bass.BASS_StreamFree(stream);
-            }
-        }
-        catch
-        {
-            // fallback to filename
-        }
-
-        return metadata;
-    }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Source\PlaylistManager.cs
-----------------------------------------
-﻿namespace FrostWire.Source;
-
-public class PlaylistManager
-{
-    private readonly string _playlistPath;
-    private readonly bool _shuffle;
-    private List<string> _tracks = new();
-    private int _currentIndex;
-    private readonly Random _rng = new();
-
-    public PlaylistManager(string playlistPath, bool shuffle)
-    {
-        _playlistPath = playlistPath;
-        _shuffle = shuffle;
-        Load();
-    }
-
-    private void Load()
-    {
-        if (!File.Exists(_playlistPath))
-        {
-            Console.WriteLine($"[WARN] Playlist not found: {_playlistPath}");
-            File.WriteAllText(_playlistPath, "# Add file paths here, one per line\n");
-            return;
-        }
-
-        _tracks = File.ReadAllLines(_playlistPath)
-            .Select(line => line.Trim())
-            .Where(line => !string.IsNullOrEmpty(line) && !line.StartsWith("#"))
-            .ToList();
-
-        if (_tracks.Count == 0)
-        {
-            Console.WriteLine("[WARN] Playlist is empty");
-            return;
-        }
-
-        // Проверяем существование файлов
-        var missing = _tracks.Where(t => !File.Exists(t)).ToList();
-        foreach (var m in missing)
-            Console.WriteLine($"[WARN] File not found: {m}");
-
-        _tracks = _tracks.Where(File.Exists).ToList();
-
-        if (_shuffle)
-            Shuffle();
-
-        Console.WriteLine($"Playlist loaded: {_tracks.Count} tracks");
-    }
-
-    public string? GetNext()
-    {
-        if (_tracks.Count == 0)
-            return null;
-
-        if (_currentIndex >= _tracks.Count)
-        {
-            _currentIndex = 0;
-            if (_shuffle)
-                Shuffle();
-        }
-
-        return _tracks[_currentIndex++];
-    }
-
-    public void Reset()
-    {
-        _currentIndex = 0;
-        if (_shuffle)
-            Shuffle();
-    }
-
-    private void Shuffle()
-    {
-        for (int i = _tracks.Count - 1; i > 0; i--)
-        {
-            int j = _rng.Next(i + 1);
-            (_tracks[i], _tracks[j]) = (_tracks[j], _tracks[i]);
-        }
-    }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Source\Program.cs
-----------------------------------------
-﻿using FrostWire.Core.Configuration;
-using FrostWire.Source;
-
-var configPath = args.Length > 0 ? args[0] : "appsettings.json";
-var config = ConfigLoader.Load(configPath);
-
-Console.WriteLine($"FrostWire Source starting...");
-Console.WriteLine($"Server: {config.Source.ServerAddress}:{config.Source.ServerPort}");
-Console.WriteLine($"Playlist: {config.Source.PlaylistPath}");
-
-using var cts = new CancellationTokenSource();
-var engine = new SourceEngine(config);
-
-Console.CancelKeyPress += (_, e) =>
-{
-    e.Cancel = true;
-    Console.WriteLine("Stopping...");
-    cts.Cancel();
-};
-
-try
-{
-    await engine.RunAsync(cts.Token);
-}
-catch (OperationCanceledException) { }
-
-Console.WriteLine("Source stopped.");
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Source\SourceEngine.cs
-----------------------------------------
-﻿using System.Net;
-using System.Net.Sockets;
-using Concentus;
-using Concentus.Enums;
-using Concentus.Structs;
-using FrostWire.Core.Configuration;
-using FrostWire.Core.Protocol;
-using FrostWire.Core.Protocol.Models;
-using FrostWire.Core.Security;
-using Un4seen.Bass;
-
-namespace FrostWire.Source;
-
-public class SourceEngine
-{
-    private readonly AppConfig _config;
-    private readonly UdpClient _udp;
-    private readonly byte[] _passwordHash;
-    private readonly PlaylistManager _playlist;
-    private readonly IPEndPoint _serverEndpoint;
-
-    private uint _sequence;
-    private DateTime _lastStatusReceived = DateTime.MinValue;
-
-    private IOpusEncoder _opusEncoder = null!;
-    private bool _metadataSent;
-    private TrackMetadata? _currentMetadata;
-
-    public SourceEngine(AppConfig config)
-    {
-        _config = config;
-        _udp = new UdpClient(0);
-        _passwordHash = PasswordHasher.ComputeHash(config.Source.Password);
-        _playlist = new PlaylistManager(config.Source.PlaylistPath, config.Source.Shuffle);
-        _serverEndpoint = new IPEndPoint(IPAddress.Parse(config.Source.ServerAddress), config.Source.ServerPort);
-        Console.WriteLine($"[DEBUG] Source local endpoint: {_udp.Client.LocalEndPoint}");
-    }
-
-    public async Task RunAsync(CancellationToken ct)
-    {
-        if (!InitBass())
-        {
-            Console.WriteLine("[FATAL] Failed to initialize BASS");
-            return;
-        }
-
-        Console.WriteLine("BASS initialized");
-
-        using var statusCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _ = Task.Run(() => StatusListenerLoop(statusCts.Token), ct);
-
-        try
-        {
-            while (!ct.IsCancellationRequested)
-            {
-                var track = _playlist.GetNext();
-                if (track == null)
-                {
-                    Console.WriteLine("[WARN] Playlist empty, waiting...");
-                    await Task.Delay(5000, ct);
-                    _playlist.Reset();
-                    continue;
-                }
-
-                await PlayTrackAsync(track, ct);
-            }
-        }
-        finally
-        {
-            statusCts.Cancel();
-            Bass.BASS_Free();
-            _udp.Close();
-        }
-    }
-
-    private Task PlayTrackAsync(string filePath, CancellationToken ct)
-    {
-        return Task.Run(() => PlayTrack(filePath, ct), ct);
-    }
-
-    private void PlayTrack(string filePath, CancellationToken ct)
-    {
-        Console.WriteLine($"Loading: {Path.GetFileName(filePath)}");
-
-        _currentMetadata = MetadataExtractor.Extract(filePath);
-        Console.WriteLine($"[NOW PLAYING] {_currentMetadata.Artist} - {_currentMetadata.Title} [{_currentMetadata.Duration:F0}s]");
-
-        int stream = Bass.BASS_StreamCreateFile(filePath, 0, 0, BASSFlag.BASS_STREAM_DECODE | BASSFlag.BASS_SAMPLE_FLOAT);
-        if (stream == 0)
-        {
-            Console.WriteLine($"[ERROR] Cannot open file: {filePath} — {Bass.BASS_ErrorGetCode()}");
-            return;
-        }
-
-        _metadataSent = false;
-
-        int frameSamples = _config.Opus.SampleRate * _config.Opus.FrameSize / 1000;
-        int channels = _config.Opus.Channels;
-        int totalFrameSamples = frameSamples * channels; // общее количество сэмплов с учётом каналов
-        int frameSizeBytes = totalFrameSamples * 4;
-        int frameDurationMs = _config.Opus.FrameSize;
-
-        float[] pcmFloat = new float[totalFrameSamples];
-        short[] pcmShort = new short[totalFrameSamples];
-        byte[] opusBuf = new byte[65536];
-
-        long totalSamples = Bass.BASS_ChannelGetLength(stream);
-        double totalSeconds = Bass.BASS_ChannelBytes2Seconds(stream, totalSamples);
-        Console.WriteLine($"Duration: {totalSeconds:F1}s");
-
-        var nextFrameTime = DateTime.UtcNow;
-
-        try
-        {
-            while (!ct.IsCancellationRequested)
-            {
-                long pos = Bass.BASS_ChannelGetPosition(stream);
-                double currentSec = Bass.BASS_ChannelBytes2Seconds(stream, pos);
-
-                if (currentSec >= totalSeconds)
-                    break;
-
-                int read = Bass.BASS_ChannelGetData(stream, pcmFloat, frameSizeBytes);
-                if (read <= 0)
-                    break;
-
-                int samplesRead = read / 4;
-
-                for (int i = 0; i < samplesRead; i++)
-                {
-                    float s = pcmFloat[i];
-                    if (s > 1f) s = 1f;
-                    if (s < -1f) s = -1f;
-                    pcmShort[i] = (short)(s * 32767f);
-                }
-
-                for (int i = samplesRead; i < pcmShort.Length; i++)
-                    pcmShort[i] = 0;
-
-                int encoded = _opusEncoder.Encode(
-                    new ReadOnlySpan<short>(pcmShort, 0, totalFrameSamples),
-                    frameSamples,
-                    new Span<byte>(opusBuf),
-                    opusBuf.Length);
-
-                if (encoded > 0)
-                {
-                    byte[] frame = new byte[encoded];
-                    Array.Copy(opusBuf, frame, encoded);
-                    SendAudioPacket(frame);
-                }
-
-                // Точный тайминг
-                nextFrameTime = nextFrameTime.AddMilliseconds(frameDurationMs);
-                var delay = (int)(nextFrameTime - DateTime.UtcNow).TotalMilliseconds;
-                if (delay > 0)
-                    Thread.Sleep(delay);
-                else if (delay < -frameDurationMs)
-                    nextFrameTime = DateTime.UtcNow; // сброс при сильном отставании
-            }
-        }
-        finally
-        {
-            Bass.BASS_StreamFree(stream);
-        }
-
-        Console.WriteLine($"Track finished: {_currentMetadata.Title}");
-    }
-
-    private void SendAudioPacket(byte[] opusFrame)
-    {
-        var packet = new AudioPacket
-        {
-            PasswordMD5 = _passwordHash,
-            Sequence = _sequence++,
-            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            Metadata = _metadataSent ? null : _currentMetadata,
-            OpusFrame = opusFrame
-        };
-
-        _metadataSent = true;
-
-        byte[] data = PacketWriter.WriteAudioFromSource(packet);
-
-        try
-        {
-            int sent = _udp.Send(data, data.Length, _serverEndpoint);
-            if (_sequence % 100 == 0)
-                Console.WriteLine($"[DEBUG] Sent seq={packet.Sequence}, frame={opusFrame.Length} bytes");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[ERROR] Send failed: {ex.Message}");
-        }
-    }
-
-    private async Task StatusListenerLoop(CancellationToken ct)
-    {
-        try
-        {
-            while (!ct.IsCancellationRequested)
-            {
-                try
-                {
-                    var result = await _udp.ReceiveAsync(ct);
-
-                    if (result.Buffer.Length > 0 && PacketReader.GetPacketType(result.Buffer) == PacketTypes.SourceStatus)
-                    {
-                        var status = PacketReader.ReadSourceStatus(result.Buffer);
-                        _lastStatusReceived = DateTime.UtcNow;
-                        Console.WriteLine($"[STATUS] Server OK | Listeners: {status.ClientsCount}");
-                    }
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (SocketException)
-                {
-                    await Task.Delay(1000, ct);
-                }
-
-                var since = (DateTime.UtcNow - _lastStatusReceived).TotalSeconds;
-                if (_lastStatusReceived != DateTime.MinValue && since > 30)
-                {
-                    Console.WriteLine($"[WARN] No status from server for {since:F0}s");
-                }
-            }
-        }
-        catch (OperationCanceledException) { }
-    }
-
-    private bool InitBass()
-    {
-        BassNet.Registration("email@example.com", "key");
-
-        if (!Bass.BASS_Init(-1, _config.Opus.SampleRate, BASSInit.BASS_DEVICE_DEFAULT, IntPtr.Zero))
-        {
-            Console.WriteLine($"BASS_Init error: {Bass.BASS_ErrorGetCode()}");
-            return false;
-        }
-
-        _opusEncoder = OpusCodecFactory.CreateEncoder(
-            _config.Opus.SampleRate,
-            _config.Opus.Channels,
-            OpusApplication.OPUS_APPLICATION_AUDIO);
-
-        _opusEncoder.Bitrate = _config.Opus.Bitrate;
-        _opusEncoder.Complexity = _config.Opus.Complexity;
-        _opusEncoder.UseVBR = true;
-
-        Console.WriteLine($"Concentus Opus encoder: {_config.Opus.Bitrate / 1000}kbps, {_config.Opus.FrameSize}ms, complexity {_config.Opus.Complexity}");
-
-        return true;
-    }
-}
 ----------------------------------------
 

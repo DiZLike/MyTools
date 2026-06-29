@@ -1,7 +1,7 @@
 ﻿using System.Security.Cryptography;
 using System.Text;
 
-namespace FrostWire.Core.Security;
+namespace FuzzCast.Core.Security;
 
 public static class PasswordHasher
 {

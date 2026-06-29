@@ -1,4 +1,4 @@
-﻿namespace FrostWire.Core.Configuration;
+﻿namespace FuzzCast.Core.Configuration;
 
 public class AppConfig
 {
@@ -11,6 +11,7 @@ public class AppConfig
 public class ServerConfig
 {
     public int ListenPort { get; set; } = 5000;
+    public int ListenPortFallback { get; set; } = 5001;
     public string Password { get; set; } = string.Empty;
     public int SourceStatusIntervalMs { get; set; } = 3000;
     public int SourceTimeoutMs { get; set; } = 5000;
@@ -31,7 +32,11 @@ public class PlayerConfig
 {
     public string ServerAddress { get; set; } = "127.0.0.1";
     public int ServerPort { get; set; } = 5000;
+    public int ServerPortFallback { get; set; } = 5001;
     public int KeepAliveIntervalMs { get; set; } = 3000;
+    public int ToleranceSwitchToFallback { get; set; } = 10;
+    public int ToleranceSwitchToPrimary { get; set; } = 3;
+    public int QualityCheckIntervalMs { get; set; } = 2000;
 }
 
 public class OpusConfig
@@ -41,4 +46,8 @@ public class OpusConfig
     public int Bitrate { get; set; } = 128000;
     public int FrameSize { get; set; } = 20;
     public int Complexity { get; set; } = 10;
+    public int PacketLossPercent { get; set; } = 15;
+    public int FallbackBitrate { get; set; } = 64000;
+    public int FallbackChannels { get; set; } = 1;
+    public int FallbackPacketLossPercent { get; set; } = 15;
 }

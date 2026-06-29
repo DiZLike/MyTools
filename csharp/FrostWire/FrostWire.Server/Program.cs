@@ -1,10 +1,10 @@
-﻿using FrostWire.Core.Configuration;
-using FrostWire.Server;
+﻿using FuzzCast.Core.Configuration;
+using FuzzCast.Server;
 
 var configPath = args.Length > 0 ? args[0] : "appsettings.json";
 var config = ConfigLoader.Load(configPath);
 
-Console.WriteLine($"FrostWire Server starting on port {config.Server.ListenPort}...");
+Console.WriteLine($"FuzzCast Server starting on port {config.Server.ListenPort}...");
 
 using var cts = new CancellationTokenSource();
 var engine = new ServerEngine(config);

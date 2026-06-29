@@ -1,4 +1,4 @@
-﻿namespace FrostWire.Source;
+﻿namespace FuzzCast.Source;
 
 public class PlaylistManager
 {

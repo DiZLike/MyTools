@@ -1,15 +1,13 @@
 ﻿using System.Net;
 using System.Net.Sockets;
-using Concentus;
-using Concentus.Enums;
-using Concentus.Structs;
-using FrostWire.Core.Configuration;
-using FrostWire.Core.Protocol;
-using FrostWire.Core.Protocol.Models;
-using FrostWire.Core.Security;
+using FuzzCast.Core.Configuration;
+using FuzzCast.Core.Native;
+using FuzzCast.Core.Protocol;
+using FuzzCast.Core.Protocol.Models;
+using FuzzCast.Core.Security;
 using Un4seen.Bass;
 
-namespace FrostWire.Source;
+namespace FuzzCast.Source;
 
 public class SourceEngine : IDisposable
 {
@@ -22,12 +20,11 @@ public class SourceEngine : IDisposable
     private uint _sequence;
     private DateTime _lastStatusReceived = DateTime.MinValue;
 
-    private IOpusEncoder? _opusEncoder;
+    private OpusEncoder? _opusEncoder;
     private bool _metadataSent;
     private TrackMetadata? _currentMetadata;
     private bool _disposed;
 
-    // Для graceful shutdown
     private CancellationTokenSource? _playbackCts;
     private Task? _currentPlaybackTask;
 
@@ -67,7 +64,6 @@ public class SourceEngine : IDisposable
                     continue;
                 }
 
-                // Создаём отдельный CancellationToken для текущего трека
                 using (_playbackCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {
                     try
@@ -85,11 +81,9 @@ public class SourceEngine : IDisposable
         }
         finally
         {
-            // Отменяем статус-листенер
             statusCts.Cancel();
             try { await statusTask; } catch (OperationCanceledException) { }
 
-            // Дожидаемся завершения текущего трека если ещё играет
             if (_currentPlaybackTask != null)
             {
                 try
@@ -125,11 +119,12 @@ public class SourceEngine : IDisposable
         {
             _metadataSent = false;
 
-            int frameSamples = _config.Opus.SampleRate * _config.Opus.FrameSize / 1000;
-            int channels = _config.Opus.Channels;
-            int totalFrameSamples = frameSamples * channels;
-            int frameSizeBytes = totalFrameSamples * 4;
             int frameDurationMs = _config.Opus.FrameSize;
+            int sampleRate = _config.Opus.SampleRate;
+            int channels = _config.Opus.Channels;
+            int frameSamplesPerChannel = sampleRate * frameDurationMs / 1000;
+            int totalFrameSamples = frameSamplesPerChannel * channels;
+            int frameSizeBytes = totalFrameSamples * 4;
 
             float[] pcmFloat = new float[totalFrameSamples];
             short[] pcmShort = new short[totalFrameSamples];
@@ -168,12 +163,7 @@ public class SourceEngine : IDisposable
 
                 if (_opusEncoder != null)
                 {
-                    // Используем современный Span-based API
-                    int encoded = _opusEncoder.Encode(
-                        new ReadOnlySpan<short>(pcmShort, 0, totalFrameSamples),
-                        frameSamples,
-                        new Span<byte>(opusBuf),
-                        opusBuf.Length);
+                    int encoded = _opusEncoder.Encode(pcmShort, opusBuf);
 
                     if (encoded > 0)
                     {
@@ -183,32 +173,24 @@ public class SourceEngine : IDisposable
                     }
                 }
 
-                // Точный тайминг с проверкой на отмену
                 nextFrameTime = nextFrameTime.AddMilliseconds(frameDurationMs);
                 var delay = (int)(nextFrameTime - DateTime.UtcNow).TotalMilliseconds;
 
                 if (delay > 0)
                 {
-                    // Используем Task.Delay с поддержкой CancellationToken
-                    try
-                    {
-                        Task.Delay(Math.Min(delay, 100), ct).Wait(ct);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
+                    try { Task.Delay(delay, ct).Wait(ct); }
+                    catch (OperationCanceledException) { break; }
                 }
-                else if (delay < -frameDurationMs)
+                else if (delay < -frameDurationMs * 2)
                 {
-                    nextFrameTime = DateTime.UtcNow; // сброс при сильном отставании
+                    nextFrameTime = DateTime.UtcNow;
                 }
             }
         }
         finally
         {
             Bass.BASS_StreamFree(stream);
-            Console.WriteLine($"Track finished: {_currentMetadata.Title}");
+            Console.WriteLine($"Track finished: {_currentMetadata?.Title ?? "unknown"}");
         }
     }
 
@@ -229,8 +211,8 @@ public class SourceEngine : IDisposable
 
         try
         {
-            int sent = _udp.Send(data, data.Length, _serverEndpoint);
-            if (_sequence % 100 == 0)
+            _udp.Send(data, data.Length, _serverEndpoint);
+            if (_sequence < 10 || _sequence % 100 == 0)
                 Console.WriteLine($"[DEBUG] Sent seq={packet.Sequence}, frame={opusFrame.Length} bytes");
         }
         catch (Exception ex)
@@ -256,20 +238,12 @@ public class SourceEngine : IDisposable
                         Console.WriteLine($"[STATUS] Server OK | Listeners: {status.ClientsCount}");
                     }
                 }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (SocketException)
-                {
-                    await Task.Delay(1000, ct);
-                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+                catch (SocketException) { await Task.Delay(1000, ct); }
 
                 var since = (DateTime.UtcNow - _lastStatusReceived).TotalSeconds;
                 if (_lastStatusReceived != DateTime.MinValue && since > 30)
-                {
                     Console.WriteLine($"[WARN] No status from server for {since:F0}s");
-                }
             }
         }
         catch (OperationCanceledException) { }
@@ -285,23 +259,25 @@ public class SourceEngine : IDisposable
             return false;
         }
 
-        // Используем фабричный метод вместо устаревшего конструктора
-        _opusEncoder = OpusCodecFactory.CreateEncoder(
+        Console.WriteLine($"[Opus] Version: {OpusNative.opus_get_version_string()}");
+
+        _opusEncoder = new OpusEncoder(
             _config.Opus.SampleRate,
             _config.Opus.Channels,
-            OpusApplication.OPUS_APPLICATION_AUDIO);
+            OpusApplication.Audio,
+            _config.Opus.FrameSize)
+        {
+            Bitrate = _config.Opus.Bitrate,
+            Complexity = _config.Opus.Complexity,
+            Vbr = true,
+            InbandFec = _config.Opus.PacketLossPercent > 0,
+            PacketLossPercent = _config.Opus.PacketLossPercent,
+            Dtx = false,
+            SignalType = OpusSignal.Music,
+            MaxBandwidth = OpusBandwidth.Fullband
+        };
 
-        _opusEncoder.Bitrate = _config.Opus.Bitrate;
-        _opusEncoder.Complexity = _config.Opus.Complexity;
-        _opusEncoder.UseVBR = true;
-        _opusEncoder.PacketLossPercent = 20;
-        _opusEncoder.UseInbandFEC = true;
-        _opusEncoder.UseDTX = true;
-        _opusEncoder.SignalType = OpusSignal.OPUS_SIGNAL_MUSIC;
-        _opusEncoder.Application = OpusApplication.OPUS_APPLICATION_AUDIO;
-        _opusEncoder.MaxBandwidth = OpusBandwidth.OPUS_BANDWIDTH_FULLBAND;
-
-        Console.WriteLine($"Concentus Opus encoder: {_config.Opus.Bitrate / 1000}kbps, {_config.Opus.FrameSize}ms, complexity {_config.Opus.Complexity}");
+        Console.WriteLine($"Opus encoder: {_config.Opus.Bitrate / 1000}kbps, {_config.Opus.Channels}ch, {_config.Opus.FrameSize}ms");
 
         return true;
     }
@@ -311,10 +287,8 @@ public class SourceEngine : IDisposable
         if (!_disposed)
         {
             _disposed = true;
-
             _playbackCts?.Cancel();
             _playbackCts?.Dispose();
-
             _opusEncoder?.Dispose();
             _udp?.Dispose();
             Bass.BASS_Free();

@@ -1,4 +1,4 @@
-﻿namespace FrostWire.Core.Protocol;
+﻿namespace FuzzCast.Core.Protocol;
 
 public static class PacketTypes
 {

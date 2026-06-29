@@ -9,7 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\FrostWire.Core\FrostWire.Core.csproj" />
+    <ProjectReference Include="..\FrostWire.Core\FuzzCast.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

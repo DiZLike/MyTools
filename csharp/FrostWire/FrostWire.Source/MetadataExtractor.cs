@@ -1,8 +1,8 @@
-﻿using FrostWire.Core.Protocol.Models;
+﻿using FuzzCast.Core.Protocol.Models;
 using Un4seen.Bass;
 using Un4seen.Bass.AddOn.Tags;
 
-namespace FrostWire.Source;
+namespace FuzzCast.Source;
 
 public static class MetadataExtractor
 {

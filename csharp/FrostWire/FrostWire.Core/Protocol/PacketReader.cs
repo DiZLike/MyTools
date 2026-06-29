@@ -1,7 +1,7 @@
 ﻿using System.Text;
-using FrostWire.Core.Protocol.Models;
+using FuzzCast.Core.Protocol.Models;
 
-namespace FrostWire.Core.Protocol;
+namespace FuzzCast.Core.Protocol;
 
 public static class PacketReader
 {

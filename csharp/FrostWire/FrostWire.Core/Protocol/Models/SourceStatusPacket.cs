@@ -1,4 +1,4 @@
-﻿namespace FrostWire.Core.Protocol.Models;
+﻿namespace FuzzCast.Core.Protocol.Models;
 
 public class SourceStatusPacket
 {

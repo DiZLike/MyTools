@@ -1,6 +1,6 @@
 ﻿using System.Text.Json;
 
-namespace FrostWire.Core.Configuration;
+namespace FuzzCast.Core.Configuration;
 
 public static class ConfigLoader
 {
