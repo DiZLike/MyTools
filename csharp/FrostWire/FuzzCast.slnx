@@ -13,4 +13,5 @@
   <Project Path="FrostWire.Source/FuzzCast.Source.csproj" Id="e2a858ea-332f-49ad-9d49-44c7029d59ca">
     <Platform Solution="*|x86" Project="x86" />
   </Project>
+  <Project Path="FuzzCast.ReplayGain/FuzzCast.ReplayGain.csproj" Id="b7bbeffe-4573-4769-bf53-fc418d80fd0d" />
 </Solution>
