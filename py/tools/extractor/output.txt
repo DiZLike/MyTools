@@ -1,272 +1,707 @@
-Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.ReplayGain\Services\ReplayGainAnalyzer.cs
+Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Source\appsettings.json
 ----------------------------------------
-﻿using FuzzCast.ReplayGain.Models;
+﻿{
+  "Source": {
+    "ServerAddress": "rpi.dlike.ru",
+    "ServerPort": 5080,
+    "Password": "admin",
+    "PlaylistPath": "playlist.m3u",
+    "Shuffle": true
+  },
+  "Opus": {
+    "SampleRate": 48000,
+    "Bitrate": 128000,
+    "Channels": 2,
+    "FrameSize": 20,
+    "Complexity": 10,
+    "PacketLossPercent": 15
+  }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Source\MetadataExtractor.cs
+----------------------------------------
+﻿using FuzzCast.Core.Protocol.Models;
 using Un4seen.Bass;
+using Un4seen.Bass.AddOn.Tags;
 
-namespace FuzzCast.ReplayGain.Services;
+namespace FuzzCast.Source;
 
-public class ReplayGainAnalyzer
+public static class MetadataExtractor
 {
-    private readonly double _referenceLevel;
-    private readonly double _preAmp;
-
-    public ReplayGainAnalyzer(double referenceLevel, double preAmp)
+    public static TrackMetadata Extract(string filePath)
     {
-        _referenceLevel = referenceLevel;
-        _preAmp = preAmp;
-    }
-
-    public ReplayGainResult Analyze(string filePath)
-    {
-        // Создаём декодер на исходной частоте
-        int stream = Bass.BASS_StreamCreateFile(filePath, 0, 0,
-            BASSFlag.BASS_STREAM_DECODE | BASSFlag.BASS_SAMPLE_FLOAT);
-
-        if (stream == 0)
+        var metadata = new TrackMetadata
         {
-            return ReplayGainResult.Fail($"Не удалось открыть файл: {Bass.BASS_ErrorGetCode()}");
-        }
+            Title = Path.GetFileNameWithoutExtension(filePath),
+            Artist = "Unknown",
+            Album = "",
+            Duration = 0
+        };
 
         try
         {
-            BASS_CHANNELINFO info = Bass.BASS_ChannelGetInfo(stream);
-            int channels = info.chans;
-            int sampleRate = info.freq;
-
-            // Если частота не 48 kHz — ресемплим
-            int processStream = stream;
-
-            if (sampleRate != 48000)
+            int stream = Bass.BASS_StreamCreateFile(filePath, 0, 0, BASSFlag.BASS_STREAM_DECODE);
+            if (stream != 0)
             {
-                processStream = Bass.BASS_StreamCreate(48000, channels,
-                    BASSFlag.BASS_STREAM_DECODE | BASSFlag.BASS_SAMPLE_FLOAT,
-                    BASSStreamProc.STREAMPROC_PUSH);
+                // Длительность
+                long length = Bass.BASS_ChannelGetLength(stream);
+                double seconds = Bass.BASS_ChannelBytes2Seconds(stream, length);
+                metadata.Duration = Math.Round(seconds, 1);
 
-                // Ресемплим через Bass.BASS_ChannelGetData вручную
-                Bass.BASS_ChannelSetPosition(stream, 0);
+                // ID3v2 теги через TAG_INFO
+                var tagInfo = new TAG_INFO();
+                tagInfo = BassTags.BASS_TAG_GetFromFile(stream, tagInfo) ? tagInfo : null;
 
-                byte[] resampleBuffer = new byte[65536];
-                while (true)
+                if (tagInfo != null)
                 {
-                    int len = Bass.BASS_ChannelGetData(stream, resampleBuffer, resampleBuffer.Length);
-                    if (len <= 0) break;
-                    Bass.BASS_StreamPutData(processStream, resampleBuffer, len);
-                }
-                Bass.BASS_StreamPutData(processStream, IntPtr.Zero, (int)BASSStreamProc.BASS_STREAMPROC_END);
-                Bass.BASS_ChannelSetPosition(processStream, 0);
-            }
-
-            try
-            {
-                var kFilter = new KWeightingFilter();
-
-                const int BUFFER_FRAMES = 16384;
-                int bufferSize = BUFFER_FRAMES * channels;
-                float[] buffer = new float[bufferSize];
-
-                double sumSqL = 0.0;
-                double sumSqR = 0.0;
-                long processedFrames = 0;
-
-                while (true)
-                {
-                    int bytesRead = Bass.BASS_ChannelGetData(processStream, buffer, bufferSize * sizeof(float));
-                    if (bytesRead <= 0) break;
-
-                    int samplesRead = bytesRead / sizeof(float);
-                    int framesRead = samplesRead / channels;
-
-                    for (int i = 0; i < framesRead; i++)
-                    {
-                        int idx = i * channels;
-                        float sampleL = buffer[idx];
-                        float sampleR = channels > 1 ? buffer[idx + 1] : sampleL;
-
-                        double filteredL = kFilter.ProcessLeft(sampleL);
-                        double filteredR = kFilter.ProcessRight(sampleR);
-
-                        sumSqL += filteredL * filteredL;
-                        sumSqR += filteredR * filteredR;
-                    }
-
-                    processedFrames += framesRead;
+                    if (!string.IsNullOrEmpty(tagInfo.title))
+                        metadata.Title = tagInfo.title;
+                    if (!string.IsNullOrEmpty(tagInfo.artist))
+                        metadata.Artist = tagInfo.artist;
+                    if (!string.IsNullOrEmpty(tagInfo.album))
+                        metadata.Album = tagInfo.album;
                 }
 
-                // Пики считаем по оригинальному сигналу
-                Bass.BASS_ChannelSetPosition(stream, 0);
-                double peakL = 0.0;
-                double peakR = 0.0;
-                const int PEAK_BUFFER = 4096;
-                float[] peakBuffer = new float[PEAK_BUFFER * channels];
-
-                while (true)
-                {
-                    int bytesRead = Bass.BASS_ChannelGetData(stream, peakBuffer,
-                        PEAK_BUFFER * channels * sizeof(float));
-                    if (bytesRead <= 0) break;
-
-                    int samplesRead = bytesRead / sizeof(float);
-                    int framesRead = samplesRead / channels;
-
-                    for (int i = 0; i < framesRead; i++)
-                    {
-                        int idx = i * channels;
-                        double absL = Math.Abs(peakBuffer[idx]);
-                        double absR = Math.Abs(channels > 1 ? peakBuffer[idx + 1] : peakBuffer[idx]);
-
-                        if (absL > peakL) peakL = absL;
-                        if (absR > peakR) peakR = absR;
-                    }
-                }
-
-                if (processedFrames == 0)
-                    return ReplayGainResult.Fail("Не удалось прочитать сэмплы");
-
-                double rmsTotal = Math.Sqrt((sumSqL + sumSqR) / (processedFrames * 2.0));
-
-                if (rmsTotal < 1e-10)
-                    return ReplayGainResult.Fail("Сигнал слишком тихий");
-
-                double refRms = Math.Pow(10.0, _referenceLevel / 20.0);
-                double gain = 10.0 * Math.Log10((refRms * refRms) / (rmsTotal * rmsTotal)) + _preAmp;
-                double peak = Math.Max(peakL, peakR);
-
-                return new ReplayGainResult
-                {
-                    Success = true,
-                    RmsLeft = Math.Sqrt(sumSqL / processedFrames),
-                    RmsRight = Math.Sqrt(sumSqR / processedFrames),
-                    PeakLeft = peakL,
-                    PeakRight = peakR,
-                    TrackGain = Math.Round(gain, 2),
-                    TrackPeak = Math.Round(peak, 6)
-                };
-            }
-            finally
-            {
-                if (processStream != stream)
-                    Bass.BASS_StreamFree(processStream);
+                Bass.BASS_StreamFree(stream);
             }
         }
-        finally
+        catch
         {
-            Bass.BASS_StreamFree(stream);
+            // fallback to filename
         }
+
+        return metadata;
     }
 }
 ----------------------------------------
 
 ================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.ReplayGain\Services\TagWriter.cs
+Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Source\PlaylistManager.cs
 ----------------------------------------
-﻿using System.Globalization;
-using FuzzCast.ReplayGain.Models;
-using FuzzCast.ReplayGain.Helpers;
-using TagLib;
+﻿namespace FuzzCast.Source;
 
-namespace FuzzCast.ReplayGain.Services;
-
-public class TagWriter
+public class PlaylistManager : IDisposable
 {
-    private readonly string _commentFormat;
+    private readonly string _playlistPath;
+    private readonly string _statePath;
+    private readonly bool _shuffle;
+    private List<string> _tracks = new();
+    private List<string> _remainingTracks = new();
+    private readonly Random _rng = new();
+    private FileSystemWatcher? _watcher;
+    private DateTime _lastRead = DateTime.MinValue;
+    private readonly TimeSpan _debounceInterval = TimeSpan.FromMilliseconds(500);
 
-    public TagWriter(string commentFormat)
+    public PlaylistManager(string playlistPath, bool shuffle)
     {
-        _commentFormat = commentFormat;
+        _playlistPath = playlistPath;
+        _statePath = Path.ChangeExtension(playlistPath, ".state");
+        _shuffle = shuffle;
+        Load();
+        StartWatching();
     }
 
-    public bool Write(string filePath, ReplayGainResult result)
+    private void Load()
     {
+        if (!File.Exists(_playlistPath))
+        {
+            Console.WriteLine($"[WARN] Playlist not found: {_playlistPath}");
+            File.WriteAllText(_playlistPath, "# Add file paths here, one per line\n");
+            return;
+        }
+
+        var previousTracks = new HashSet<string>(_tracks);
+
+        _tracks = File.ReadAllLines(_playlistPath)
+            .Select(line => line.Trim())
+            .Where(line => !string.IsNullOrEmpty(line) && !line.StartsWith("#"))
+            .ToList();
+
+        if (_tracks.Count == 0)
+        {
+            Console.WriteLine("[WARN] Playlist is empty");
+            ClearState();
+            return;
+        }
+
+        // Проверяем существование файлов
+        var missing = _tracks.Where(t => !File.Exists(t)).ToList();
+        foreach (var m in missing)
+            Console.WriteLine($"[WARN] File not found: {m}");
+
+        _tracks = _tracks.Where(File.Exists).ToList();
+
+        if (_tracks.Count == 0)
+        {
+            Console.WriteLine("[WARN] No valid tracks found");
+            ClearState();
+            return;
+        }
+
+        if (_shuffle)
+        {
+            if (_remainingTracks.Count == 0)
+            {
+                // Первая загрузка
+                LoadState();
+            }
+            else
+            {
+                // Динамическое обновление: ищем новые и удалённые треки
+                var newTracks = _tracks.Where(t => !previousTracks.Contains(t)).ToList();
+                if (newTracks.Count > 0)
+                {
+                    Console.WriteLine($"[INFO] Found {newTracks.Count} new track(s)");
+                    MergeNewTracks(newTracks);
+                    SaveState();
+                }
+
+                var removedTracks = _remainingTracks.Where(t => !_tracks.Contains(t)).ToList();
+                if (removedTracks.Count > 0)
+                {
+                    Console.WriteLine($"[INFO] {removedTracks.Count} track(s) no longer in playlist");
+                    foreach (var track in removedTracks)
+                        _remainingTracks.Remove(track);
+                    SaveState();
+                }
+            }
+        }
+        else
+        {
+            _remainingTracks = new List<string>(_tracks);
+        }
+
+        Console.WriteLine($"Playlist loaded: {_tracks.Count} tracks, {_remainingTracks.Count} remaining");
+    }
+
+    private void LoadState()
+    {
+        if (File.Exists(_statePath))
+        {
+            var stateTracks = File.ReadAllLines(_statePath)
+                .Select(line => line.Trim())
+                .Where(line => !string.IsNullOrEmpty(line))
+                .ToList();
+
+            _remainingTracks = stateTracks.Where(t => _tracks.Contains(t)).ToList();
+
+            if (_remainingTracks.Count == 0)
+            {
+                Console.WriteLine("[INFO] All tracks played, reshuffling...");
+                _remainingTracks = new List<string>(_tracks);
+                ShuffleList(_remainingTracks);
+                SaveState();
+            }
+            else
+            {
+                var newTracks = _tracks.Where(t => !stateTracks.Contains(t)).ToList();
+                if (newTracks.Count > 0)
+                {
+                    MergeNewTracks(newTracks);
+                    SaveState();
+                }
+            }
+        }
+        else
+        {
+            _remainingTracks = new List<string>(_tracks);
+            ShuffleList(_remainingTracks);
+            SaveState();
+        }
+    }
+
+    private void MergeNewTracks(List<string> newTracks)
+    {
+        if (newTracks.Count == 0)
+            return;
+
+        // Перемешиваем, чтобы треки одного альбома/артиста не шли группой
+        ShuffleList(newTracks);
+
+        // Равномерный шаг: распределяем N новых треков по M существующим слотам
+        double step = (double)_remainingTracks.Count / newTracks.Count;
+
+        for (int i = 0; i < newTracks.Count; i++)
+        {
+            int insertIndex = (int)Math.Round(i * step);
+            insertIndex = Math.Clamp(insertIndex, 0, _remainingTracks.Count);
+            _remainingTracks.Insert(insertIndex, newTracks[i]);
+        }
+    }
+
+    public string? GetNext()
+    {
+        if (_remainingTracks.Count == 0)
+            return null;
+
+        var track = _remainingTracks[0];
+        _remainingTracks.RemoveAt(0);
+
+        if (_shuffle)
+        {
+            if (_remainingTracks.Count == 0)
+            {
+                Console.WriteLine("[INFO] All tracks played, reshuffling...");
+                _remainingTracks = new List<string>(_tracks);
+                ShuffleList(_remainingTracks);
+            }
+
+            SaveState();
+        }
+
+        return track;
+    }
+
+    public void Reset()
+    {
+        if (_shuffle)
+        {
+            _remainingTracks = new List<string>(_tracks);
+            ShuffleList(_remainingTracks);
+            SaveState();
+        }
+        else
+        {
+            _remainingTracks = new List<string>(_tracks);
+            ClearState();
+        }
+    }
+
+    private void SaveState()
+    {
+        File.WriteAllLines(_statePath, _remainingTracks);
+    }
+
+    private void ClearState()
+    {
+        if (File.Exists(_statePath))
+            File.Delete(_statePath);
+    }
+
+    private void ShuffleList(List<string> list)
+    {
+        for (int i = list.Count - 1; i > 0; i--)
+        {
+            int j = _rng.Next(i + 1);
+            (list[i], list[j]) = (list[j], list[i]);
+        }
+    }
+
+    private void StartWatching()
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(_playlistPath));
+        var filename = Path.GetFileName(_playlistPath);
+
+        if (directory == null || filename == null)
+            return;
+
+        _watcher = new FileSystemWatcher(directory, filename)
+        {
+            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size,
+            EnableRaisingEvents = true
+        };
+
+        _watcher.Changed += OnPlaylistChanged;
+    }
+
+    private void OnPlaylistChanged(object sender, FileSystemEventArgs e)
+    {
+        var now = DateTime.Now;
+        if (now - _lastRead < _debounceInterval)
+            return;
+        _lastRead = now;
+
+        Console.WriteLine("[INFO] Playlist changed, reloading...");
+        Thread.Sleep(100);
+        Load();
+    }
+
+    public void Dispose()
+    {
+        _watcher?.Dispose();
+    }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Source\Program.cs
+----------------------------------------
+﻿using FuzzCast.Core.Configuration;
+using FuzzCast.Core.Native;
+using FuzzCast.Source;
+using System.Reflection;
+
+var configPath = args.Length > 0 ? args[0] : "appsettings.json";
+var config = ConfigLoader.Load(configPath);
+
+var version = Assembly.GetExecutingAssembly().GetName().Version;
+Console.WriteLine($"FuzzCast Source [{version}]");
+
+Console.WriteLine($"FuzzCast Source starting...");
+Console.WriteLine($"Server: {config.Source.ServerAddress}:{config.Source.ServerPort}");
+Console.WriteLine($"Playlist: {config.Source.PlaylistPath}");
+Console.WriteLine($"[Opus] Version: {OpusNative.opus_get_version_string()}");
+
+using var cts = new CancellationTokenSource();
+var engine = new SourceEngine(config);
+
+Console.CancelKeyPress += (_, e) =>
+{
+    e.Cancel = true;
+    Console.WriteLine("Stopping...");
+    cts.Cancel();
+};
+
+try
+{
+    await engine.RunAsync(cts.Token);
+}
+catch (OperationCanceledException) { }
+
+Console.WriteLine("Source stopped.");
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Source\SourceEngine.cs
+----------------------------------------
+﻿using System.Net;
+using System.Net.Sockets;
+using FuzzCast.Core.Configuration;
+using FuzzCast.Core.Native;
+using FuzzCast.Core.Protocol;
+using FuzzCast.Core.Protocol.Models;
+using FuzzCast.Core.Security;
+using Un4seen.Bass;
+
+namespace FuzzCast.Source;
+
+public class SourceEngine : IDisposable
+{
+    private readonly AppConfig _config;
+    private readonly UdpClient _udp;
+    private readonly byte[] _passwordHash;
+    private readonly PlaylistManager _playlist;
+    private readonly IPEndPoint _serverEndpoint;
+
+    private uint _sequence;
+    private DateTime _lastStatusReceived = DateTime.MinValue;
+
+    private OpusEncoder? _opusEncoder;
+    private bool _metadataSent;
+    private TrackMetadata? _currentMetadata;
+    private bool _disposed;
+
+    private CancellationTokenSource? _playbackCts;
+    private Task? _currentPlaybackTask;
+
+    public SourceEngine(AppConfig config)
+    {
+        _config = config;
+        _udp = new UdpClient(0);
+        _passwordHash = PasswordHasher.ComputeHash(config.Source.Password);
+        _playlist = new PlaylistManager(config.Source.PlaylistPath, config.Source.Shuffle);
+
+        // Разрешаем доменное имя или IP-адрес
+        IPAddress serverIp = ResolveAddress(config.Source.ServerAddress);
+        _serverEndpoint = new IPEndPoint(serverIp, config.Source.ServerPort);
+
+        Console.WriteLine($"[DEBUG] Source local endpoint: {_udp.Client.LocalEndPoint}");
+        Console.WriteLine($"[DEBUG] Server endpoint: {_serverEndpoint}");
+    }
+
+    private static IPAddress ResolveAddress(string address)
+    {
+        // Сначала пробуем распарсить как IP-адрес
+        if (IPAddress.TryParse(address, out var ip))
+        {
+            Console.WriteLine($"[DEBUG] Using IP address directly: {ip}");
+            return ip;
+        }
+
+        // Если не получилось - разрешаем как доменное имя
         try
         {
-            using var file = TagLib.File.Create(filePath);
+            Console.WriteLine($"[DEBUG] Resolving hostname: {address}");
+            var hostEntry = Dns.GetHostEntry(address);
 
-            string rgComment = _commentFormat
-                .Replace("{gain:0.00}", result.TrackGain.ToString("0.00", CultureInfo.InvariantCulture))
-                .Replace("{peak:0.000000}", result.TrackPeak.ToString("0.000000", CultureInfo.InvariantCulture));
+            // Предпочитаем IPv4 адрес, если есть
+            var ipv4 = hostEntry.AddressList
+                .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork);
 
-            // Получаем все типы тегов, присутствующие в файле
-            TagTypes tagTypes = file.TagTypes;
-
-            // Если тегов нет — создаём дефолтный для формата
-            if (tagTypes == TagTypes.None)
+            if (ipv4 != null)
             {
-                tagTypes = GetDefaultTagType(filePath);
-                if (tagTypes != TagTypes.None)
-                {
-                    file.GetTag(tagTypes, true); // Принудительно создаём
-                }
+                Console.WriteLine($"[DEBUG] Resolved to: {ipv4}");
+                return ipv4;
             }
 
-            // Проходим по каждому типу тегов и записываем RG
-            foreach (TagTypes tagType in Enum.GetValues<TagTypes>())
-            {
-                if (tagType == TagTypes.None || !tagTypes.HasFlag(tagType))
-                    continue;
-
-                try
-                {
-                    var tag = file.GetTag(tagType);
-                    if (tag != null)
-                    {
-                        string? oldComment = tag.Comment;
-
-                        if (string.IsNullOrEmpty(oldComment) || !oldComment.Contains("REPLAYGAIN_TRACK_GAIN"))
-                        {
-                            tag.Comment = string.IsNullOrEmpty(oldComment)
-                                ? rgComment
-                                : oldComment + "\n" + rgComment;
-                        }
-                        else
-                        {
-                            var lines = oldComment.Split('\n')
-                                .Where(l => !l.StartsWith("REPLAYGAIN_TRACK_GAIN") && !l.StartsWith("REPLAYGAIN_TRACK_PEAK"))
-                                .ToList();
-
-                            lines.Add(rgComment);
-                            tag.Comment = string.Join("\n", lines);
-                        }
-                    }
-                }
-                catch
-                {
-                    // Пропускаем типы тегов, которые не поддерживаются в этом формате
-                }
-            }
-
-            file.Save();
-            return true;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            Logger.Warn($"{Path.GetFileName(filePath)} -> Нет прав на запись тегов");
-            return false;
+            // Если IPv4 нет, берём первый доступный адрес
+            var firstIp = hostEntry.AddressList.First();
+            Console.WriteLine($"[DEBUG] Resolved to: {firstIp}");
+            return firstIp;
         }
         catch (Exception ex)
         {
-            Logger.Error($"{Path.GetFileName(filePath)} -> Ошибка записи тегов: {ex.Message}");
-            return false;
+            throw new InvalidOperationException($"Failed to resolve address: {address}", ex);
         }
     }
 
-    private static TagTypes GetDefaultTagType(string filePath)
+    public async Task RunAsync(CancellationToken ct)
     {
-        string ext = Path.GetExtension(filePath).ToLowerInvariant();
-
-        return ext switch
+        if (!InitBass())
         {
-            ".mp3" => TagTypes.Id3v2,
-            ".flac" => TagTypes.Xiph,
-            ".ogg" => TagTypes.Xiph,
-            ".opus" => TagTypes.Xiph,
-            ".wav" => TagTypes.RiffInfo,
-            ".wma" => TagTypes.Asf,
-            ".m4a" => TagTypes.Apple,
-            ".aac" => TagTypes.Apple,
-            ".ape" => TagTypes.Ape,
-            ".wv" => TagTypes.Ape,
-            _ => TagTypes.None
+            Console.WriteLine("[FATAL] Failed to initialize BASS");
+            return;
+        }
+
+        Console.WriteLine("BASS initialized");
+
+        using var statusCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var statusTask = Task.Run(() => StatusListenerLoop(statusCts.Token), ct);
+
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                var track = _playlist.GetNext();
+                if (track == null)
+                {
+                    Console.WriteLine("[WARN] Playlist empty, waiting...");
+                    await Task.Delay(5000, ct);
+                    _playlist.Reset();
+                    continue;
+                }
+
+                using (_playbackCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+                {
+                    try
+                    {
+                        _currentPlaybackTask = PlayTrackAsync(track, _playbackCts.Token);
+                        await _currentPlaybackTask;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        Console.WriteLine("[INFO] Playback cancelled");
+                        break;
+                    }
+                }
+            }
+        }
+        finally
+        {
+            statusCts.Cancel();
+            try { await statusTask; } catch (OperationCanceledException) { }
+
+            if (_currentPlaybackTask != null)
+            {
+                try
+                {
+                    _playbackCts?.Cancel();
+                    await Task.WhenAny(_currentPlaybackTask, Task.Delay(2000));
+                }
+                catch { }
+            }
+        }
+    }
+
+    private Task PlayTrackAsync(string filePath, CancellationToken ct)
+    {
+        return Task.Run(() => PlayTrack(filePath, ct), ct);
+    }
+
+    private void PlayTrack(string filePath, CancellationToken ct)
+    {
+        Console.WriteLine($"Loading: {Path.GetFileName(filePath)}");
+
+        _currentMetadata = MetadataExtractor.Extract(filePath);
+        Console.WriteLine($"[NOW PLAYING] {_currentMetadata.Artist} - {_currentMetadata.Title} [{_currentMetadata.Duration:F0}s]");
+
+        int stream = Bass.BASS_StreamCreateFile(filePath, 0, 0, BASSFlag.BASS_STREAM_DECODE | BASSFlag.BASS_SAMPLE_FLOAT);
+        if (stream == 0)
+        {
+            Console.WriteLine($"[ERROR] Cannot open file: {filePath} — {Bass.BASS_ErrorGetCode()}");
+            return;
+        }
+
+        try
+        {
+            _metadataSent = false;
+
+            int frameDurationMs = _config.Opus.FrameSize;
+            int sampleRate = _config.Opus.SampleRate;
+            int channels = _config.Opus.Channels;
+            int frameSamplesPerChannel = sampleRate * frameDurationMs / 1000;
+            int totalFrameSamples = frameSamplesPerChannel * channels;
+            int frameSizeBytes = totalFrameSamples * 4;
+
+            float[] pcmFloat = new float[totalFrameSamples];
+            short[] pcmShort = new short[totalFrameSamples];
+            byte[] opusBuf = new byte[65536];
+
+            long totalSamples = Bass.BASS_ChannelGetLength(stream);
+            double totalSeconds = Bass.BASS_ChannelBytes2Seconds(stream, totalSamples);
+            Console.WriteLine($"Duration: {totalSeconds:F1}s");
+
+            var nextFrameTime = DateTime.UtcNow;
+
+            while (!ct.IsCancellationRequested)
+            {
+                long pos = Bass.BASS_ChannelGetPosition(stream);
+                double currentSec = Bass.BASS_ChannelBytes2Seconds(stream, pos);
+
+                if (currentSec >= totalSeconds)
+                    break;
+
+                int read = Bass.BASS_ChannelGetData(stream, pcmFloat, frameSizeBytes);
+                if (read <= 0)
+                    break;
+
+                int samplesRead = read / 4;
+
+                for (int i = 0; i < samplesRead; i++)
+                {
+                    float s = pcmFloat[i];
+                    if (s > 1f) s = 1f;
+                    if (s < -1f) s = -1f;
+                    pcmShort[i] = (short)(s * 32767f);
+                }
+
+                for (int i = samplesRead; i < pcmShort.Length; i++)
+                    pcmShort[i] = 0;
+
+                if (_opusEncoder != null)
+                {
+                    int encoded = _opusEncoder.Encode(pcmShort, opusBuf);
+
+                    if (encoded > 0)
+                    {
+                        byte[] frame = new byte[encoded];
+                        Array.Copy(opusBuf, frame, encoded);
+                        SendAudioPacket(frame);
+                    }
+                }
+
+                nextFrameTime = nextFrameTime.AddMilliseconds(frameDurationMs);
+                var delay = (int)(nextFrameTime - DateTime.UtcNow).TotalMilliseconds;
+
+                if (delay > 0)
+                {
+                    try { Task.Delay(delay, ct).Wait(ct); }
+                    catch (OperationCanceledException) { break; }
+                }
+                else if (delay < -frameDurationMs * 2)
+                {
+                    nextFrameTime = DateTime.UtcNow;
+                }
+            }
+        }
+        finally
+        {
+            Bass.BASS_StreamFree(stream);
+            Console.WriteLine($"Track finished: {_currentMetadata?.Title ?? "unknown"}");
+        }
+    }
+
+    private void SendAudioPacket(byte[] opusFrame)
+    {
+        var packet = new AudioPacket
+        {
+            PasswordMD5 = _passwordHash,
+            Sequence = _sequence++,
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Metadata = _metadataSent ? null : _currentMetadata,
+            OpusFrame = opusFrame
         };
+
+        _metadataSent = true;
+
+        byte[] data = PacketWriter.WriteAudioFromSource(packet);
+
+        try
+        {
+            _udp.Send(data, data.Length, _serverEndpoint);
+            //if (_sequence < 10 || _sequence % 100 == 0)
+            //    Console.WriteLine($"[DEBUG] Sent seq={packet.Sequence}, frame={opusFrame.Length} bytes");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ERROR] Send failed: {ex.Message}");
+        }
+    }
+
+    private async Task StatusListenerLoop(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    var result = await _udp.ReceiveAsync(ct);
+
+                    if (result.Buffer.Length > 0 && PacketReader.GetPacketType(result.Buffer) == PacketTypes.SourceStatus)
+                    {
+                        var status = PacketReader.ReadSourceStatus(result.Buffer);
+                        _lastStatusReceived = DateTime.UtcNow;
+                        Console.WriteLine($"[STATUS] Server OK | Listeners: {status.ClientsCount}");
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+                catch (SocketException) { await Task.Delay(1000, ct); }
+
+                var since = (DateTime.UtcNow - _lastStatusReceived).TotalSeconds;
+                if (_lastStatusReceived != DateTime.MinValue && since > 30)
+                    Console.WriteLine($"[WARN] No status from server for {since:F0}s");
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private bool InitBass()
+    {
+        BassNet.Registration("email@example.com", "key");
+
+        if (!Bass.BASS_Init(-1, _config.Opus.SampleRate, BASSInit.BASS_DEVICE_DEFAULT, IntPtr.Zero))
+        {
+            Console.WriteLine($"BASS_Init error: {Bass.BASS_ErrorGetCode()}");
+            return false;
+        }
+
+        Console.WriteLine($"[Opus] Version: {OpusNative.opus_get_version_string()}");
+
+        _opusEncoder = new OpusEncoder(
+            _config.Opus.SampleRate,
+            _config.Opus.Channels,
+            OpusApplication.Audio,
+            _config.Opus.FrameSize)
+        {
+            Bitrate = _config.Opus.Bitrate,
+            Complexity = _config.Opus.Complexity,
+            Vbr = true,
+            InbandFec = _config.Opus.PacketLossPercent > 0,
+            PacketLossPercent = _config.Opus.PacketLossPercent,
+            Dtx = false,
+            SignalType = OpusSignal.Music,
+            MaxBandwidth = OpusBandwidth.Fullband
+        };
+
+        Console.WriteLine($"Opus encoder: {_config.Opus.Bitrate / 1000}kbps, {_config.Opus.Channels}ch, {_config.Opus.FrameSize}ms");
+
+        return true;
+    }
+
+    public void Dispose()
+    {
+        if (!_disposed)
+        {
+            _disposed = true;
+            _playbackCts?.Cancel();
+            _playbackCts?.Dispose();
+            _opusEncoder?.Dispose();
+            _udp?.Dispose();
+            Bass.BASS_Free();
+        }
     }
 }
 ----------------------------------------

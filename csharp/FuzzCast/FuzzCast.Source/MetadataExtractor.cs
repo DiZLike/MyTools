@@ -15,7 +15,7 @@ public static class MetadataExtractor
             Album = "",
             Duration = 0
         };
-
+        
         try
         {
             int stream = Bass.BASS_StreamCreateFile(filePath, 0, 0, BASSFlag.BASS_STREAM_DECODE);
