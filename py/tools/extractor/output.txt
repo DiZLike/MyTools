@@ -1,706 +1,626 @@
-Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Source\appsettings.json
+Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Fx\Trinity\Compressors\LookaheadLimiter.cs
 ----------------------------------------
-﻿{
-  "Source": {
-    "ServerAddress": "rpi.dlike.ru",
-    "ServerPort": 5080,
-    "Password": "admin",
-    "PlaylistPath": "playlist.m3u",
-    "Shuffle": true
-  },
-  "Opus": {
-    "SampleRate": 48000,
-    "Bitrate": 128000,
-    "Channels": 2,
-    "FrameSize": 20,
-    "Complexity": 10,
-    "PacketLossPercent": 15
-  }
-}
-----------------------------------------
+﻿using System;
 
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Source\MetadataExtractor.cs
-----------------------------------------
-﻿using FuzzCast.Core.Protocol.Models;
-using Un4seen.Bass;
-using Un4seen.Bass.AddOn.Tags;
-
-namespace FuzzCast.Source;
-
-public static class MetadataExtractor
+namespace FuzzCast.Fx.Trinity.Compressors
 {
-    public static TrackMetadata Extract(string filePath)
+    public class LookaheadLimiter
     {
-        var metadata = new TrackMetadata
-        {
-            Title = Path.GetFileNameWithoutExtension(filePath),
-            Artist = "Unknown",
-            Album = "",
-            Duration = 0
-        };
+        private float _ceiling;
+        private float _ceilingLinear;
+        private float _lookaheadMs;
+        private float _attackMs;
+        private float _releaseMs;
+        private float[] _lookaheadBuffer;
+        private int _lookaheadSamples;
+        private int _lookaheadIndex;
+        private bool _bufferFilled;
+        private float _envelope;
+        private float _attackCoeff;
+        private float _releaseCoeff;
+        private int _sampleRate;
 
-        try
+        public float CurrentGainReduction { get; private set; }
+        public int ClipCount { get; private set; }
+
+        public float Ceiling
         {
-            int stream = Bass.BASS_StreamCreateFile(filePath, 0, 0, BASSFlag.BASS_STREAM_DECODE);
-            if (stream != 0)
+            get => _ceiling;
+            set { _ceiling = Math.Min(value, 0f); _ceilingLinear = AudioMath.DbToLinear(_ceiling); }
+        }
+
+        public float LookaheadMs
+        {
+            get => _lookaheadMs;
+            set { _lookaheadMs = Math.Max(0.1f, value); ReallocateBuffer(); }
+        }
+
+        public float AttackMs
+        {
+            get => _attackMs;
+            set { _attackMs = Math.Max(0.01f, value); RecalculateCoefficients(); }
+        }
+
+        public float ReleaseMs
+        {
+            get => _releaseMs;
+            set { _releaseMs = Math.Max(0.01f, value); RecalculateCoefficients(); }
+        }
+
+        public int SampleRate
+        {
+            get => _sampleRate;
+            set { _sampleRate = value; ReallocateBuffer(); RecalculateCoefficients(); }
+        }
+
+        public LookaheadLimiter(int sampleRate = 44100)
+        {
+            _sampleRate = sampleRate;
+            Ceiling = -0.3f;
+            LookaheadMs = 1f;
+            AttackMs = 0.5f;
+            ReleaseMs = 30f;
+            _envelope = 0f;
+        }
+
+        public float Process(float input)
+        {
+            float delayed = _lookaheadBuffer[_lookaheadIndex];
+            _lookaheadBuffer[_lookaheadIndex] = input;
+            _lookaheadIndex = (_lookaheadIndex + 1) % _lookaheadSamples;
+
+            if (_lookaheadIndex == 0) _bufferFilled = true;
+            if (!_bufferFilled) delayed = input;
+
+            float inputLevel = MathF.Abs(input);
+            bool isAttack = inputLevel > _envelope;
+            float coeff = isAttack ? _attackCoeff : _releaseCoeff;
+            _envelope = coeff * _envelope + (1f - coeff) * inputLevel;
+
+            float gainReductionDb = 0f;
+            if (_envelope > _ceilingLinear)
             {
-                // Длительность
-                long length = Bass.BASS_ChannelGetLength(stream);
-                double seconds = Bass.BASS_ChannelBytes2Seconds(stream, length);
-                metadata.Duration = Math.Round(seconds, 1);
-
-                // ID3v2 теги через TAG_INFO
-                var tagInfo = new TAG_INFO();
-                tagInfo = BassTags.BASS_TAG_GetFromFile(stream, tagInfo) ? tagInfo : null;
-
-                if (tagInfo != null)
-                {
-                    if (!string.IsNullOrEmpty(tagInfo.title))
-                        metadata.Title = tagInfo.title;
-                    if (!string.IsNullOrEmpty(tagInfo.artist))
-                        metadata.Artist = tagInfo.artist;
-                    if (!string.IsNullOrEmpty(tagInfo.album))
-                        metadata.Album = tagInfo.album;
-                }
-
-                Bass.BASS_StreamFree(stream);
-            }
-        }
-        catch
-        {
-            // fallback to filename
-        }
-
-        return metadata;
-    }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Source\PlaylistManager.cs
-----------------------------------------
-﻿namespace FuzzCast.Source;
-
-public class PlaylistManager : IDisposable
-{
-    private readonly string _playlistPath;
-    private readonly string _statePath;
-    private readonly bool _shuffle;
-    private List<string> _tracks = new();
-    private List<string> _remainingTracks = new();
-    private readonly Random _rng = new();
-    private FileSystemWatcher? _watcher;
-    private DateTime _lastRead = DateTime.MinValue;
-    private readonly TimeSpan _debounceInterval = TimeSpan.FromMilliseconds(500);
-
-    public PlaylistManager(string playlistPath, bool shuffle)
-    {
-        _playlistPath = playlistPath;
-        _statePath = Path.ChangeExtension(playlistPath, ".state");
-        _shuffle = shuffle;
-        Load();
-        StartWatching();
-    }
-
-    private void Load()
-    {
-        if (!File.Exists(_playlistPath))
-        {
-            Console.WriteLine($"[WARN] Playlist not found: {_playlistPath}");
-            File.WriteAllText(_playlistPath, "# Add file paths here, one per line\n");
-            return;
-        }
-
-        var previousTracks = new HashSet<string>(_tracks);
-
-        _tracks = File.ReadAllLines(_playlistPath)
-            .Select(line => line.Trim())
-            .Where(line => !string.IsNullOrEmpty(line) && !line.StartsWith("#"))
-            .ToList();
-
-        if (_tracks.Count == 0)
-        {
-            Console.WriteLine("[WARN] Playlist is empty");
-            ClearState();
-            return;
-        }
-
-        // Проверяем существование файлов
-        var missing = _tracks.Where(t => !File.Exists(t)).ToList();
-        foreach (var m in missing)
-            Console.WriteLine($"[WARN] File not found: {m}");
-
-        _tracks = _tracks.Where(File.Exists).ToList();
-
-        if (_tracks.Count == 0)
-        {
-            Console.WriteLine("[WARN] No valid tracks found");
-            ClearState();
-            return;
-        }
-
-        if (_shuffle)
-        {
-            if (_remainingTracks.Count == 0)
-            {
-                // Первая загрузка
-                LoadState();
+                gainReductionDb = AudioMath.LinearToDb(_envelope) - _ceiling;
+                CurrentGainReduction = gainReductionDb;
             }
             else
             {
-                // Динамическое обновление: ищем новые и удалённые треки
-                var newTracks = _tracks.Where(t => !previousTracks.Contains(t)).ToList();
-                if (newTracks.Count > 0)
-                {
-                    Console.WriteLine($"[INFO] Found {newTracks.Count} new track(s)");
-                    MergeNewTracks(newTracks);
-                    SaveState();
-                }
+                CurrentGainReduction = 0f;
+            }
 
-                var removedTracks = _remainingTracks.Where(t => !_tracks.Contains(t)).ToList();
-                if (removedTracks.Count > 0)
-                {
-                    Console.WriteLine($"[INFO] {removedTracks.Count} track(s) no longer in playlist");
-                    foreach (var track in removedTracks)
-                        _remainingTracks.Remove(track);
-                    SaveState();
-                }
+            float gain = AudioMath.DbToLinear(-gainReductionDb);
+            float output = delayed * gain;
+
+            if (output > _ceilingLinear) { output = _ceilingLinear; ClipCount++; }
+            else if (output < -_ceilingLinear) { output = -_ceilingLinear; ClipCount++; }
+
+            return output;
+        }
+
+        private void ReallocateBuffer()
+        {
+            _lookaheadSamples = Math.Max(1, (int)(_lookaheadMs * 0.001f * _sampleRate));
+            _lookaheadBuffer = new float[_lookaheadSamples];
+            _lookaheadIndex = 0;
+            _bufferFilled = false;
+        }
+
+        private void RecalculateCoefficients()
+        {
+            _attackCoeff = MathF.Exp(-1f / (_attackMs * 0.001f * _sampleRate));
+            _releaseCoeff = MathF.Exp(-1f / (_releaseMs * 0.001f * _sampleRate));
+        }
+
+        public void Reset()
+        {
+            _envelope = 0f;
+            CurrentGainReduction = 0f;
+            ClipCount = 0;
+            if (_lookaheadBuffer != null)
+                Array.Clear(_lookaheadBuffer, 0, _lookaheadBuffer.Length);
+            _lookaheadIndex = 0;
+            _bufferFilled = false;
+        }
+    }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Fx\Trinity\Compressors\PeakCompressor.cs
+----------------------------------------
+﻿using System;
+
+namespace FuzzCast.Fx.Trinity.Compressors
+{
+    public class PeakCompressor
+    {
+        private float _threshold;
+        private float _ratio;
+        private float _attackMs;
+        private float _releaseMs;
+        private float _kneeWidth;
+        private float _makeupGain;
+        private float _envelope;
+        private float _attackCoeff;
+        private float _releaseCoeff;
+        private int _sampleRate;
+        private float _thresholdLinear;
+        private float _makeupGainLinear;
+        private float _ratioInverse;
+        private float _kneeHalf;
+
+        public float CurrentGainReduction { get; private set; }
+
+        public float Threshold
+        {
+            get => _threshold;
+            set { _threshold = value; _thresholdLinear = AudioMath.DbToLinear(value); }
+        }
+
+        public float Ratio
+        {
+            get => _ratio;
+            set { _ratio = Math.Max(1f, value); _ratioInverse = 1f / _ratio; }
+        }
+
+        public float AttackMs
+        {
+            get => _attackMs;
+            set { _attackMs = Math.Max(0.01f, value); RecalculateCoefficients(); }
+        }
+
+        public float ReleaseMs
+        {
+            get => _releaseMs;
+            set { _releaseMs = Math.Max(0.01f, value); RecalculateCoefficients(); }
+        }
+
+        public float KneeWidth
+        {
+            get => _kneeWidth;
+            set { _kneeWidth = Math.Max(0f, value); _kneeHalf = _kneeWidth * 0.5f; }
+        }
+
+        public float MakeupGain
+        {
+            get => _makeupGain;
+            set { _makeupGain = value; _makeupGainLinear = AudioMath.DbToLinear(value); }
+        }
+
+        public int SampleRate
+        {
+            get => _sampleRate;
+            set { _sampleRate = value; RecalculateCoefficients(); }
+        }
+
+        public PeakCompressor(int sampleRate = 44100)
+        {
+            _sampleRate = sampleRate;
+            Threshold = -18f;
+            Ratio = 4f;
+            AttackMs = 10f;
+            ReleaseMs = 80f;
+            KneeWidth = 3f;
+            MakeupGain = 0f;
+            _envelope = 0f;
+        }
+
+        public float Process(float input)
+        {
+            float inputLevel = MathF.Abs(input);
+            bool isAttack = inputLevel > _envelope;
+            float coeff = isAttack ? _attackCoeff : _releaseCoeff;
+            _envelope = coeff * _envelope + (1f - coeff) * inputLevel;
+
+            float gainReductionDb = ComputeGainReduction(_envelope);
+            CurrentGainReduction = gainReductionDb;
+
+            float totalGain = AudioMath.DbToLinear(-gainReductionDb + _makeupGain);
+            return input * totalGain;
+        }
+
+        private float ComputeGainReduction(float envelopeLinear)
+        {
+            float envelopeDb = AudioMath.LinearToDb(envelopeLinear);
+            float kneeLowerBound = _threshold - _kneeHalf;
+
+            if (envelopeDb <= kneeLowerBound)
+                return 0f;
+
+            if (_kneeWidth <= 0f)
+            {
+                if (envelopeDb <= _threshold) return 0f;
+                return (envelopeDb - _threshold) * (1f - _ratioInverse);
+            }
+
+            float kneeUpperBound = _threshold + _kneeHalf;
+            if (envelopeDb >= kneeUpperBound)
+                return (envelopeDb - _threshold) * (1f - _ratioInverse);
+
+            float delta = envelopeDb - kneeLowerBound;
+            float deltaNorm = delta / _kneeWidth;
+            float maxReduction = (kneeUpperBound - _threshold) * (1f - _ratioInverse);
+            return maxReduction * deltaNorm * deltaNorm;
+        }
+
+        private void RecalculateCoefficients()
+        {
+            _attackCoeff = MathF.Exp(-1f / (_attackMs * 0.001f * _sampleRate));
+            _releaseCoeff = MathF.Exp(-1f / (_releaseMs * 0.001f * _sampleRate));
+        }
+
+        public void Reset()
+        {
+            _envelope = 0f;
+            CurrentGainReduction = 0f;
+        }
+    }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Fx\Trinity\Compressors\ThreeBandCompressor.cs
+----------------------------------------
+﻿using System;
+using FuzzCast.Fx.Trinity.Filters;
+using FuzzCast.Fx.Trinity.Meters;
+
+namespace FuzzCast.Fx.Trinity.Compressors
+{
+    public class ThreeBandCompressor
+    {
+        private LinkwitzRileyFilter _lowpassFilter;
+        private LinkwitzRileyFilter _bandpassLowFilter;
+        private LinkwitzRileyFilter _bandpassHighFilter;
+        private LinkwitzRileyFilter _highpassFilter;
+
+        public PeakCompressor LowCompressor { get; }
+        public PeakCompressor MidCompressor { get; }
+        public PeakCompressor HighCompressor { get; }
+        public LookaheadLimiter Limiter { get; }
+
+        public MeterProcessor LowInputMeter { get; }
+        public MeterProcessor LowOutputMeter { get; }
+        public MeterProcessor MidInputMeter { get; }
+        public MeterProcessor MidOutputMeter { get; }
+        public MeterProcessor HighInputMeter { get; }
+        public MeterProcessor HighOutputMeter { get; }
+        public MeterProcessor MasterOutputMeter { get; }
+
+        private float _crossoverLowFreq = 300f;
+        private float _crossoverHighFreq = 3000f;
+        private int _sampleRate;
+
+        public float CrossoverLowFreq
+        {
+            get => _crossoverLowFreq;
+            set { _crossoverLowFreq = Math.Clamp(value, 20f, _crossoverHighFreq - 100f); InitializeFilters(); }
+        }
+
+        public float CrossoverHighFreq
+        {
+            get => _crossoverHighFreq;
+            set { _crossoverHighFreq = Math.Clamp(value, _crossoverLowFreq + 100f, 20000f); InitializeFilters(); }
+        }
+
+        public int SampleRate
+        {
+            get => _sampleRate;
+            set
+            {
+                _sampleRate = value;
+                InitializeFilters();
+                LowCompressor.SampleRate = value;
+                MidCompressor.SampleRate = value;
+                HighCompressor.SampleRate = value;
+                Limiter.SampleRate = value;
             }
         }
-        else
+
+        public ThreeBandCompressor(int sampleRate = 44100)
         {
-            _remainingTracks = new List<string>(_tracks);
+            _sampleRate = sampleRate;
+            LowCompressor = new PeakCompressor(sampleRate);
+            MidCompressor = new PeakCompressor(sampleRate);
+            HighCompressor = new PeakCompressor(sampleRate);
+            Limiter = new LookaheadLimiter(sampleRate);
+
+            LowInputMeter = new MeterProcessor();
+            LowOutputMeter = new MeterProcessor();
+            MidInputMeter = new MeterProcessor();
+            MidOutputMeter = new MeterProcessor();
+            HighInputMeter = new MeterProcessor();
+            HighOutputMeter = new MeterProcessor();
+            MasterOutputMeter = new MeterProcessor();
+
+            InitializeFilters();
+            SetDefaults();
         }
 
-        Console.WriteLine($"Playlist loaded: {_tracks.Count} tracks, {_remainingTracks.Count} remaining");
-    }
-
-    private void LoadState()
-    {
-        if (File.Exists(_statePath))
+        private void InitializeFilters()
         {
-            var stateTracks = File.ReadAllLines(_statePath)
-                .Select(line => line.Trim())
-                .Where(line => !string.IsNullOrEmpty(line))
-                .ToList();
+            _lowpassFilter = new LinkwitzRileyFilter(_sampleRate, _crossoverLowFreq, FilterType.LowPass);
+            _bandpassLowFilter = new LinkwitzRileyFilter(_sampleRate, _crossoverLowFreq, FilterType.HighPass);
+            _bandpassHighFilter = new LinkwitzRileyFilter(_sampleRate, _crossoverHighFreq, FilterType.LowPass);
+            _highpassFilter = new LinkwitzRileyFilter(_sampleRate, _crossoverHighFreq, FilterType.HighPass);
+        }
 
-            _remainingTracks = stateTracks.Where(t => _tracks.Contains(t)).ToList();
+        private void SetDefaults()
+        {
+            LowCompressor.Threshold = -18f;
+            LowCompressor.Ratio = 3f;
+            LowCompressor.AttackMs = 15f;
+            LowCompressor.ReleaseMs = 100f;
+            LowCompressor.KneeWidth = 6f;
 
-            if (_remainingTracks.Count == 0)
+            MidCompressor.Threshold = -20f;
+            MidCompressor.Ratio = 4f;
+            MidCompressor.AttackMs = 8f;
+            MidCompressor.ReleaseMs = 60f;
+            MidCompressor.KneeWidth = 3f;
+
+            HighCompressor.Threshold = -22f;
+            HighCompressor.Ratio = 5f;
+            HighCompressor.AttackMs = 2f;
+            HighCompressor.ReleaseMs = 40f;
+            HighCompressor.KneeWidth = 0f;
+        }
+
+        public float Process(float input)
+        {
+            float lowSignal = _lowpassFilter.Process(input);
+            float highPassForBand = _bandpassLowFilter.Process(input);
+            float midSignal = _bandpassHighFilter.Process(highPassForBand);
+            float highSignal = _highpassFilter.Process(input);
+
+            LowInputMeter.Process(lowSignal);
+            MidInputMeter.Process(midSignal);
+            HighInputMeter.Process(highSignal);
+
+            float lowCompressed = LowCompressor.Process(lowSignal);
+            float midCompressed = MidCompressor.Process(midSignal);
+            float highCompressed = HighCompressor.Process(highSignal);
+
+            LowOutputMeter.Process(lowCompressed);
+            MidOutputMeter.Process(midCompressed);
+            HighOutputMeter.Process(highCompressed);
+
+            float mixed = lowCompressed + midCompressed + highCompressed;
+            float output = Limiter.Process(mixed);
+            MasterOutputMeter.Process(output);
+
+            return output;
+        }
+
+        public void UpdateMeters()
+        {
+            LowInputMeter.UpdateWindow();
+            LowOutputMeter.UpdateWindow();
+            MidInputMeter.UpdateWindow();
+            MidOutputMeter.UpdateWindow();
+            HighInputMeter.UpdateWindow();
+            HighOutputMeter.UpdateWindow();
+            MasterOutputMeter.UpdateWindow();
+        }
+
+        public void Reset()
+        {
+            _lowpassFilter.Reset();
+            _bandpassLowFilter.Reset();
+            _bandpassHighFilter.Reset();
+            _highpassFilter.Reset();
+            LowCompressor.Reset();
+            MidCompressor.Reset();
+            HighCompressor.Reset();
+            Limiter.Reset();
+        }
+    }
+}
+----------------------------------------
+
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Fx\Trinity\Filters\BiquadFilter.cs
+----------------------------------------
+﻿using System;
+
+namespace FuzzCast.Fx.Trinity.Filters
+{
+    internal class BiquadFilter
+    {
+        private float _a0, _a1, _a2, _b1, _b2;
+        private float _x1, _x2, _y1, _y2;
+
+        public BiquadFilter(int sampleRate, float freq, FilterType type)
+        {
+            float omega = 2f * MathF.PI * freq / sampleRate;
+            float cos = MathF.Cos(omega);
+            float sin = MathF.Sin(omega);
+            float alpha = sin / (2f * 0.7071f);
+
+            if (type == FilterType.LowPass)
             {
-                Console.WriteLine("[INFO] All tracks played, reshuffling...");
-                _remainingTracks = new List<string>(_tracks);
-                ShuffleList(_remainingTracks);
-                SaveState();
+                _a0 = (1f - cos) / 2f;
+                _a1 = 1f - cos;
+                _a2 = (1f - cos) / 2f;
+                float norm = 1f + alpha;
+                _a0 /= norm; _a1 /= norm; _a2 /= norm;
+                _b1 = (-2f * cos) / norm;
+                _b2 = (1f - alpha) / norm;
             }
             else
             {
-                var newTracks = _tracks.Where(t => !stateTracks.Contains(t)).ToList();
-                if (newTracks.Count > 0)
-                {
-                    MergeNewTracks(newTracks);
-                    SaveState();
-                }
+                _a0 = (1f + cos) / 2f;
+                _a1 = -(1f + cos);
+                _a2 = (1f + cos) / 2f;
+                float norm = 1f + alpha;
+                _a0 /= norm; _a1 /= norm; _a2 /= norm;
+                _b1 = (-2f * cos) / norm;
+                _b2 = (1f - alpha) / norm;
             }
         }
-        else
+
+        public float Process(float input)
         {
-            _remainingTracks = new List<string>(_tracks);
-            ShuffleList(_remainingTracks);
-            SaveState();
-        }
-    }
-
-    private void MergeNewTracks(List<string> newTracks)
-    {
-        if (newTracks.Count == 0)
-            return;
-
-        // Перемешиваем, чтобы треки одного альбома/артиста не шли группой
-        ShuffleList(newTracks);
-
-        // Равномерный шаг: распределяем N новых треков по M существующим слотам
-        double step = (double)_remainingTracks.Count / newTracks.Count;
-
-        for (int i = 0; i < newTracks.Count; i++)
-        {
-            int insertIndex = (int)Math.Round(i * step);
-            insertIndex = Math.Clamp(insertIndex, 0, _remainingTracks.Count);
-            _remainingTracks.Insert(insertIndex, newTracks[i]);
-        }
-    }
-
-    public string? GetNext()
-    {
-        if (_remainingTracks.Count == 0)
-            return null;
-
-        var track = _remainingTracks[0];
-        _remainingTracks.RemoveAt(0);
-
-        if (_shuffle)
-        {
-            if (_remainingTracks.Count == 0)
-            {
-                Console.WriteLine("[INFO] All tracks played, reshuffling...");
-                _remainingTracks = new List<string>(_tracks);
-                ShuffleList(_remainingTracks);
-            }
-
-            SaveState();
+            float output = _a0 * input + _a1 * _x1 + _a2 * _x2 - _b1 * _y1 - _b2 * _y2;
+            _x2 = _x1; _x1 = input;
+            _y2 = _y1; _y1 = output;
+            return output;
         }
 
-        return track;
-    }
-
-    public void Reset()
-    {
-        if (_shuffle)
+        public void Reset()
         {
-            _remainingTracks = new List<string>(_tracks);
-            ShuffleList(_remainingTracks);
-            SaveState();
+            _x1 = _x2 = _y1 = _y2 = 0f;
         }
-        else
-        {
-            _remainingTracks = new List<string>(_tracks);
-            ClearState();
-        }
-    }
-
-    private void SaveState()
-    {
-        File.WriteAllLines(_statePath, _remainingTracks);
-    }
-
-    private void ClearState()
-    {
-        if (File.Exists(_statePath))
-            File.Delete(_statePath);
-    }
-
-    private void ShuffleList(List<string> list)
-    {
-        for (int i = list.Count - 1; i > 0; i--)
-        {
-            int j = _rng.Next(i + 1);
-            (list[i], list[j]) = (list[j], list[i]);
-        }
-    }
-
-    private void StartWatching()
-    {
-        var directory = Path.GetDirectoryName(Path.GetFullPath(_playlistPath));
-        var filename = Path.GetFileName(_playlistPath);
-
-        if (directory == null || filename == null)
-            return;
-
-        _watcher = new FileSystemWatcher(directory, filename)
-        {
-            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size,
-            EnableRaisingEvents = true
-        };
-
-        _watcher.Changed += OnPlaylistChanged;
-    }
-
-    private void OnPlaylistChanged(object sender, FileSystemEventArgs e)
-    {
-        var now = DateTime.Now;
-        if (now - _lastRead < _debounceInterval)
-            return;
-        _lastRead = now;
-
-        Console.WriteLine("[INFO] Playlist changed, reloading...");
-        Thread.Sleep(100);
-        Load();
-    }
-
-    public void Dispose()
-    {
-        _watcher?.Dispose();
     }
 }
 ----------------------------------------
 
 ================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Source\Program.cs
+Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Fx\Trinity\Filters\LinkwitzRileyFilter.cs
 ----------------------------------------
-﻿using FuzzCast.Core.Configuration;
-using FuzzCast.Core.Native;
-using FuzzCast.Source;
-using System.Reflection;
-
-var configPath = args.Length > 0 ? args[0] : "appsettings.json";
-var config = ConfigLoader.Load(configPath);
-
-var version = Assembly.GetExecutingAssembly().GetName().Version;
-Console.WriteLine($"FuzzCast Source [{version}]");
-
-Console.WriteLine($"FuzzCast Source starting...");
-Console.WriteLine($"Server: {config.Source.ServerAddress}:{config.Source.ServerPort}");
-Console.WriteLine($"Playlist: {config.Source.PlaylistPath}");
-Console.WriteLine($"[Opus] Version: {OpusNative.opus_get_version_string()}");
-
-using var cts = new CancellationTokenSource();
-var engine = new SourceEngine(config);
-
-Console.CancelKeyPress += (_, e) =>
+﻿namespace FuzzCast.Fx.Trinity.Filters
 {
-    e.Cancel = true;
-    Console.WriteLine("Stopping...");
-    cts.Cancel();
-};
+    public enum FilterType
+    {
+        LowPass,
+        HighPass
+    }
 
-try
-{
-    await engine.RunAsync(cts.Token);
+    public class LinkwitzRileyFilter
+    {
+        private BiquadFilter _stage1;
+        private BiquadFilter _stage2;
+
+        public LinkwitzRileyFilter(int sampleRate, float frequency, FilterType type)
+        {
+            _stage1 = new BiquadFilter(sampleRate, frequency, type);
+            _stage2 = new BiquadFilter(sampleRate, frequency, type);
+        }
+
+        public float Process(float input)
+        {
+            return _stage2.Process(_stage1.Process(input));
+        }
+
+        public void Reset()
+        {
+            _stage1.Reset();
+            _stage2.Reset();
+        }
+    }
 }
-catch (OperationCanceledException) { }
-
-Console.WriteLine("Source stopped.");
 ----------------------------------------
 
 ================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Source\SourceEngine.cs
+Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Fx\Trinity\Meters\MeterProcessor.cs
 ----------------------------------------
-﻿using System.Net;
-using System.Net.Sockets;
-using FuzzCast.Core.Configuration;
-using FuzzCast.Core.Native;
-using FuzzCast.Core.Protocol;
-using FuzzCast.Core.Protocol.Models;
-using FuzzCast.Core.Security;
-using Un4seen.Bass;
+﻿using System;
 
-namespace FuzzCast.Source;
-
-public class SourceEngine : IDisposable
+namespace FuzzCast.Fx.Trinity.Meters
 {
-    private readonly AppConfig _config;
-    private readonly UdpClient _udp;
-    private readonly byte[] _passwordHash;
-    private readonly PlaylistManager _playlist;
-    private readonly IPEndPoint _serverEndpoint;
-
-    private uint _sequence;
-    private DateTime _lastStatusReceived = DateTime.MinValue;
-
-    private OpusEncoder? _opusEncoder;
-    private bool _metadataSent;
-    private TrackMetadata? _currentMetadata;
-    private bool _disposed;
-
-    private CancellationTokenSource? _playbackCts;
-    private Task? _currentPlaybackTask;
-
-    public SourceEngine(AppConfig config)
+    public class MeterProcessor
     {
-        _config = config;
-        _udp = new UdpClient(0);
-        _passwordHash = PasswordHasher.ComputeHash(config.Source.Password);
-        _playlist = new PlaylistManager(config.Source.PlaylistPath, config.Source.Shuffle);
+        private float _rmsAccumulator;
+        private int _rmsSampleCount;
+        private float _peakLevel;
 
-        // Разрешаем доменное имя или IP-адрес
-        IPAddress serverIp = ResolveAddress(config.Source.ServerAddress);
-        _serverEndpoint = new IPEndPoint(serverIp, config.Source.ServerPort);
+        public float PeakLevel { get; private set; }
+        public float RmsLevel { get; private set; }
 
-        Console.WriteLine($"[DEBUG] Source local endpoint: {_udp.Client.LocalEndPoint}");
-        Console.WriteLine($"[DEBUG] Server endpoint: {_serverEndpoint}");
-    }
-
-    private static IPAddress ResolveAddress(string address)
-    {
-        // Сначала пробуем распарсить как IP-адрес
-        if (IPAddress.TryParse(address, out var ip))
+        public void Process(float input)
         {
-            Console.WriteLine($"[DEBUG] Using IP address directly: {ip}");
-            return ip;
+            float abs = MathF.Abs(input);
+            if (abs > _peakLevel) _peakLevel = abs;
+            _rmsAccumulator += input * input;
+            _rmsSampleCount++;
         }
 
-        // Если не получилось - разрешаем как доменное имя
-        try
+        public void UpdateWindow()
         {
-            Console.WriteLine($"[DEBUG] Resolving hostname: {address}");
-            var hostEntry = Dns.GetHostEntry(address);
+            PeakLevel = _peakLevel;
+            _peakLevel *= 0.9f;
+            if (_peakLevel < 0.0001f) _peakLevel = 0f;
 
-            // Предпочитаем IPv4 адрес, если есть
-            var ipv4 = hostEntry.AddressList
-                .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork);
-
-            if (ipv4 != null)
+            if (_rmsSampleCount > 0)
             {
-                Console.WriteLine($"[DEBUG] Resolved to: {ipv4}");
-                return ipv4;
+                RmsLevel = MathF.Sqrt(_rmsAccumulator / _rmsSampleCount);
+                _rmsAccumulator = 0f;
+                _rmsSampleCount = 0;
             }
-
-            // Если IPv4 нет, берём первый доступный адрес
-            var firstIp = hostEntry.AddressList.First();
-            Console.WriteLine($"[DEBUG] Resolved to: {firstIp}");
-            return firstIp;
-        }
-        catch (Exception ex)
-        {
-            throw new InvalidOperationException($"Failed to resolve address: {address}", ex);
-        }
-    }
-
-    public async Task RunAsync(CancellationToken ct)
-    {
-        if (!InitBass())
-        {
-            Console.WriteLine("[FATAL] Failed to initialize BASS");
-            return;
-        }
-
-        Console.WriteLine("BASS initialized");
-
-        using var statusCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var statusTask = Task.Run(() => StatusListenerLoop(statusCts.Token), ct);
-
-        try
-        {
-            while (!ct.IsCancellationRequested)
+            else
             {
-                var track = _playlist.GetNext();
-                if (track == null)
-                {
-                    Console.WriteLine("[WARN] Playlist empty, waiting...");
-                    await Task.Delay(5000, ct);
-                    _playlist.Reset();
-                    continue;
-                }
-
-                using (_playbackCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
-                {
-                    try
-                    {
-                        _currentPlaybackTask = PlayTrackAsync(track, _playbackCts.Token);
-                        await _currentPlaybackTask;
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        Console.WriteLine("[INFO] Playback cancelled");
-                        break;
-                    }
-                }
+                RmsLevel *= 0.9f;
+                if (RmsLevel < 0.0001f) RmsLevel = 0f;
             }
         }
-        finally
-        {
-            statusCts.Cancel();
-            try { await statusTask; } catch (OperationCanceledException) { }
 
-            if (_currentPlaybackTask != null)
-            {
-                try
-                {
-                    _playbackCts?.Cancel();
-                    await Task.WhenAny(_currentPlaybackTask, Task.Delay(2000));
-                }
-                catch { }
-            }
+        public void Reset()
+        {
+            _rmsAccumulator = 0f;
+            _rmsSampleCount = 0;
+            _peakLevel = 0f;
+            PeakLevel = 0f;
+            RmsLevel = 0f;
         }
     }
+}
+----------------------------------------
 
-    private Task PlayTrackAsync(string filePath, CancellationToken ct)
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Fx\Trinity\Pipeline\CompressorPipeline.cs
+----------------------------------------
+﻿using FuzzCast.Fx.Trinity.Compressors;
+using FuzzCast.Fx.Trinity.Meters;
+
+namespace FuzzCast.Fx.Trinity.Pipeline
+{
+    public class CompressorPipeline
     {
-        return Task.Run(() => PlayTrack(filePath, ct), ct);
-    }
+        public ThreeBandCompressor ThreeBand { get; }
 
-    private void PlayTrack(string filePath, CancellationToken ct)
-    {
-        Console.WriteLine($"Loading: {Path.GetFileName(filePath)}");
+        public MeterProcessor InputMeter => ThreeBand.MasterOutputMeter;
+        public MeterProcessor OutputMeter => ThreeBand.MasterOutputMeter;
 
-        _currentMetadata = MetadataExtractor.Extract(filePath);
-        Console.WriteLine($"[NOW PLAYING] {_currentMetadata.Artist} - {_currentMetadata.Title} [{_currentMetadata.Duration:F0}s]");
-
-        int stream = Bass.BASS_StreamCreateFile(filePath, 0, 0, BASSFlag.BASS_STREAM_DECODE | BASSFlag.BASS_SAMPLE_FLOAT);
-        if (stream == 0)
+        public CompressorPipeline(int sampleRate = 44100)
         {
-            Console.WriteLine($"[ERROR] Cannot open file: {filePath} — {Bass.BASS_ErrorGetCode()}");
-            return;
+            ThreeBand = new ThreeBandCompressor(sampleRate);
         }
 
-        try
+        public float Process(float input)
         {
-            _metadataSent = false;
-
-            int frameDurationMs = _config.Opus.FrameSize;
-            int sampleRate = _config.Opus.SampleRate;
-            int channels = _config.Opus.Channels;
-            int frameSamplesPerChannel = sampleRate * frameDurationMs / 1000;
-            int totalFrameSamples = frameSamplesPerChannel * channels;
-            int frameSizeBytes = totalFrameSamples * 4;
-
-            float[] pcmFloat = new float[totalFrameSamples];
-            short[] pcmShort = new short[totalFrameSamples];
-            byte[] opusBuf = new byte[65536];
-
-            long totalSamples = Bass.BASS_ChannelGetLength(stream);
-            double totalSeconds = Bass.BASS_ChannelBytes2Seconds(stream, totalSamples);
-            Console.WriteLine($"Duration: {totalSeconds:F1}s");
-
-            var nextFrameTime = DateTime.UtcNow;
-
-            while (!ct.IsCancellationRequested)
-            {
-                long pos = Bass.BASS_ChannelGetPosition(stream);
-                double currentSec = Bass.BASS_ChannelBytes2Seconds(stream, pos);
-
-                if (currentSec >= totalSeconds)
-                    break;
-
-                int read = Bass.BASS_ChannelGetData(stream, pcmFloat, frameSizeBytes);
-                if (read <= 0)
-                    break;
-
-                int samplesRead = read / 4;
-
-                for (int i = 0; i < samplesRead; i++)
-                {
-                    float s = pcmFloat[i];
-                    if (s > 1f) s = 1f;
-                    if (s < -1f) s = -1f;
-                    pcmShort[i] = (short)(s * 32767f);
-                }
-
-                for (int i = samplesRead; i < pcmShort.Length; i++)
-                    pcmShort[i] = 0;
-
-                if (_opusEncoder != null)
-                {
-                    int encoded = _opusEncoder.Encode(pcmShort, opusBuf);
-
-                    if (encoded > 0)
-                    {
-                        byte[] frame = new byte[encoded];
-                        Array.Copy(opusBuf, frame, encoded);
-                        SendAudioPacket(frame);
-                    }
-                }
-
-                nextFrameTime = nextFrameTime.AddMilliseconds(frameDurationMs);
-                var delay = (int)(nextFrameTime - DateTime.UtcNow).TotalMilliseconds;
-
-                if (delay > 0)
-                {
-                    try { Task.Delay(delay, ct).Wait(ct); }
-                    catch (OperationCanceledException) { break; }
-                }
-                else if (delay < -frameDurationMs * 2)
-                {
-                    nextFrameTime = DateTime.UtcNow;
-                }
-            }
+            return ThreeBand.Process(input);
         }
-        finally
+
+        public void UpdateMeters()
         {
-            Bass.BASS_StreamFree(stream);
-            Console.WriteLine($"Track finished: {_currentMetadata?.Title ?? "unknown"}");
+            ThreeBand.UpdateMeters();
+        }
+
+        public void Reset()
+        {
+            ThreeBand.Reset();
         }
     }
+}
+----------------------------------------
 
-    private void SendAudioPacket(byte[] opusFrame)
+================================================================================
+Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.Fx\AudioMath.cs
+----------------------------------------
+﻿namespace FuzzCast.Fx
+{
+    public static class AudioMath
     {
-        var packet = new AudioPacket
+        public static float DbToLinear(float db)
         {
-            PasswordMD5 = _passwordHash,
-            Sequence = _sequence++,
-            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            Metadata = _metadataSent ? null : _currentMetadata,
-            OpusFrame = opusFrame
-        };
-
-        _metadataSent = true;
-
-        byte[] data = PacketWriter.WriteAudioFromSource(packet);
-
-        try
-        {
-            _udp.Send(data, data.Length, _serverEndpoint);
-            //if (_sequence < 10 || _sequence % 100 == 0)
-            //    Console.WriteLine($"[DEBUG] Sent seq={packet.Sequence}, frame={opusFrame.Length} bytes");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[ERROR] Send failed: {ex.Message}");
-        }
-    }
-
-    private async Task StatusListenerLoop(CancellationToken ct)
-    {
-        try
-        {
-            while (!ct.IsCancellationRequested)
-            {
-                try
-                {
-                    var result = await _udp.ReceiveAsync(ct);
-
-                    if (result.Buffer.Length > 0 && PacketReader.GetPacketType(result.Buffer) == PacketTypes.SourceStatus)
-                    {
-                        var status = PacketReader.ReadSourceStatus(result.Buffer);
-                        _lastStatusReceived = DateTime.UtcNow;
-                        Console.WriteLine($"[STATUS] Server OK | Listeners: {status.ClientsCount}");
-                    }
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
-                catch (SocketException) { await Task.Delay(1000, ct); }
-
-                var since = (DateTime.UtcNow - _lastStatusReceived).TotalSeconds;
-                if (_lastStatusReceived != DateTime.MinValue && since > 30)
-                    Console.WriteLine($"[WARN] No status from server for {since:F0}s");
-            }
-        }
-        catch (OperationCanceledException) { }
-    }
-
-    private bool InitBass()
-    {
-        BassNet.Registration("email@example.com", "key");
-
-        if (!Bass.BASS_Init(-1, _config.Opus.SampleRate, BASSInit.BASS_DEVICE_DEFAULT, IntPtr.Zero))
-        {
-            Console.WriteLine($"BASS_Init error: {Bass.BASS_ErrorGetCode()}");
-            return false;
+            if (db <= -150f) return 0f;
+            return MathF.Pow(10f, db / 20f);
         }
 
-        Console.WriteLine($"[Opus] Version: {OpusNative.opus_get_version_string()}");
-
-        _opusEncoder = new OpusEncoder(
-            _config.Opus.SampleRate,
-            _config.Opus.Channels,
-            OpusApplication.Audio,
-            _config.Opus.FrameSize)
+        public static float LinearToDb(float linear)
         {
-            Bitrate = _config.Opus.Bitrate,
-            Complexity = _config.Opus.Complexity,
-            Vbr = true,
-            InbandFec = _config.Opus.PacketLossPercent > 0,
-            PacketLossPercent = _config.Opus.PacketLossPercent,
-            Dtx = false,
-            SignalType = OpusSignal.Music,
-            MaxBandwidth = OpusBandwidth.Fullband
-        };
-
-        Console.WriteLine($"Opus encoder: {_config.Opus.Bitrate / 1000}kbps, {_config.Opus.Channels}ch, {_config.Opus.FrameSize}ms");
-
-        return true;
-    }
-
-    public void Dispose()
-    {
-        if (!_disposed)
-        {
-            _disposed = true;
-            _playbackCts?.Cancel();
-            _playbackCts?.Dispose();
-            _opusEncoder?.Dispose();
-            _udp?.Dispose();
-            Bass.BASS_Free();
+            if (linear < 1e-10f) return -150f;
+            return 20f * MathF.Log10(linear);
         }
     }
 }
