@@ -1,4 +1,4 @@
-﻿namespace FuzzCast.Source;
+﻿namespace FuzzCast.Source.Playlist;
 
 public class PlaylistManager : IDisposable
 {
@@ -44,7 +44,6 @@ public class PlaylistManager : IDisposable
             return;
         }
 
-        // Проверяем существование файлов
         var missing = _tracks.Where(t => !File.Exists(t)).ToList();
         foreach (var m in missing)
             Console.WriteLine($"[WARN] File not found: {m}");
@@ -62,12 +61,10 @@ public class PlaylistManager : IDisposable
         {
             if (_remainingTracks.Count == 0)
             {
-                // Первая загрузка
                 LoadState();
             }
             else
             {
-                // Динамическое обновление: ищем новые и удалённые треки
                 var newTracks = _tracks.Where(t => !previousTracks.Contains(t)).ToList();
                 if (newTracks.Count > 0)
                 {
@@ -135,10 +132,8 @@ public class PlaylistManager : IDisposable
         if (newTracks.Count == 0)
             return;
 
-        // Перемешиваем, чтобы треки одного альбома/артиста не шли группой
         ShuffleList(newTracks);
 
-        // Равномерный шаг: распределяем N новых треков по M существующим слотам
         double step = (double)_remainingTracks.Count / newTracks.Count;
 
         for (int i = 0; i < newTracks.Count; i++)

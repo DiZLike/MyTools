@@ -1,11 +1,14 @@
-﻿using System.Net;
-using System.Net.Sockets;
-using FuzzCast.Core.Configuration;
+﻿using FuzzCast.Core.Configuration;
 using FuzzCast.Core.Native;
 using FuzzCast.Core.Protocol;
 using FuzzCast.Core.Protocol.Models;
 using FuzzCast.Core.Security;
+using FuzzCast.Source.Audio;
+using FuzzCast.Source.Playlist;
+using System.Net;
+using System.Net.Sockets;
 using Un4seen.Bass;
+using Un4seen.Bass.AddOn.Fx;
 
 namespace FuzzCast.Source;
 
@@ -16,6 +19,8 @@ public class SourceEngine : IDisposable
     private readonly byte[] _passwordHash;
     private readonly PlaylistManager _playlist;
     private readonly IPEndPoint _serverEndpoint;
+    private readonly ReplayGainProcessor _replayGain;
+    private readonly CompressorProcessor _compressor;
 
     private uint _sequence;
     private DateTime _lastStatusReceived = DateTime.MinValue;
@@ -34,8 +39,9 @@ public class SourceEngine : IDisposable
         _udp = new UdpClient(0);
         _passwordHash = PasswordHasher.ComputeHash(config.Source.Password);
         _playlist = new PlaylistManager(config.Source.PlaylistPath, config.Source.Shuffle);
+        _replayGain = new ReplayGainProcessor();
+        _compressor = new CompressorProcessor();
 
-        // Разрешаем доменное имя или IP-адрес
         IPAddress serverIp = ResolveAddress(config.Source.ServerAddress);
         _serverEndpoint = new IPEndPoint(serverIp, config.Source.ServerPort);
 
@@ -45,20 +51,17 @@ public class SourceEngine : IDisposable
 
     private static IPAddress ResolveAddress(string address)
     {
-        // Сначала пробуем распарсить как IP-адрес
         if (IPAddress.TryParse(address, out var ip))
         {
             Console.WriteLine($"[DEBUG] Using IP address directly: {ip}");
             return ip;
         }
 
-        // Если не получилось - разрешаем как доменное имя
         try
         {
             Console.WriteLine($"[DEBUG] Resolving hostname: {address}");
             var hostEntry = Dns.GetHostEntry(address);
 
-            // Предпочитаем IPv4 адрес, если есть
             var ipv4 = hostEntry.AddressList
                 .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork);
 
@@ -68,7 +71,6 @@ public class SourceEngine : IDisposable
                 return ipv4;
             }
 
-            // Если IPv4 нет, берём первый доступный адрес
             var firstIp = hostEntry.AddressList.First();
             Console.WriteLine($"[DEBUG] Resolved to: {firstIp}");
             return firstIp;
@@ -147,13 +149,55 @@ public class SourceEngine : IDisposable
         Console.WriteLine($"Loading: {Path.GetFileName(filePath)}");
 
         _currentMetadata = MetadataExtractor.Extract(filePath);
-        Console.WriteLine($"[NOW PLAYING] {_currentMetadata.Artist} - {_currentMetadata.Title} [{_currentMetadata.Duration:F0}s]");
 
-        int stream = Bass.BASS_StreamCreateFile(filePath, 0, 0, BASSFlag.BASS_STREAM_DECODE | BASSFlag.BASS_SAMPLE_FLOAT);
+        // Извлекаем ReplayGain из комментария
+        ReplayGainInfo? rgInfo = null;
+        try
+        {
+            using var tagFile = TagLib.File.Create(filePath);
+            rgInfo = _replayGain.ExtractFromComment(tagFile.Tag.Comment);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[WARN] Failed to read ReplayGain tags: {ex.Message}");
+        }
+
+        var rgLog = rgInfo != null
+            ? $" | RG: {rgInfo.TrackGainDb:F2} dB" + (rgInfo.RmsDb.HasValue ? $", RMS: {rgInfo.RmsDb:F2} dB" : "")
+            : "";
+
+        Console.WriteLine(
+            $"[NOW PLAYING] {_currentMetadata.Artist} - {_currentMetadata.Title} " +
+            $"[{_currentMetadata.Duration:F0}s]{rgLog}");
+
+        int stream = Bass.BASS_StreamCreateFile(filePath, 0, 0,
+            BASSFlag.BASS_STREAM_DECODE | BASSFlag.BASS_SAMPLE_FLOAT);
+
         if (stream == 0)
         {
             Console.WriteLine($"[ERROR] Cannot open file: {filePath} — {Bass.BASS_ErrorGetCode()}");
             return;
+        }
+
+        float appliedGainDb = 0f;
+
+        // ReplayGain
+        if (_config.Compressor.ReplayGainEnabled && rgInfo != null)
+        {
+            float gainLinear = (float)Math.Pow(10, rgInfo.TrackGainDb / 20.0);
+            _replayGain.ApplyToStream(stream, gainLinear);
+            appliedGainDb = rgInfo.TrackGainDb;
+        }
+
+        // Компрессор
+        if (_config.Compressor.CompressorEnabled && rgInfo?.RmsDb.HasValue == true)
+        {
+            float rmsAfterRG = rgInfo.RmsDb.Value + appliedGainDb;
+            float threshold = rmsAfterRG + (float)_config.Compressor.HeadroomDb;
+
+            threshold = Math.Min(threshold, 0f);
+
+            _compressor.ApplyToStream(stream, threshold, _config.Compressor);
         }
 
         try
@@ -253,8 +297,6 @@ public class SourceEngine : IDisposable
         try
         {
             _udp.Send(data, data.Length, _serverEndpoint);
-            //if (_sequence < 10 || _sequence % 100 == 0)
-            //    Console.WriteLine($"[DEBUG] Sent seq={packet.Sequence}, frame={opusFrame.Length} bytes");
         }
         catch (Exception ex)
         {
@@ -272,7 +314,8 @@ public class SourceEngine : IDisposable
                 {
                     var result = await _udp.ReceiveAsync(ct);
 
-                    if (result.Buffer.Length > 0 && PacketReader.GetPacketType(result.Buffer) == PacketTypes.SourceStatus)
+                    if (result.Buffer.Length > 0 &&
+                        PacketReader.GetPacketType(result.Buffer) == PacketTypes.SourceStatus)
                     {
                         var status = PacketReader.ReadSourceStatus(result.Buffer);
                         _lastStatusReceived = DateTime.UtcNow;
@@ -299,7 +342,7 @@ public class SourceEngine : IDisposable
             Console.WriteLine($"BASS_Init error: {Bass.BASS_ErrorGetCode()}");
             return false;
         }
-
+        int fx_ver = BassFx.BASS_FX_GetVersion();
         Console.WriteLine($"[Opus] Version: {OpusNative.opus_get_version_string()}");
 
         _opusEncoder = new OpusEncoder(
@@ -318,7 +361,9 @@ public class SourceEngine : IDisposable
             MaxBandwidth = OpusBandwidth.Fullband
         };
 
-        Console.WriteLine($"Opus encoder: {_config.Opus.Bitrate / 1000}kbps, {_config.Opus.Channels}ch, {_config.Opus.FrameSize}ms");
+        Console.WriteLine(
+            $"Opus encoder: {_config.Opus.Bitrate / 1000}kbps, " +
+            $"{_config.Opus.Channels}ch, {_config.Opus.FrameSize}ms");
 
         return true;
     }

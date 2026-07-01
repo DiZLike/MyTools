@@ -1,10 +1,12 @@
-﻿namespace BrickwallCompressor.Core
+﻿using FuzzCast.Fx.Trinity.Compressors;
+using FuzzCast.Fx.Trinity.Meters;
+
+namespace FuzzCast.Fx.Trinity.Pipeline
 {
     public class CompressorPipeline
     {
         public ThreeBandCompressor ThreeBand { get; }
 
-        // Для совместимости с старым кодом
         public MeterProcessor InputMeter => ThreeBand.MasterOutputMeter;
         public MeterProcessor OutputMeter => ThreeBand.MasterOutputMeter;
 
@@ -16,11 +18,6 @@
         public float Process(float input)
         {
             return ThreeBand.Process(input);
-        }
-
-        public void SetSampleRate(int sampleRate)
-        {
-            ThreeBand.SetSampleRate(sampleRate);
         }
 
         public void UpdateMeters()

@@ -6,6 +6,7 @@
   <Project Path="FuzzCast.Core/FuzzCast.Core.csproj" Id="6b022e3b-a110-4400-8af4-8e9b4c649675">
     <Platform Solution="*|x86" Project="x86" />
   </Project>
+  <Project Path="FuzzCast.Fx/FuzzCast.Fx.csproj" Id="4cf322b4-8ea5-41aa-8a8e-64a5716db8d9" />
   <Project Path="FuzzCast.Player/FuzzCast.Player.csproj" Id="6d186be6-6812-4eab-bc38-d175612329e1" />
   <Project Path="FuzzCast.Server/FuzzCast.Server.csproj" Id="c1c57292-f4c5-41f1-a8e7-8f1c3c8eac7e">
     <Platform Solution="*|x86" Project="x86" />

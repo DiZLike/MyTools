@@ -1,9 +1,10 @@
 using BrickwallCompressor.Audio;
 using BrickwallCompressor.Controls;
-using BrickwallCompressor.Core;
+using FuzzCast.Fx.Trinity.Compressors;
 using System;
 using System.Drawing;
 using System.Windows.Forms;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 
 namespace BrickwallCompressor
 {
@@ -12,7 +13,7 @@ namespace BrickwallCompressor
         private AudioEngine _audioEngine;
         private System.Windows.Forms.Timer _updateTimer;
         private System.Windows.Forms.Timer _meterTimer;
-        private int _currentBand = 0; // 0=Low, 1=Mid, 2=High
+        private int _currentBand = 0;
 
         public MainForm()
         {
@@ -81,11 +82,8 @@ namespace BrickwallCompressor
             }
         }
 
-        // ===== ВЫБОР ПОЛОСЫ =====
-
         private void cmbBand_SelectedIndexChanged(object sender, EventArgs e)
         {
-            SaveBandSettings(_currentBand);
             _currentBand = cmbBand.SelectedIndex;
             LoadBandSettings(_currentBand);
 
@@ -95,31 +93,23 @@ namespace BrickwallCompressor
             gbCompressor.ForeColor = colors[_currentBand];
         }
 
-        private void SaveBandSettings(int band)
-        {
-            var comp = GetCompressor(band);
-            // В реальном приложении здесь сохранение в настройки
-        }
-
         private void LoadBandSettings(int band)
         {
             var comp = GetCompressor(band);
 
-            // Загружаем параметры полосы в ползунки
-            SetTrackBarSilent(tbThreshold, (int)GetThreshold(comp));
-            SetTrackBarSilent(tbRatio, (int)(GetRatio(comp) * 10));
-            SetTrackBarSilent(tbAttack, (int)(GetAttack(comp) * 10));
-            SetTrackBarSilent(tbRelease, (int)GetRelease(comp));
-            SetTrackBarSilent(tbKnee, (int)GetKnee(comp));
-            SetTrackBarSilent(tbMakeup, (int)GetMakeup(comp));
+            tbThreshold.Value = (int)comp.Threshold;
+            tbRatio.Value = (int)(comp.Ratio * 10);
+            tbAttack.Value = (int)(comp.AttackMs * 10);
+            tbRelease.Value = (int)comp.ReleaseMs;
+            tbKnee.Value = (int)comp.KneeWidth;
+            tbMakeup.Value = (int)comp.MakeupGain;
 
-            // Обновляем подписи
-            UpdateThresholdLabel();
-            UpdateRatioLabel();
-            UpdateAttackLabel();
-            UpdateReleaseLabel();
-            UpdateKneeLabel();
-            UpdateMakeupLabel();
+            lblThresholdValue.Text = $"{tbThreshold.Value} dB";
+            lblRatioValue.Text = $"{tbRatio.Value / 10f:F1}:1";
+            lblAttackValue.Text = $"{tbAttack.Value / 10f:F1} ms";
+            lblReleaseValue.Text = $"{tbRelease.Value} ms";
+            lblKneeValue.Text = $"{tbKnee.Value} dB";
+            lblMakeupValue.Text = $"{tbMakeup.Value} dB";
         }
 
         private PeakCompressor GetCompressor(int band)
@@ -132,27 +122,6 @@ namespace BrickwallCompressor
                 _ => _audioEngine.Pipeline.ThreeBand.LowCompressor
             };
         }
-
-        private void SetTrackBarSilent(TrackBar tb, int value)
-        {
-            tb.Value = Math.Clamp(value, tb.Minimum, tb.Maximum);
-        }
-
-        private float GetThreshold(PeakCompressor c) => -18f; // Упрощённо
-        private float GetRatio(PeakCompressor c) => 3f;
-        private float GetAttack(PeakCompressor c) => 15f;
-        private float GetRelease(PeakCompressor c) => 100f;
-        private float GetKnee(PeakCompressor c) => 6f;
-        private float GetMakeup(PeakCompressor c) => 0f;
-
-        private void UpdateThresholdLabel() => lblThresholdValue.Text = $"{tbThreshold.Value} dB";
-        private void UpdateRatioLabel() => lblRatioValue.Text = $"{tbRatio.Value / 10f:F1}:1";
-        private void UpdateAttackLabel() => lblAttackValue.Text = $"{tbAttack.Value / 10f:F1} ms";
-        private void UpdateReleaseLabel() => lblReleaseValue.Text = $"{tbRelease.Value} ms";
-        private void UpdateKneeLabel() => lblKneeValue.Text = $"{tbKnee.Value} dB";
-        private void UpdateMakeupLabel() => lblMakeupValue.Text = $"{tbMakeup.Value} dB";
-
-        // ===== СОБЫТИЯ =====
 
         private void btnLoadFile_Click(object sender, EventArgs e)
         {
@@ -220,67 +189,63 @@ namespace BrickwallCompressor
             meterOutputPeak.CurrentLevel = meterOutputRms.CurrentLevel = 0;
         }
 
-        // ===== ПОЛЗУНКИ =====
-
         private void tbThreshold_Scroll(object sender, EventArgs e)
         {
             float value = tbThreshold.Value;
             lblThresholdValue.Text = $"{value:F0} dB";
-            GetCompressor(_currentBand).SetThreshold(value);
+            GetCompressor(_currentBand).Threshold = value;
         }
 
         private void tbRatio_Scroll(object sender, EventArgs e)
         {
             float value = tbRatio.Value / 10f;
             lblRatioValue.Text = $"{value:F1}:1";
-            GetCompressor(_currentBand).SetRatio(value);
+            GetCompressor(_currentBand).Ratio = value;
         }
 
         private void tbAttack_Scroll(object sender, EventArgs e)
         {
             float value = tbAttack.Value / 10f;
             lblAttackValue.Text = $"{value:F1} ms";
-            GetCompressor(_currentBand).SetAttack(value);
+            GetCompressor(_currentBand).AttackMs = value;
         }
 
         private void tbRelease_Scroll(object sender, EventArgs e)
         {
             float value = tbRelease.Value;
             lblReleaseValue.Text = $"{value:F0} ms";
-            GetCompressor(_currentBand).SetRelease(value);
+            GetCompressor(_currentBand).ReleaseMs = value;
         }
 
         private void tbKnee_Scroll(object sender, EventArgs e)
         {
             float value = tbKnee.Value;
             lblKneeValue.Text = $"{value:F0} dB";
-            GetCompressor(_currentBand).SetKneeWidth(value);
+            GetCompressor(_currentBand).KneeWidth = value;
         }
 
         private void tbMakeup_Scroll(object sender, EventArgs e)
         {
             float value = tbMakeup.Value;
             lblMakeupValue.Text = $"{value:F0} dB";
-            GetCompressor(_currentBand).SetMakeupGain(value);
+            GetCompressor(_currentBand).MakeupGain = value;
         }
 
         private void tbCeiling_Scroll(object sender, EventArgs e)
         {
             float value = tbCeiling.Value / 10f;
             lblCeilingValue.Text = $"{value:F1} dB";
-            _audioEngine.Pipeline.ThreeBand.Limiter.SetCeiling(value);
+            _audioEngine.Pipeline.ThreeBand.Limiter.Ceiling = value;
         }
 
         private void tbLookahead_Scroll(object sender, EventArgs e)
         {
             float value = tbLookahead.Value / 10f;
             lblLookaheadValue.Text = $"{value:F1} ms";
-            _audioEngine.Pipeline.ThreeBand.Limiter.SetLookahead(value);
+            _audioEngine.Pipeline.ThreeBand.Limiter.LookaheadMs = value;
         }
 
         private void btnBypass_CheckedChanged(object sender, EventArgs e) { }
-
-        // ===== ТАЙМЕРЫ =====
 
         private void UpdateTimer_Tick(object sender, EventArgs e)
         {
@@ -305,7 +270,6 @@ namespace BrickwallCompressor
         {
             _audioEngine.Pipeline.UpdateMeters();
 
-            // Метры полос
             meterLowIn.CurrentLevel = _audioEngine.Pipeline.ThreeBand.LowInputMeter.PeakLevel;
             meterLowOut.CurrentLevel = _audioEngine.Pipeline.ThreeBand.LowOutputMeter.PeakLevel;
             meterMidIn.CurrentLevel = _audioEngine.Pipeline.ThreeBand.MidInputMeter.PeakLevel;
@@ -313,7 +277,6 @@ namespace BrickwallCompressor
             meterHighIn.CurrentLevel = _audioEngine.Pipeline.ThreeBand.HighInputMeter.PeakLevel;
             meterHighOut.CurrentLevel = _audioEngine.Pipeline.ThreeBand.HighOutputMeter.PeakLevel;
 
-            // Мастер метры
             meterInputPeak.CurrentLevel = _audioEngine.Pipeline.ThreeBand.MasterOutputMeter.PeakLevel;
             meterInputRms.CurrentLevel = _audioEngine.Pipeline.ThreeBand.MasterOutputMeter.RmsLevel;
             meterOutputPeak.CurrentLevel = _audioEngine.Pipeline.ThreeBand.MasterOutputMeter.PeakLevel;

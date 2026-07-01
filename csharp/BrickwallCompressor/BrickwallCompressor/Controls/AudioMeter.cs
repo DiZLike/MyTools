@@ -12,7 +12,7 @@ namespace BrickwallCompressor.Controls
         RMS
     }
 
-    public class AudioMeter : Control  // Меняем UserControl на Control
+    public class AudioMeter : Control
     {
         private float _currentLevel = 0.3f;
         private float _peakHoldLevel = 0.5f;
@@ -187,7 +187,6 @@ namespace BrickwallCompressor.Controls
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            // Защита от ошибок в дизайнере
             if (Width <= 0 || Height <= 0) return;
 
             Graphics g = e.Graphics;
@@ -196,11 +195,9 @@ namespace BrickwallCompressor.Controls
             int width = ClientSize.Width;
             int height = ClientSize.Height;
 
-            // Фон
             using (var bgBrush = new SolidBrush(_backgroundColor))
                 g.FillRectangle(bgBrush, 0, 0, width, height);
 
-            // Рамка
             using (var borderPen = new Pen(_borderColor))
                 g.DrawRectangle(borderPen, 0, 0, width - 1, height - 1);
 
@@ -210,19 +207,15 @@ namespace BrickwallCompressor.Controls
 
             if (barWidth <= 0 || barHeight <= 0) return;
 
-            // Шкала
             if (_showScale)
                 DrawScale(g, padding, barWidth, barHeight);
 
-            // Уровень сигнала
             if (_currentLevel > 0.001f)
                 DrawLevel(g, padding, barWidth, barHeight);
 
-            // Удерживаемый пик
             if (_peakHoldLevel > 0.001f && _meterType == MeterType.Peak)
                 DrawPeakHold(g, padding, barWidth, barHeight);
 
-            // Надпись
             if (_showTypeLabel)
                 DrawTypeLabel(g, padding, height);
         }

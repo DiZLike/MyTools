@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Runtime.InteropServices;
 using Un4seen.Bass;
-using BrickwallCompressor.Core;
+using FuzzCast.Fx.Trinity.Pipeline;
 
 namespace BrickwallCompressor.Audio
 {
@@ -24,7 +24,6 @@ namespace BrickwallCompressor.Audio
         {
             if (_initialized) return true;
 
-            // BassNet.Registration — обязательный вызов перед Init
             BassNet.Registration("ваш_email@example.com", "ваш_ключ_2.4");
 
             if (!Bass.BASS_Init(-1, 44100, BASSInit.BASS_DEVICE_DEFAULT, windowHandle))
@@ -45,22 +44,18 @@ namespace BrickwallCompressor.Audio
             if (_streamHandle == 0)
                 throw new Exception("Не удалось загрузить файл: " + Bass.BASS_ErrorGetCode());
 
-            // Получаем частоту дискретизации файла
             var info = Bass.BASS_ChannelGetInfo(_streamHandle);
-            _pipeline.SetSampleRate(info.freq);
+            _pipeline.ThreeBand.SampleRate = info.freq;
 
-            // Создаём новый поток с DSP (не decode)
             int newStream = Bass.BASS_StreamCreateFile(filePath, 0, 0,
                 BASSFlag.BASS_SAMPLE_FLOAT | BASSFlag.BASS_STREAM_AUTOFREE);
 
             if (newStream == 0)
                 throw new Exception("Ошибка создания выходного потока: " + Bass.BASS_ErrorGetCode());
 
-            // Освобождаем decode-поток
             Bass.BASS_StreamFree(_streamHandle);
             _streamHandle = newStream;
 
-            // Вешаем DSP
             _dspCallback = new DSPPROC(DspCallback);
             Bass.BASS_ChannelSetDSP(_streamHandle, _dspCallback, IntPtr.Zero, 0);
 
@@ -73,9 +68,7 @@ namespace BrickwallCompressor.Audio
             int sampleCount = length / sizeof(float);
 
             for (int i = 0; i < sampleCount; i++)
-            {
                 data[i] = _pipeline.Process(data[i]);
-            }
         }
 
         public void Play()

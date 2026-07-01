@@ -6,6 +6,7 @@ public class AppConfig
     public SourceConfig Source { get; set; } = new();
     public PlayerConfig Player { get; set; } = new();
     public OpusConfig Opus { get; set; } = new();
+    public CompressorConfig Compressor { get; set; } = new();
 }
 
 public class ServerConfig

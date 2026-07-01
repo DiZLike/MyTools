@@ -13,6 +13,9 @@
     <Reference Include="Bass.Net">
       <HintPath>..\..\FuzzCast\FuzzCast.Source\Bass.Net.dll</HintPath>
     </Reference>
+    <Reference Include="FuzzCast.Fx">
+      <HintPath>..\..\FuzzCast\FuzzCast.Fx\bin\Debug\net6.0\FuzzCast.Fx.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

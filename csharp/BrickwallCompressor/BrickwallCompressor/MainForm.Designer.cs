@@ -1,4 +1,5 @@
-﻿using System.ComponentModel;
+﻿using BrickwallCompressor.Controls;
+using System.ComponentModel;
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -10,7 +11,6 @@ namespace BrickwallCompressor
 
         #region Контролы
 
-        // Верхняя панель
         private Button btnLoadFile;
         private Button btnPlayPause;
         private Button btnStop;
@@ -19,11 +19,9 @@ namespace BrickwallCompressor
         private TrackBar progressBar;
         private CheckBox btnBypass;
 
-        // Выбор полосы
         private ComboBox cmbBand;
         private Label lblBand;
 
-        // Компрессор
         private GroupBox gbCompressor;
         private Label lblThreshold;
         private TrackBar tbThreshold;
@@ -44,7 +42,6 @@ namespace BrickwallCompressor
         private TrackBar tbMakeup;
         private Label lblMakeupValue;
 
-        // Лимитер
         private GroupBox gbLimiter;
         private Label lblCeiling;
         private TrackBar tbCeiling;
@@ -53,7 +50,6 @@ namespace BrickwallCompressor
         private TrackBar tbLookahead;
         private Label lblLookaheadValue;
 
-        // Индикация по полосам
         private GroupBox gbBands;
         private Label lblLowTitle;
         private Label lblLowGR;
@@ -64,7 +60,6 @@ namespace BrickwallCompressor
         private Label lblLimitTitle;
         private Label lblLimitGR;
 
-        // Аудио метры
         private GroupBox gbInputMeters;
         private GroupBox gbOutputMeters;
         private Label lblInputPeakTitle;
@@ -76,7 +71,6 @@ namespace BrickwallCompressor
         private Panel pnlOutputPeak;
         private Panel pnlOutputRms;
 
-        // Метры для полос
         private GroupBox gbLowMeters;
         private Label lblLowInTitle;
         private Panel pnlLowIn;
@@ -95,18 +89,17 @@ namespace BrickwallCompressor
         private Label lblHighOutTitle;
         private Panel pnlHighOut;
 
-        // Сами метры
-        private Controls.AudioMeter meterInputPeak;
-        private Controls.AudioMeter meterInputRms;
-        private Controls.AudioMeter meterOutputPeak;
-        private Controls.AudioMeter meterOutputRms;
+        private AudioMeter meterInputPeak;
+        private AudioMeter meterInputRms;
+        private AudioMeter meterOutputPeak;
+        private AudioMeter meterOutputRms;
 
-        private Controls.AudioMeter meterLowIn;
-        private Controls.AudioMeter meterLowOut;
-        private Controls.AudioMeter meterMidIn;
-        private Controls.AudioMeter meterMidOut;
-        private Controls.AudioMeter meterHighIn;
-        private Controls.AudioMeter meterHighOut;
+        private AudioMeter meterLowIn;
+        private AudioMeter meterLowOut;
+        private AudioMeter meterMidIn;
+        private AudioMeter meterMidOut;
+        private AudioMeter meterHighIn;
+        private AudioMeter meterHighOut;
 
         #endregion
 
@@ -123,7 +116,7 @@ namespace BrickwallCompressor
             this.SuspendLayout();
 
             // ===== ФОРМА =====
-            this.Text = "3-Band Brickwall Compressor";
+            this.Text = "FuzzCast Trinity - 3-Band Compressor";
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MaximizeBox = false;
@@ -204,7 +197,6 @@ namespace BrickwallCompressor
             };
             btnBypass.CheckedChanged += btnBypass_CheckedChanged;
 
-            // ===== ВЫБОР ПОЛОСЫ =====
             lblBand = new Label
             {
                 Text = "Полоса:",
@@ -230,7 +222,7 @@ namespace BrickwallCompressor
                 Text = "КОМПРЕССОР (НИЗКИЕ)",
                 Location = new Point(10, 50),
                 Size = new Size(340, 275),
-                ForeColor = Color.FromArgb(0, 180, 216)
+                ForeColor = Color.FromArgb(0, 255, 136)
             };
 
             lblThreshold = new Label();
@@ -286,7 +278,7 @@ namespace BrickwallCompressor
             SetupParameterRow(lblLookahead, tbLookahead, lblLookaheadValue,
                 "Lookahead", 60, 1, 50, 10, "ms", gbLimiter, tbLookahead_Scroll);
 
-            // ===== ИНДИКАТОРЫ ПО ПОЛОСАМ =====
+            // ===== ИНДИКАТОРЫ ПОЛОС =====
             gbBands = new GroupBox
             {
                 Text = "ПОДАВЛЕНИЕ",
@@ -315,7 +307,6 @@ namespace BrickwallCompressor
             });
 
             // ===== МЕТРЫ ПОЛОС =====
-            // Низкие
             gbLowMeters = new GroupBox
             {
                 Text = "НИЗКИЕ",
@@ -331,7 +322,6 @@ namespace BrickwallCompressor
                 lblLowInTitle, pnlLowIn, lblLowOutTitle, pnlLowOut
             });
 
-            // Средние
             gbMidMeters = new GroupBox
             {
                 Text = "СРЕДНИЕ",
@@ -347,7 +337,6 @@ namespace BrickwallCompressor
                 lblMidInTitle, pnlMidIn, lblMidOutTitle, pnlMidOut
             });
 
-            // Высокие
             gbHighMeters = new GroupBox
             {
                 Text = "ВЫСОКИЕ",
@@ -363,7 +352,7 @@ namespace BrickwallCompressor
                 lblHighInTitle, pnlHighIn, lblHighOutTitle, pnlHighOut
             });
 
-            // Мастер метры
+            // ===== МАСТЕР МЕТРЫ =====
             gbInputMeters = new GroupBox
             {
                 Text = "ВХОД",

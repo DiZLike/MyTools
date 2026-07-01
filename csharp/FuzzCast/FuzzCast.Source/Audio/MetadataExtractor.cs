@@ -1,8 +1,8 @@
 ﻿using FuzzCast.Core.Protocol.Models;
 using Un4seen.Bass;
-using Un4seen.Bass.AddOn.Tags;
+using TagLib;
 
-namespace FuzzCast.Source;
+namespace FuzzCast.Source.Audio;
 
 public static class MetadataExtractor
 {
@@ -15,37 +15,31 @@ public static class MetadataExtractor
             Album = "",
             Duration = 0
         };
-        
+
         try
         {
             int stream = Bass.BASS_StreamCreateFile(filePath, 0, 0, BASSFlag.BASS_STREAM_DECODE);
             if (stream != 0)
             {
-                // Длительность
                 long length = Bass.BASS_ChannelGetLength(stream);
                 double seconds = Bass.BASS_ChannelBytes2Seconds(stream, length);
                 metadata.Duration = Math.Round(seconds, 1);
-
-                // ID3v2 теги через TAG_INFO
-                var tagInfo = new TAG_INFO();
-                tagInfo = BassTags.BASS_TAG_GetFromFile(stream, tagInfo) ? tagInfo : null;
-
-                if (tagInfo != null)
-                {
-                    if (!string.IsNullOrEmpty(tagInfo.title))
-                        metadata.Title = tagInfo.title;
-                    if (!string.IsNullOrEmpty(tagInfo.artist))
-                        metadata.Artist = tagInfo.artist;
-                    if (!string.IsNullOrEmpty(tagInfo.album))
-                        metadata.Album = tagInfo.album;
-                }
-
                 Bass.BASS_StreamFree(stream);
             }
+
+            using var tagFile = TagLib.File.Create(filePath);
+            var tag = tagFile.Tag;
+
+            if (!string.IsNullOrEmpty(tag.Title))
+                metadata.Title = tag.Title;
+            if (!string.IsNullOrEmpty(tag.FirstPerformer))
+                metadata.Artist = tag.FirstPerformer;
+            if (!string.IsNullOrEmpty(tag.Album))
+                metadata.Album = tag.Album;
         }
-        catch
+        catch (Exception ex)
         {
-            // fallback to filename
+            Console.WriteLine($"[WARN] Metadata extraction failed for {Path.GetFileName(filePath)}: {ex.Message}");
         }
 
         return metadata;

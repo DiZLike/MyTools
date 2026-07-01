@@ -1,6 +1,7 @@
-﻿using System.Reflection;
-using FuzzCast.ReplayGain.Helpers;
+﻿using FuzzCast.ReplayGain.Helpers;
+using System.Reflection;
 using Un4seen.Bass;
+using Un4seen.Bass.AddOn.Fx;
 
 namespace FuzzCast.ReplayGain.Services;
 
