@@ -6,6 +6,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <ApplicationIcon>easymp3gain_128x128.ico</ApplicationIcon>
+	<Title>FuzzCast ReplayGain</Title>
+    <Version>1.0.$([System.DateTime]::UtcNow.AddHours(3).ToString("yy"))$([System.DateTime]::UtcNow.AddHours(3).DayOfYear.ToString("000")).$([System.DateTime]::UtcNow.AddHours(3).ToString("HHmm"))</Version>
+  
+  <AssemblyVersion>1.0.$([System.DateTime]::UtcNow.AddHours(3).ToString("yy"))$([System.DateTime]::UtcNow.AddHours(3).DayOfYear.ToString("000")).$([System.DateTime]::UtcNow.AddHours(3).ToString("HHmm"))</AssemblyVersion>
+  
+  <InformationalVersion>1.0 built on $([System.DateTime]::UtcNow.AddHours(3).ToString("yyyy-MM-dd HH:mm")) MSK</InformationalVersion>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'" />
@@ -20,7 +26,7 @@
 
   <ItemGroup>
     <Reference Include="Bass.Net">
-      <HintPath>..\FrostWire.Source\Bass.Net.dll</HintPath>
+      <HintPath>..\FuzzCast.Source\Bass.Net.dll</HintPath>
     </Reference>
   </ItemGroup>
 

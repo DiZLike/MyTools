@@ -34,8 +34,49 @@ public class SourceEngine : IDisposable
         _udp = new UdpClient(0);
         _passwordHash = PasswordHasher.ComputeHash(config.Source.Password);
         _playlist = new PlaylistManager(config.Source.PlaylistPath, config.Source.Shuffle);
-        _serverEndpoint = new IPEndPoint(IPAddress.Parse(config.Source.ServerAddress), config.Source.ServerPort);
+
+        // Разрешаем доменное имя или IP-адрес
+        IPAddress serverIp = ResolveAddress(config.Source.ServerAddress);
+        _serverEndpoint = new IPEndPoint(serverIp, config.Source.ServerPort);
+
         Console.WriteLine($"[DEBUG] Source local endpoint: {_udp.Client.LocalEndPoint}");
+        Console.WriteLine($"[DEBUG] Server endpoint: {_serverEndpoint}");
+    }
+
+    private static IPAddress ResolveAddress(string address)
+    {
+        // Сначала пробуем распарсить как IP-адрес
+        if (IPAddress.TryParse(address, out var ip))
+        {
+            Console.WriteLine($"[DEBUG] Using IP address directly: {ip}");
+            return ip;
+        }
+
+        // Если не получилось - разрешаем как доменное имя
+        try
+        {
+            Console.WriteLine($"[DEBUG] Resolving hostname: {address}");
+            var hostEntry = Dns.GetHostEntry(address);
+
+            // Предпочитаем IPv4 адрес, если есть
+            var ipv4 = hostEntry.AddressList
+                .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork);
+
+            if (ipv4 != null)
+            {
+                Console.WriteLine($"[DEBUG] Resolved to: {ipv4}");
+                return ipv4;
+            }
+
+            // Если IPv4 нет, берём первый доступный адрес
+            var firstIp = hostEntry.AddressList.First();
+            Console.WriteLine($"[DEBUG] Resolved to: {firstIp}");
+            return firstIp;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Failed to resolve address: {address}", ex);
+        }
     }
 
     public async Task RunAsync(CancellationToken ct)
@@ -212,8 +253,8 @@ public class SourceEngine : IDisposable
         try
         {
             _udp.Send(data, data.Length, _serverEndpoint);
-            if (_sequence < 10 || _sequence % 100 == 0)
-                Console.WriteLine($"[DEBUG] Sent seq={packet.Sequence}, frame={opusFrame.Length} bytes");
+            //if (_sequence < 10 || _sequence % 100 == 0)
+            //    Console.WriteLine($"[DEBUG] Sent seq={packet.Sequence}, frame={opusFrame.Length} bytes");
         }
         catch (Exception ex)
         {

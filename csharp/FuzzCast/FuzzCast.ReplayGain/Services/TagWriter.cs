@@ -22,7 +22,8 @@ public class TagWriter
 
             string rgComment = _commentFormat
                 .Replace("{gain:0.00}", result.TrackGain.ToString("0.00", CultureInfo.InvariantCulture))
-                .Replace("{peak:0.000000}", result.TrackPeak.ToString("0.000000", CultureInfo.InvariantCulture));
+                .Replace("{peak:0.000000}", result.TrackPeak.ToString("0.000000", CultureInfo.InvariantCulture))
+                .Replace("{rms:0.00}", result.RmsMaxDb.ToString("0.00", CultureInfo.InvariantCulture));
 
             // Получаем все типы тегов, присутствующие в файле
             TagTypes tagTypes = file.TagTypes;
@@ -33,7 +34,7 @@ public class TagWriter
                 tagTypes = GetDefaultTagType(filePath);
                 if (tagTypes != TagTypes.None)
                 {
-                    file.GetTag(tagTypes, true); // Принудительно создаём
+                    file.GetTag(tagTypes, true);
                 }
             }
 
@@ -59,7 +60,9 @@ public class TagWriter
                         else
                         {
                             var lines = oldComment.Split('\n')
-                                .Where(l => !l.StartsWith("REPLAYGAIN_TRACK_GAIN") && !l.StartsWith("REPLAYGAIN_TRACK_PEAK"))
+                                .Where(l => !l.StartsWith("REPLAYGAIN_TRACK_GAIN")
+                                         && !l.StartsWith("REPLAYGAIN_TRACK_PEAK")
+                                         && !l.StartsWith("REPLAYGAIN_TRACK_RMS"))
                                 .ToList();
 
                             lines.Add(rgComment);

@@ -1,9 +1,13 @@
 ﻿using FuzzCast.Core.Configuration;
 using FuzzCast.Core.Native;
 using FuzzCast.Source;
+using System.Reflection;
 
 var configPath = args.Length > 0 ? args[0] : "appsettings.json";
 var config = ConfigLoader.Load(configPath);
+
+var version = Assembly.GetExecutingAssembly().GetName().Version;
+Console.WriteLine($"FuzzCast Source [{version}]");
 
 Console.WriteLine($"FuzzCast Source starting...");
 Console.WriteLine($"Server: {config.Source.ServerAddress}:{config.Source.ServerPort}");

@@ -69,6 +69,42 @@ public class PlayerEngine
         _currentDecoderChannels = _config.Opus.Channels;
     }
 
+    private static IPAddress ResolveAddress(string address)
+    {
+        // Сначала пробуем распарсить как IP-адрес
+        if (IPAddress.TryParse(address, out var ip))
+        {
+            Console.WriteLine($"[DEBUG] Using IP address directly: {ip}");
+            return ip;
+        }
+
+        // Если не получилось - разрешаем как доменное имя
+        try
+        {
+            Console.WriteLine($"[DEBUG] Resolving hostname: {address}");
+            var hostEntry = Dns.GetHostEntry(address);
+
+            // Предпочитаем IPv4 адрес, если есть
+            var ipv4 = hostEntry.AddressList
+                .FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork);
+
+            if (ipv4 != null)
+            {
+                Console.WriteLine($"[DEBUG] Resolved to: {ipv4}");
+                return ipv4;
+            }
+
+            // Если IPv4 нет, берём первый доступный адрес
+            var firstIp = hostEntry.AddressList.First();
+            Console.WriteLine($"[DEBUG] Resolved to: {firstIp}");
+            return firstIp;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Failed to resolve address: {address}", ex);
+        }
+    }
+
     public void SetSimulatedLoss(double percent)
     {
         _simLossPercent = Math.Clamp(percent, 0, 100);
@@ -249,7 +285,7 @@ public class PlayerEngine
         {
             _udp?.Close();
             _udp = new UdpClient();
-            _serverEndpoint = new IPEndPoint(IPAddress.Parse(_config.Player.ServerAddress), newPort);
+            _serverEndpoint = new IPEndPoint(ResolveAddress(_config.Player.ServerAddress), newPort); // ← ИЗМЕНЕНО
 
             var subscribe = new SubscribePacket(_clientId);
             await _udp.SendAsync(PacketWriter.WriteSubscribe(subscribe), _serverEndpoint);
@@ -273,7 +309,7 @@ public class PlayerEngine
             _udp?.Dispose();
 
             _udp = new UdpClient();
-            _serverEndpoint = new IPEndPoint(IPAddress.Parse(_config.Player.ServerAddress), port);
+            _serverEndpoint = new IPEndPoint(ResolveAddress(_config.Player.ServerAddress), port);
 
             var subscribe = new SubscribePacket(_clientId);
             await _udp.SendAsync(PacketWriter.WriteSubscribe(subscribe), _serverEndpoint, ct);

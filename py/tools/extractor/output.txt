@@ -1,988 +1,272 @@
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Configuration\AppConfig.cs
+Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.ReplayGain\Services\ReplayGainAnalyzer.cs
 ----------------------------------------
-﻿namespace FrostWire.Core.Configuration;
+﻿using FuzzCast.ReplayGain.Models;
+using Un4seen.Bass;
 
-public class AppConfig
-{
-    public ServerConfig Server { get; set; } = new();
-    public SourceConfig Source { get; set; } = new();
-    public PlayerConfig Player { get; set; } = new();
-    public OpusConfig Opus { get; set; } = new();
-}
+namespace FuzzCast.ReplayGain.Services;
 
-public class ServerConfig
+public class ReplayGainAnalyzer
 {
-    public int ListenPort { get; set; } = 5000;
-    public string Password { get; set; } = string.Empty;
-    public int SourceStatusIntervalMs { get; set; } = 3000;
-    public int SourceTimeoutMs { get; set; } = 5000;
-    public int PlayerTimeoutMs { get; set; } = 10000;
-    public int ServerInfoIntervalMs { get; set; } = 5000;
-}
+    private readonly double _referenceLevel;
+    private readonly double _preAmp;
 
-public class SourceConfig
-{
-    public string ServerAddress { get; set; } = "127.0.0.1";
-    public int ServerPort { get; set; } = 5000;
-    public string Password { get; set; } = string.Empty;
-    public string PlaylistPath { get; set; } = "playlist.m3u";
-    public bool Shuffle { get; set; } = true;
-}
+    public ReplayGainAnalyzer(double referenceLevel, double preAmp)
+    {
+        _referenceLevel = referenceLevel;
+        _preAmp = preAmp;
+    }
 
-public class PlayerConfig
-{
-    public string ServerAddress { get; set; } = "127.0.0.1";
-    public int ServerPort { get; set; } = 5000;
-    public int KeepAliveIntervalMs { get; set; } = 3000;
-}
+    public ReplayGainResult Analyze(string filePath)
+    {
+        // Создаём декодер на исходной частоте
+        int stream = Bass.BASS_StreamCreateFile(filePath, 0, 0,
+            BASSFlag.BASS_STREAM_DECODE | BASSFlag.BASS_SAMPLE_FLOAT);
 
-public class OpusConfig
-{
-    public int SampleRate { get; set; } = 48000;
-    public int Channels { get; set; } = 2;
-    public int Bitrate { get; set; } = 128000;
-    public int FrameSize { get; set; } = 20;
-    public int Complexity { get; set; } = 10;
-    public int PacketLossPercent { get; set; } = 0;  // ← добавили
+        if (stream == 0)
+        {
+            return ReplayGainResult.Fail($"Не удалось открыть файл: {Bass.BASS_ErrorGetCode()}");
+        }
+
+        try
+        {
+            BASS_CHANNELINFO info = Bass.BASS_ChannelGetInfo(stream);
+            int channels = info.chans;
+            int sampleRate = info.freq;
+
+            // Если частота не 48 kHz — ресемплим
+            int processStream = stream;
+
+            if (sampleRate != 48000)
+            {
+                processStream = Bass.BASS_StreamCreate(48000, channels,
+                    BASSFlag.BASS_STREAM_DECODE | BASSFlag.BASS_SAMPLE_FLOAT,
+                    BASSStreamProc.STREAMPROC_PUSH);
+
+                // Ресемплим через Bass.BASS_ChannelGetData вручную
+                Bass.BASS_ChannelSetPosition(stream, 0);
+
+                byte[] resampleBuffer = new byte[65536];
+                while (true)
+                {
+                    int len = Bass.BASS_ChannelGetData(stream, resampleBuffer, resampleBuffer.Length);
+                    if (len <= 0) break;
+                    Bass.BASS_StreamPutData(processStream, resampleBuffer, len);
+                }
+                Bass.BASS_StreamPutData(processStream, IntPtr.Zero, (int)BASSStreamProc.BASS_STREAMPROC_END);
+                Bass.BASS_ChannelSetPosition(processStream, 0);
+            }
+
+            try
+            {
+                var kFilter = new KWeightingFilter();
+
+                const int BUFFER_FRAMES = 16384;
+                int bufferSize = BUFFER_FRAMES * channels;
+                float[] buffer = new float[bufferSize];
+
+                double sumSqL = 0.0;
+                double sumSqR = 0.0;
+                long processedFrames = 0;
+
+                while (true)
+                {
+                    int bytesRead = Bass.BASS_ChannelGetData(processStream, buffer, bufferSize * sizeof(float));
+                    if (bytesRead <= 0) break;
+
+                    int samplesRead = bytesRead / sizeof(float);
+                    int framesRead = samplesRead / channels;
+
+                    for (int i = 0; i < framesRead; i++)
+                    {
+                        int idx = i * channels;
+                        float sampleL = buffer[idx];
+                        float sampleR = channels > 1 ? buffer[idx + 1] : sampleL;
+
+                        double filteredL = kFilter.ProcessLeft(sampleL);
+                        double filteredR = kFilter.ProcessRight(sampleR);
+
+                        sumSqL += filteredL * filteredL;
+                        sumSqR += filteredR * filteredR;
+                    }
+
+                    processedFrames += framesRead;
+                }
+
+                // Пики считаем по оригинальному сигналу
+                Bass.BASS_ChannelSetPosition(stream, 0);
+                double peakL = 0.0;
+                double peakR = 0.0;
+                const int PEAK_BUFFER = 4096;
+                float[] peakBuffer = new float[PEAK_BUFFER * channels];
+
+                while (true)
+                {
+                    int bytesRead = Bass.BASS_ChannelGetData(stream, peakBuffer,
+                        PEAK_BUFFER * channels * sizeof(float));
+                    if (bytesRead <= 0) break;
+
+                    int samplesRead = bytesRead / sizeof(float);
+                    int framesRead = samplesRead / channels;
+
+                    for (int i = 0; i < framesRead; i++)
+                    {
+                        int idx = i * channels;
+                        double absL = Math.Abs(peakBuffer[idx]);
+                        double absR = Math.Abs(channels > 1 ? peakBuffer[idx + 1] : peakBuffer[idx]);
+
+                        if (absL > peakL) peakL = absL;
+                        if (absR > peakR) peakR = absR;
+                    }
+                }
+
+                if (processedFrames == 0)
+                    return ReplayGainResult.Fail("Не удалось прочитать сэмплы");
+
+                double rmsTotal = Math.Sqrt((sumSqL + sumSqR) / (processedFrames * 2.0));
+
+                if (rmsTotal < 1e-10)
+                    return ReplayGainResult.Fail("Сигнал слишком тихий");
+
+                double refRms = Math.Pow(10.0, _referenceLevel / 20.0);
+                double gain = 10.0 * Math.Log10((refRms * refRms) / (rmsTotal * rmsTotal)) + _preAmp;
+                double peak = Math.Max(peakL, peakR);
+
+                return new ReplayGainResult
+                {
+                    Success = true,
+                    RmsLeft = Math.Sqrt(sumSqL / processedFrames),
+                    RmsRight = Math.Sqrt(sumSqR / processedFrames),
+                    PeakLeft = peakL,
+                    PeakRight = peakR,
+                    TrackGain = Math.Round(gain, 2),
+                    TrackPeak = Math.Round(peak, 6)
+                };
+            }
+            finally
+            {
+                if (processStream != stream)
+                    Bass.BASS_StreamFree(processStream);
+            }
+        }
+        finally
+        {
+            Bass.BASS_StreamFree(stream);
+        }
+    }
 }
 ----------------------------------------
 
 ================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Configuration\ConfigLoader.cs
+Файл: D:\Evgeny\git\MyTools\csharp\FuzzCast\FuzzCast.ReplayGain\Services\TagWriter.cs
 ----------------------------------------
-﻿using System.Text.Json;
+﻿using System.Globalization;
+using FuzzCast.ReplayGain.Models;
+using FuzzCast.ReplayGain.Helpers;
+using TagLib;
 
-namespace FrostWire.Core.Configuration;
+namespace FuzzCast.ReplayGain.Services;
 
-public static class ConfigLoader
+public class TagWriter
 {
-    public static AppConfig Load(string path)
-    {
-        if (!File.Exists(path))
-        {
-            var defaultConfig = new AppConfig();
-            Save(path, defaultConfig);
-            Console.WriteLine($"Config file created: {path}");
-            return defaultConfig;
-        }
+    private readonly string _commentFormat;
 
-        var json = File.ReadAllText(path);
-        return JsonSerializer.Deserialize<AppConfig>(json) ?? new AppConfig();
+    public TagWriter(string commentFormat)
+    {
+        _commentFormat = commentFormat;
     }
 
-    public static void Save(string path, AppConfig config)
+    public bool Write(string filePath, ReplayGainResult result)
     {
-        var options = new JsonSerializerOptions { WriteIndented = true };
-        var json = JsonSerializer.Serialize(config, options);
-        File.WriteAllText(path, json);
-    }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Native\OpusDecoder.cs
-----------------------------------------
-﻿namespace FrostWire.Core.Native;
-
-public class OpusDecoder : IDisposable
-{
-    private readonly IntPtr _handle;
-    private readonly int _sampleRate;
-
-    public OpusDecoder(int sampleRate, int channels)
-    {
-        _sampleRate = sampleRate;
-        _handle = OpusNative.opus_decoder_create(sampleRate, channels, out int error);
-
-        if (error != 0)
+        try
         {
-            string[] errorNames = { "OK", "BadArg", "BufferTooSmall", "InternalError", "InvalidPacket", "Unimplemented", "InvalidState", "AllocFail" };
-            string errorName = error < errorNames.Length ? errorNames[error] : $"Unknown({error})";
-            throw new InvalidOperationException($"Opus decoder error: {errorName}");
+            using var file = TagLib.File.Create(filePath);
+
+            string rgComment = _commentFormat
+                .Replace("{gain:0.00}", result.TrackGain.ToString("0.00", CultureInfo.InvariantCulture))
+                .Replace("{peak:0.000000}", result.TrackPeak.ToString("0.000000", CultureInfo.InvariantCulture));
+
+            // Получаем все типы тегов, присутствующие в файле
+            TagTypes tagTypes = file.TagTypes;
+
+            // Если тегов нет — создаём дефолтный для формата
+            if (tagTypes == TagTypes.None)
+            {
+                tagTypes = GetDefaultTagType(filePath);
+                if (tagTypes != TagTypes.None)
+                {
+                    file.GetTag(tagTypes, true); // Принудительно создаём
+                }
+            }
+
+            // Проходим по каждому типу тегов и записываем RG
+            foreach (TagTypes tagType in Enum.GetValues<TagTypes>())
+            {
+                if (tagType == TagTypes.None || !tagTypes.HasFlag(tagType))
+                    continue;
+
+                try
+                {
+                    var tag = file.GetTag(tagType);
+                    if (tag != null)
+                    {
+                        string? oldComment = tag.Comment;
+
+                        if (string.IsNullOrEmpty(oldComment) || !oldComment.Contains("REPLAYGAIN_TRACK_GAIN"))
+                        {
+                            tag.Comment = string.IsNullOrEmpty(oldComment)
+                                ? rgComment
+                                : oldComment + "\n" + rgComment;
+                        }
+                        else
+                        {
+                            var lines = oldComment.Split('\n')
+                                .Where(l => !l.StartsWith("REPLAYGAIN_TRACK_GAIN") && !l.StartsWith("REPLAYGAIN_TRACK_PEAK"))
+                                .ToList();
+
+                            lines.Add(rgComment);
+                            tag.Comment = string.Join("\n", lines);
+                        }
+                    }
+                }
+                catch
+                {
+                    // Пропускаем типы тегов, которые не поддерживаются в этом формате
+                }
+            }
+
+            file.Save();
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            Logger.Warn($"{Path.GetFileName(filePath)} -> Нет прав на запись тегов");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Logger.Error($"{Path.GetFileName(filePath)} -> Ошибка записи тегов: {ex.Message}");
+            return false;
         }
     }
 
-    public (int frameMs, int packetBytes, string bandwidth, int decodedSamples)? Decode(byte[]? opusData, short[] pcm, bool fec = false)
+    private static TagTypes GetDefaultTagType(string filePath)
     {
-        if (opusData == null || opusData.Length == 0)
-        {
-            int plcSamples = OpusNative.opus_decode(_handle, null, 0, pcm, _sampleRate * 60 / 1000, 1);
-            if (plcSamples <= 0)
-                return null;
-            int frameMs = plcSamples * 1000 / _sampleRate;
-            return (frameMs, 0, "PLC", plcSamples);
-        }
+        string ext = Path.GetExtension(filePath).ToLowerInvariant();
 
-        int frameSize = OpusNative.opus_packet_get_nb_samples(opusData, opusData.Length, _sampleRate);
-        if (frameSize <= 0)
-            return null;
-
-        int bandwidthCode = OpusNative.opus_packet_get_bandwidth(opusData, opusData.Length);
-        string bandwidth = bandwidthCode switch
+        return ext switch
         {
-            1101 => "NB",
-            1102 => "MB",
-            1103 => "WB",
-            1104 => "SWB",
-            1105 => "FB",
-            _ => "??"
+            ".mp3" => TagTypes.Id3v2,
+            ".flac" => TagTypes.Xiph,
+            ".ogg" => TagTypes.Xiph,
+            ".opus" => TagTypes.Xiph,
+            ".wav" => TagTypes.RiffInfo,
+            ".wma" => TagTypes.Asf,
+            ".m4a" => TagTypes.Apple,
+            ".aac" => TagTypes.Apple,
+            ".ape" => TagTypes.Ape,
+            ".wv" => TagTypes.Ape,
+            _ => TagTypes.None
         };
-
-        int decodedSamples = OpusNative.opus_decode(_handle, opusData, opusData.Length, pcm, frameSize, fec ? 1 : 0);
-        if (decodedSamples <= 0)
-            return null;
-
-        int decodedFrameMs = decodedSamples * 1000 / _sampleRate;
-        return (decodedFrameMs, opusData.Length, bandwidth, decodedSamples);
-    }
-
-    public void Dispose()
-    {
-        if (_handle != IntPtr.Zero)
-        {
-            OpusNative.opus_decoder_destroy(_handle);
-        }
-    }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Native\OpusEncoder.cs
-----------------------------------------
-﻿namespace FrostWire.Core.Native;
-
-/// <summary>
-/// Managed обёртка для Opus энкодера.
-/// Замена Concentus OpusCodecFactory.CreateEncoder().
-/// </summary>
-public class OpusEncoder : IDisposable
-{
-    private readonly IntPtr _handle;
-    private readonly int _sampleRate;
-    private readonly int _channels;
-    private readonly int _frameSize; // samples per channel
-
-    public OpusEncoder(int sampleRate, int channels, OpusApplication application, int frameSizeMs = 20)
-    {
-        _sampleRate = sampleRate;
-        _channels = channels;
-        _frameSize = sampleRate * frameSizeMs / 1000;
-
-        _handle = OpusNative.opus_encoder_create(sampleRate, channels, (int)application, out int error);
-
-        if (error != 0)
-        {
-            string[] errorNames = { "OK", "BadArg", "BufferTooSmall", "InternalError", "InvalidPacket", "Unimplemented", "InvalidState", "AllocFail" };
-            string errorName = error < errorNames.Length ? errorNames[error] : $"Unknown({error})";
-            throw new InvalidOperationException($"Opus encoder error: {errorName}");
-        }
-    }
-
-    public int Bitrate
-    {
-        set => OpusNative.opus_encoder_ctl(_handle, 4002, value); // OPUS_SET_BITRATE
-    }
-
-    public int Complexity
-    {
-        set => OpusNative.opus_encoder_ctl(_handle, 4010, value); // OPUS_SET_COMPLEXITY
-    }
-
-    public bool Vbr
-    {
-        set => OpusNative.opus_encoder_ctl(_handle, 4006, value ? 1 : 0); // OPUS_SET_VBR
-    }
-
-    public bool InbandFec
-    {
-        set => OpusNative.opus_encoder_ctl(_handle, 4012, value ? 1 : 0); // OPUS_SET_INBAND_FEC
-    }
-
-    public int PacketLossPercent
-    {
-        set => OpusNative.opus_encoder_ctl(_handle, 4014, value); // OPUS_SET_PACKET_LOSS_PERC
-    }
-
-    public bool Dtx
-    {
-        set => OpusNative.opus_encoder_ctl(_handle, 4016, value ? 1 : 0); // OPUS_SET_DTX
-    }
-
-    public OpusSignal SignalType
-    {
-        set => OpusNative.opus_encoder_ctl(_handle, 4024, (int)value); // OPUS_SET_SIGNAL
-    }
-
-    public OpusBandwidth MaxBandwidth
-    {
-        set => OpusNative.opus_encoder_ctl(_handle, 4008, (int)value); // OPUS_SET_MAX_BANDWIDTH
-    }
-
-    public int Encode(short[] pcm, byte[] output)
-    {
-        return OpusNative.opus_encode(_handle, pcm, _frameSize, output, output.Length);
-    }
-
-    public int Encode(ReadOnlySpan<short> pcm, Span<byte> output)
-    {
-        short[] pcmArray = pcm.ToArray();
-        byte[] outArray = new byte[output.Length];
-        int result = OpusNative.opus_encode(_handle, pcmArray, _frameSize, outArray, outArray.Length);
-        outArray.AsSpan(0, result).CopyTo(output);
-        return result;
-    }
-
-    public void Dispose()
-    {
-        if (_handle != IntPtr.Zero)
-        {
-            OpusNative.opus_encoder_destroy(_handle);
-        }
-    }
-}
-
-public enum OpusApplication
-{
-    Voip = 2048,
-    Audio = 2049,
-    RestrictedLowDelay = 2051
-}
-
-public enum OpusSignal
-{
-    Auto = -1000,
-    Voice = 3001,
-    Music = 3002
-}
-
-public enum OpusBandwidth
-{
-    Auto = -1000,
-    Narrowband = 1101,
-    Mediumband = 1102,
-    Wideband = 1103,
-    SuperWideband = 1104,
-    Fullband = 1105
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Native\OpusNative.cs
-----------------------------------------
-﻿using System.Runtime.InteropServices;
-
-namespace FrostWire.Core.Native;
-
-public static class OpusNative
-{
-    private const string WinX64 = "runtimes/native/libopus-x64.dll";
-    private const string LinuxX64 = "runtimes/native/libopus-x64.so";
-    private const string LinuxArm64 = "runtimes/native/libopus-aarch64.so";
-
-    static OpusNative()
-    {
-        string libPath = GetLibraryPath();
-        if (NativeLibrary.TryLoad(libPath, out _))
-        {
-            Console.WriteLine($"[Opus] Loaded: {libPath}");
-        }
-        else
-        {
-            Console.WriteLine($"[Opus] Failed to load: {libPath}");
-        }
-    }
-
-    private static string GetLibraryPath()
-    {
-        if (OperatingSystem.IsWindows())
-            return WinX64;
-
-        if (OperatingSystem.IsLinux())
-        {
-            Architecture arch = RuntimeInformation.ProcessArchitecture;
-            return arch == Architecture.Arm64 ? LinuxArm64 : LinuxX64;
-        }
-
-        throw new PlatformNotSupportedException("Unsupported OS/Architecture");
-    }
-
-    #region Encoder
-
-    [DllImport(WinX64, EntryPoint = "opus_encoder_create", CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr encoder_create_win(int sampleRate, int channels, int application, out int error);
-
-    [DllImport(LinuxX64, EntryPoint = "opus_encoder_create", CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr encoder_create_linux_x64(int sampleRate, int channels, int application, out int error);
-
-    [DllImport(LinuxArm64, EntryPoint = "opus_encoder_create", CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr encoder_create_linux_arm64(int sampleRate, int channels, int application, out int error);
-
-    public static IntPtr opus_encoder_create(int sampleRate, int channels, int application, out int error)
-    {
-        if (OperatingSystem.IsWindows())
-            return encoder_create_win(sampleRate, channels, application, out error);
-        if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-            return encoder_create_linux_arm64(sampleRate, channels, application, out error);
-        return encoder_create_linux_x64(sampleRate, channels, application, out error);
-    }
-
-    [DllImport(WinX64, EntryPoint = "opus_encode", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int encode_win(IntPtr st, short[] pcm, int frameSize, byte[] data, int maxDataBytes);
-
-    [DllImport(LinuxX64, EntryPoint = "opus_encode", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int encode_linux_x64(IntPtr st, short[] pcm, int frameSize, byte[] data, int maxDataBytes);
-
-    [DllImport(LinuxArm64, EntryPoint = "opus_encode", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int encode_linux_arm64(IntPtr st, short[] pcm, int frameSize, byte[] data, int maxDataBytes);
-
-    public static int opus_encode(IntPtr st, short[] pcm, int frameSize, byte[] data, int maxDataBytes)
-    {
-        if (OperatingSystem.IsWindows())
-            return encode_win(st, pcm, frameSize, data, maxDataBytes);
-        if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-            return encode_linux_arm64(st, pcm, frameSize, data, maxDataBytes);
-        return encode_linux_x64(st, pcm, frameSize, data, maxDataBytes);
-    }
-
-    [DllImport(WinX64, EntryPoint = "opus_encoder_ctl", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int encoder_ctl_win(IntPtr st, int request, int value);
-
-    [DllImport(LinuxX64, EntryPoint = "opus_encoder_ctl", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int encoder_ctl_linux_x64(IntPtr st, int request, int value);
-
-    [DllImport(LinuxArm64, EntryPoint = "opus_encoder_ctl", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int encoder_ctl_linux_arm64(IntPtr st, int request, int value);
-
-    public static int opus_encoder_ctl(IntPtr st, int request, int value)
-    {
-        if (OperatingSystem.IsWindows())
-            return encoder_ctl_win(st, request, value);
-        if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-            return encoder_ctl_linux_arm64(st, request, value);
-        return encoder_ctl_linux_x64(st, request, value);
-    }
-
-    [DllImport(WinX64, EntryPoint = "opus_encoder_destroy", CallingConvention = CallingConvention.Cdecl)]
-    private static extern void encoder_destroy_win(IntPtr st);
-
-    [DllImport(LinuxX64, EntryPoint = "opus_encoder_destroy", CallingConvention = CallingConvention.Cdecl)]
-    private static extern void encoder_destroy_linux_x64(IntPtr st);
-
-    [DllImport(LinuxArm64, EntryPoint = "opus_encoder_destroy", CallingConvention = CallingConvention.Cdecl)]
-    private static extern void encoder_destroy_linux_arm64(IntPtr st);
-
-    public static void opus_encoder_destroy(IntPtr st)
-    {
-        if (OperatingSystem.IsWindows())
-            encoder_destroy_win(st);
-        else if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-            encoder_destroy_linux_arm64(st);
-        else
-            encoder_destroy_linux_x64(st);
-    }
-
-    #endregion
-
-    #region Decoder
-
-    [DllImport(WinX64, EntryPoint = "opus_decoder_create", CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr decoder_create_win(int sampleRate, int channels, out int error);
-
-    [DllImport(LinuxX64, EntryPoint = "opus_decoder_create", CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr decoder_create_linux_x64(int sampleRate, int channels, out int error);
-
-    [DllImport(LinuxArm64, EntryPoint = "opus_decoder_create", CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr decoder_create_linux_arm64(int sampleRate, int channels, out int error);
-
-    public static IntPtr opus_decoder_create(int sampleRate, int channels, out int error)
-    {
-        if (OperatingSystem.IsWindows())
-            return decoder_create_win(sampleRate, channels, out error);
-        if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-            return decoder_create_linux_arm64(sampleRate, channels, out error);
-        return decoder_create_linux_x64(sampleRate, channels, out error);
-    }
-
-    [DllImport(WinX64, EntryPoint = "opus_decode", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int decode_win(IntPtr st, byte[] data, int len, short[] pcm, int frameSize, int decodeFec);
-
-    [DllImport(LinuxX64, EntryPoint = "opus_decode", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int decode_linux_x64(IntPtr st, byte[] data, int len, short[] pcm, int frameSize, int decodeFec);
-
-    [DllImport(LinuxArm64, EntryPoint = "opus_decode", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int decode_linux_arm64(IntPtr st, byte[] data, int len, short[] pcm, int frameSize, int decodeFec);
-
-    public static int opus_decode(IntPtr st, byte[] data, int len, short[] pcm, int frameSize, int decodeFec)
-    {
-        if (OperatingSystem.IsWindows())
-            return decode_win(st, data, len, pcm, frameSize, decodeFec);
-        if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-            return decode_linux_arm64(st, data, len, pcm, frameSize, decodeFec);
-        return decode_linux_x64(st, data, len, pcm, frameSize, decodeFec);
-    }
-
-    [DllImport(WinX64, EntryPoint = "opus_decoder_destroy", CallingConvention = CallingConvention.Cdecl)]
-    private static extern void decoder_destroy_win(IntPtr st);
-
-    [DllImport(LinuxX64, EntryPoint = "opus_decoder_destroy", CallingConvention = CallingConvention.Cdecl)]
-    private static extern void decoder_destroy_linux_x64(IntPtr st);
-
-    [DllImport(LinuxArm64, EntryPoint = "opus_decoder_destroy", CallingConvention = CallingConvention.Cdecl)]
-    private static extern void decoder_destroy_linux_arm64(IntPtr st);
-
-    public static void opus_decoder_destroy(IntPtr st)
-    {
-        if (OperatingSystem.IsWindows())
-            decoder_destroy_win(st);
-        else if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-            decoder_destroy_linux_arm64(st);
-        else
-            decoder_destroy_linux_x64(st);
-    }
-
-    #endregion
-
-    #region Utility
-
-    [DllImport(WinX64, EntryPoint = "opus_packet_get_nb_samples", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int packet_get_nb_samples_win(byte[] packet, int len, int sampleRate);
-
-    [DllImport(LinuxX64, EntryPoint = "opus_packet_get_nb_samples", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int packet_get_nb_samples_linux_x64(byte[] packet, int len, int sampleRate);
-
-    [DllImport(LinuxArm64, EntryPoint = "opus_packet_get_nb_samples", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int packet_get_nb_samples_linux_arm64(byte[] packet, int len, int sampleRate);
-
-    public static int opus_packet_get_nb_samples(byte[] packet, int len, int sampleRate)
-    {
-        if (OperatingSystem.IsWindows())
-            return packet_get_nb_samples_win(packet, len, sampleRate);
-        if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-            return packet_get_nb_samples_linux_arm64(packet, len, sampleRate);
-        return packet_get_nb_samples_linux_x64(packet, len, sampleRate);
-    }
-
-    [DllImport(WinX64, EntryPoint = "opus_packet_get_bandwidth", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int packet_get_bandwidth_win(byte[] packet, int len);
-
-    [DllImport(LinuxX64, EntryPoint = "opus_packet_get_bandwidth", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int packet_get_bandwidth_linux_x64(byte[] packet, int len);
-
-    [DllImport(LinuxArm64, EntryPoint = "opus_packet_get_bandwidth", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int packet_get_bandwidth_linux_arm64(byte[] packet, int len);
-
-    public static int opus_packet_get_bandwidth(byte[] packet, int len)
-    {
-        if (OperatingSystem.IsWindows())
-            return packet_get_bandwidth_win(packet, len);
-        if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-            return packet_get_bandwidth_linux_arm64(packet, len);
-        return packet_get_bandwidth_linux_x64(packet, len);
-    }
-
-    [DllImport(WinX64, EntryPoint = "opus_packet_get_samples_per_frame", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int packet_get_samples_per_frame_win(byte[] packet, int sampleRate);
-
-    [DllImport(LinuxX64, EntryPoint = "opus_packet_get_samples_per_frame", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int packet_get_samples_per_frame_linux_x64(byte[] packet, int sampleRate);
-
-    [DllImport(LinuxArm64, EntryPoint = "opus_packet_get_samples_per_frame", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int packet_get_samples_per_frame_linux_arm64(byte[] packet, int sampleRate);
-
-    public static int opus_packet_get_samples_per_frame(byte[] packet, int sampleRate)
-    {
-        if (OperatingSystem.IsWindows())
-            return packet_get_samples_per_frame_win(packet, sampleRate);
-        if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-            return packet_get_samples_per_frame_linux_arm64(packet, sampleRate);
-        return packet_get_samples_per_frame_linux_x64(packet, sampleRate);
-    }
-
-    #endregion
-
-    #region Version
-
-    [DllImport(WinX64, EntryPoint = "opus_get_version_string", CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr version_win();
-
-    [DllImport(LinuxX64, EntryPoint = "opus_get_version_string", CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr version_linux_x64();
-
-    [DllImport(LinuxArm64, EntryPoint = "opus_get_version_string", CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr version_linux_arm64();
-
-    public static string opus_get_version_string()
-    {
-        IntPtr ptr;
-        if (OperatingSystem.IsWindows())
-            ptr = version_win();
-        else if (OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-            ptr = version_linux_arm64();
-        else
-            ptr = version_linux_x64();
-
-        return Marshal.PtrToStringAnsi(ptr) ?? "unknown";
-    }
-
-    #endregion
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\PacketReader.cs
-----------------------------------------
-﻿using System.Text;
-using FrostWire.Core.Protocol.Models;
-
-namespace FrostWire.Core.Protocol;
-
-public static class PacketReader
-{
-    public static byte GetPacketType(byte[] data)
-    {
-        if (data.Length < 1)
-            throw new ArgumentException("Packet too short");
-        return data[0];
-    }
-
-    // ─── AUDIO (от Source, с паролем) ─────────────────────────
-
-    public static AudioPacket ReadAudioFromSource(byte[] data)
-    {
-        // Минимум: Type(1) + MD5(16) + Seq(4) + Timestamp(8) + MetaLen(2) = 31
-        if (data.Length < 31)
-            throw new ArgumentException($"Audio packet too short: {data.Length}");
-
-        int offset = 1;
-
-        byte[] passwordMD5 = new byte[16];
-        Buffer.BlockCopy(data, offset, passwordMD5, 0, 16);
-        offset += 16;
-
-        uint sequence = BitConverter.ToUInt32(data, offset);
-        offset += 4;
-
-        long timestamp = BitConverter.ToInt64(data, offset);
-        offset += 8;
-
-        ushort metaLen = BitConverter.ToUInt16(data, offset);
-        offset += 2;
-
-        TrackMetadata? metadata = null;
-        if (metaLen > 0)
-        {
-            if (offset + metaLen > data.Length)
-                throw new ArgumentException("Metadata length exceeds packet size");
-
-            byte[] metaBytes = new byte[metaLen];
-            Buffer.BlockCopy(data, offset, metaBytes, 0, metaLen);
-            metadata = TrackMetadata.Deserialize(metaBytes);
-            offset += metaLen;
-        }
-
-        int opusLen = data.Length - offset;
-        byte[] opusFrame = new byte[opusLen];
-        Buffer.BlockCopy(data, offset, opusFrame, 0, opusLen);
-
-        return new AudioPacket
-        {
-            PasswordMD5 = passwordMD5,
-            Sequence = sequence,
-            Timestamp = timestamp,
-            Metadata = metadata,
-            OpusFrame = opusFrame
-        };
-    }
-
-    // ─── AUDIO (от Сервера, без пароля) ───────────────────────
-
-    public static AudioPacket ReadAudioFromServer(byte[] data)
-    {
-        // Минимум: Type(1) + Seq(4) + Timestamp(8) + MetaLen(2) = 15
-        if (data.Length < 15)
-            throw new ArgumentException($"Audio packet too short: {data.Length}");
-
-        int offset = 1;
-
-        uint sequence = BitConverter.ToUInt32(data, offset);
-        offset += 4;
-
-        long timestamp = BitConverter.ToInt64(data, offset);
-        offset += 8;
-
-        ushort metaLen = BitConverter.ToUInt16(data, offset);
-        offset += 2;
-
-        TrackMetadata? metadata = null;
-        if (metaLen > 0)
-        {
-            if (offset + metaLen > data.Length)
-                throw new ArgumentException("Metadata length exceeds packet size");
-
-            byte[] metaBytes = new byte[metaLen];
-            Buffer.BlockCopy(data, offset, metaBytes, 0, metaLen);
-            metadata = TrackMetadata.Deserialize(metaBytes);
-            offset += metaLen;
-        }
-
-        int opusLen = data.Length - offset;
-        byte[] opusFrame = new byte[opusLen];
-        Buffer.BlockCopy(data, offset, opusFrame, 0, opusLen);
-
-        return new AudioPacket
-        {
-            Sequence = sequence,
-            Timestamp = timestamp,
-            Metadata = metadata,
-            OpusFrame = opusFrame
-        };
-    }
-
-    // ─── SOURCE_STATUS ─────────────────────────────────────────
-
-    public static SourceStatusPacket ReadSourceStatus(byte[] data)
-    {
-        if (data.Length < 13)
-            throw new ArgumentException($"SourceStatus packet too short: {data.Length}");
-
-        return new SourceStatusPacket
-        {
-            Timestamp = BitConverter.ToInt64(data, 1),
-            ClientsCount = BitConverter.ToInt32(data, 9)
-        };
-    }
-
-    // ─── SUBSCRIBE ─────────────────────────────────────────────
-
-    public static SubscribePacket ReadSubscribe(byte[] data)
-    {
-        if (data.Length < 17)
-            throw new ArgumentException($"Subscribe packet too short: {data.Length}");
-
-        byte[] clientId = new byte[16];
-        Buffer.BlockCopy(data, 1, clientId, 0, 16);
-
-        return new SubscribePacket { ClientId = clientId };
-    }
-
-    // ─── KEEPALIVE ─────────────────────────────────────────────
-
-    public static KeepAlivePacket ReadKeepAlive(byte[] data)
-    {
-        if (data.Length < 17)
-            throw new ArgumentException($"KeepAlive packet too short: {data.Length}");
-
-        byte[] clientId = new byte[16];
-        Buffer.BlockCopy(data, 1, clientId, 0, 16);
-
-        return new KeepAlivePacket { ClientId = clientId };
-    }
-
-    // ─── SERVER_INFO ───────────────────────────────────────────
-
-    public static ServerInfoPacket ReadServerInfo(byte[] data)
-    {
-        if (data.Length < 22)
-            throw new ArgumentException($"ServerInfo packet too short: {data.Length}");
-
-        return new ServerInfoPacket
-        {
-            Timestamp = BitConverter.ToInt64(data, 1),
-            Uptime = BitConverter.ToUInt32(data, 9),
-            Status = data[13],
-            ClientsCount = BitConverter.ToInt32(data, 14),
-            TrackPosition = BitConverter.ToUInt32(data, 18)
-        };
-    }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\PacketTypes.cs
-----------------------------------------
-﻿namespace FrostWire.Core.Protocol;
-
-public static class PacketTypes
-{
-    public const byte Subscribe = 0x10;
-    public const byte KeepAlive = 0x12;
-    public const byte Audio = 0x20;
-    public const byte SourceStatus = 0x21;
-    public const byte ServerInfo = 0x30;
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\PacketWriter.cs
-----------------------------------------
-﻿using System.Text;
-using FrostWire.Core.Protocol.Models;
-
-namespace FrostWire.Core.Protocol;
-
-public static class PacketWriter
-{
-    // ─── Общие методы для записи в буфер ─────────────────────
-
-    /// <summary>
-    /// Записывает базовую структуру Audio пакета (без MD5)
-    /// </summary>
-    private static byte[] WriteAudioPacketBase(AudioPacket packet, bool includePassword)
-    {
-        if (includePassword)
-        {
-            if (packet.PasswordMD5 == null || packet.PasswordMD5.Length != 16)
-                throw new ArgumentException("PasswordMD5 must be 16 bytes");
-        }
-
-        byte[] metaBytes = packet.Metadata?.Serialize() ?? Array.Empty<byte>();
-        if (metaBytes.Length > ushort.MaxValue)
-            throw new ArgumentException("Metadata too large");
-
-        int headerSize = 1 + 4 + 8 + 2; // Type + Seq + Timestamp + MetaLen
-        if (includePassword)
-            headerSize += 16; // + MD5
-
-        int totalLen = headerSize + metaBytes.Length + packet.OpusFrame.Length;
-        byte[] buffer = new byte[totalLen];
-        int offset = 0;
-
-        // Type
-        buffer[offset++] = PacketTypes.Audio;
-
-        // Password MD5 (если нужно)
-        if (includePassword)
-        {
-            Buffer.BlockCopy(packet.PasswordMD5!, 0, buffer, offset, 16);
-            offset += 16;
-        }
-
-        // Sequence
-        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 4), packet.Sequence);
-        offset += 4;
-
-        // Timestamp
-        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 8), packet.Timestamp);
-        offset += 8;
-
-        // Metadata length + data
-        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 2), (ushort)metaBytes.Length);
-        offset += 2;
-
-        if (metaBytes.Length > 0)
-        {
-            Buffer.BlockCopy(metaBytes, 0, buffer, offset, metaBytes.Length);
-            offset += metaBytes.Length;
-        }
-
-        // Opus frame
-        Buffer.BlockCopy(packet.OpusFrame, 0, buffer, offset, packet.OpusFrame.Length);
-
-        return buffer;
-    }
-
-    // ─── AUDIO (Source → Server) ───────────────────────────────
-    // [0x20] [MD5:16] [Seq:4] [Timestamp:8] [MetaLen:2] [MetaJSON:N] [OpusFrame:M]
-
-    public static byte[] WriteAudioFromSource(AudioPacket packet)
-    {
-        return WriteAudioPacketBase(packet, includePassword: true);
-    }
-
-    // ─── AUDIO (Server → Player) ──────────────────────────────
-    // [0x20] [Seq:4] [Timestamp:8] [MetaLen:2] [MetaJSON:N] [OpusFrame:M]
-
-    public static byte[] WriteAudioToPlayer(AudioPacket packet)
-    {
-        return WriteAudioPacketBase(packet, includePassword: false);
-    }
-
-    // ─── SOURCE_STATUS ─────────────────────────────────────────
-    // [0x21] [Timestamp:8] [ClientsCount:4]
-
-    public static byte[] WriteSourceStatus(SourceStatusPacket packet)
-    {
-        byte[] buffer = new byte[1 + 8 + 4];
-        int offset = 0;
-
-        buffer[offset++] = PacketTypes.SourceStatus;
-        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 8), packet.Timestamp);
-        offset += 8;
-        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 4), packet.ClientsCount);
-
-        return buffer;
-    }
-
-    // ─── SUBSCRIBE ─────────────────────────────────────────────
-    // [0x10] [ClientId:16]
-
-    public static byte[] WriteSubscribe(SubscribePacket packet)
-    {
-        if (packet.ClientId.Length != 16)
-            throw new ArgumentException("ClientId must be 16 bytes");
-
-        byte[] buffer = new byte[1 + 16];
-        buffer[0] = PacketTypes.Subscribe;
-        Buffer.BlockCopy(packet.ClientId, 0, buffer, 1, 16);
-
-        return buffer;
-    }
-
-    // ─── KEEPALIVE ─────────────────────────────────────────────
-    // [0x12] [ClientId:16]
-
-    public static byte[] WriteKeepAlive(KeepAlivePacket packet)
-    {
-        if (packet.ClientId.Length != 16)
-            throw new ArgumentException("ClientId must be 16 bytes");
-
-        byte[] buffer = new byte[1 + 16];
-        buffer[0] = PacketTypes.KeepAlive;
-        Buffer.BlockCopy(packet.ClientId, 0, buffer, 1, 16);
-
-        return buffer;
-    }
-
-    // ─── SERVER_INFO ───────────────────────────────────────────
-    // [0x30] [Timestamp:8] [Uptime:4] [Status:1] [ClientsCount:4] [TrackPosition:4]
-
-    public static byte[] WriteServerInfo(ServerInfoPacket packet)
-    {
-        byte[] buffer = new byte[1 + 8 + 4 + 1 + 4 + 4];
-        int offset = 0;
-
-        buffer[offset++] = PacketTypes.ServerInfo;
-        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 8), packet.Timestamp);
-        offset += 8;
-        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 4), packet.Uptime);
-        offset += 4;
-        buffer[offset++] = packet.Status;
-        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 4), packet.ClientsCount);
-        offset += 4;
-        BitConverter.TryWriteBytes(buffer.AsSpan(offset, 4), packet.TrackPosition);
-
-        return buffer;
-    }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\Models\AudioPacket.cs
-----------------------------------------
-﻿namespace FrostWire.Core.Protocol.Models;
-
-public class AudioPacket
-{
-    public byte[]? PasswordMD5 { get; set; }
-    public uint Sequence { get; set; }
-    public long Timestamp { get; set; }
-    public TrackMetadata? Metadata { get; set; }
-    public byte[] OpusFrame { get; set; } = Array.Empty<byte>();
-
-    public bool HasPassword => PasswordMD5 is { Length: 16 };
-    public bool HasMetadata => Metadata != null && !Metadata.IsEmpty;
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\Models\KeepAlivePacket.cs
-----------------------------------------
-﻿namespace FrostWire.Core.Protocol.Models;
-
-public class KeepAlivePacket
-{
-    public byte[] ClientId { get; set; } = Array.Empty<byte>();
-
-    public KeepAlivePacket()
-    {
-    }
-
-    public KeepAlivePacket(Guid clientId)
-    {
-        ClientId = clientId.ToByteArray();
-    }
-
-    public Guid GetClientId() => new Guid(ClientId);
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\Models\ServerInfoPacket.cs
-----------------------------------------
-﻿namespace FrostWire.Core.Protocol.Models;
-
-public class ServerInfoPacket
-{
-    public const byte StatusLive = 0x01;
-    public const byte StatusNoSource = 0x02;
-    public const byte StatusShuttingDown = 0x03;
-
-    public long Timestamp { get; set; }
-    public uint Uptime { get; set; }
-    public byte Status { get; set; }
-    public int ClientsCount { get; set; }
-    public uint TrackPosition { get; set; }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\Models\SourceStatusPacket.cs
-----------------------------------------
-﻿namespace FrostWire.Core.Protocol.Models;
-
-public class SourceStatusPacket
-{
-    public long Timestamp { get; set; }
-    public int ClientsCount { get; set; }
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\Models\SubscribePacket.cs
-----------------------------------------
-﻿namespace FrostWire.Core.Protocol.Models;
-
-public class SubscribePacket
-{
-    public byte[] ClientId { get; set; } = Array.Empty<byte>();
-
-    public SubscribePacket()
-    {
-    }
-
-    public SubscribePacket(Guid clientId)
-    {
-        ClientId = clientId.ToByteArray();
-    }
-
-    public Guid GetClientId() => new Guid(ClientId);
-}
-----------------------------------------
-
-================================================================================
-Файл: D:\Evgeny\git\MyTools\csharp\FrostWire\FrostWire.Core\Protocol\Models\TrackMetadata.cs
-----------------------------------------
-﻿namespace FrostWire.Core.Protocol.Models;
-
-public class TrackMetadata
-{
-    public string Title { get; set; } = string.Empty;
-    public string Artist { get; set; } = string.Empty;
-    public string Album { get; set; } = string.Empty;
-    public double Duration { get; set; }
-
-    public bool IsEmpty => string.IsNullOrEmpty(Title) && string.IsNullOrEmpty(Artist);
-
-    public byte[] Serialize()
-    {
-        var json = System.Text.Json.JsonSerializer.Serialize(this);
-        return System.Text.Encoding.UTF8.GetBytes(json);
-    }
-
-    public static TrackMetadata Deserialize(byte[] data)
-    {
-        var json = System.Text.Encoding.UTF8.GetString(data);
-        return System.Text.Json.JsonSerializer.Deserialize<TrackMetadata>(json) ?? new TrackMetadata();
     }
 }
 ----------------------------------------

@@ -209,7 +209,7 @@ public class PlaylistManager : IDisposable
 
     private void StartWatching()
     {
-        var directory = Path.GetDirectoryName(_playlistPath);
+        var directory = Path.GetDirectoryName(Path.GetFullPath(_playlistPath));
         var filename = Path.GetFileName(_playlistPath);
 
         if (directory == null || filename == null)

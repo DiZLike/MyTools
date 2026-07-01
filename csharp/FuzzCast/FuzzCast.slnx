@@ -3,14 +3,14 @@
     <Platform Name="Any CPU" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="FrostWire.Core/FuzzCast.Core.csproj" Id="6b022e3b-a110-4400-8af4-8e9b4c649675">
+  <Project Path="FuzzCast.Core/FuzzCast.Core.csproj" Id="6b022e3b-a110-4400-8af4-8e9b4c649675">
     <Platform Solution="*|x86" Project="x86" />
   </Project>
-  <Project Path="FrostWire.Player/FuzzCast.Player.csproj" Id="6d186be6-6812-4eab-bc38-d175612329e1" />
-  <Project Path="FrostWire.Server/FuzzCast.Server.csproj" Id="c1c57292-f4c5-41f1-a8e7-8f1c3c8eac7e">
+  <Project Path="FuzzCast.Player/FuzzCast.Player.csproj" Id="6d186be6-6812-4eab-bc38-d175612329e1" />
+  <Project Path="FuzzCast.Server/FuzzCast.Server.csproj" Id="c1c57292-f4c5-41f1-a8e7-8f1c3c8eac7e">
     <Platform Solution="*|x86" Project="x86" />
   </Project>
-  <Project Path="FrostWire.Source/FuzzCast.Source.csproj" Id="e2a858ea-332f-49ad-9d49-44c7029d59ca">
+  <Project Path="FuzzCast.Source/FuzzCast.Source.csproj" Id="e2a858ea-332f-49ad-9d49-44c7029d59ca">
     <Platform Solution="*|x86" Project="x86" />
   </Project>
   <Project Path="FuzzCast.ReplayGain/FuzzCast.ReplayGain.csproj" Id="b7bbeffe-4573-4769-bf53-fc418d80fd0d" />

@@ -6,6 +6,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <Platforms>AnyCPU;x86</Platforms>
+    <Title>FuzzCast Source</Title>
+    <Version>0.1.$([System.DateTime]::UtcNow.AddHours(3).ToString("yy"))$([System.DateTime]::UtcNow.AddHours(3).DayOfYear.ToString("000")).$([System.DateTime]::UtcNow.AddHours(3).ToString("HHmm"))</Version>
+  
+  <AssemblyVersion>0.1.$([System.DateTime]::UtcNow.AddHours(3).ToString("yy"))$([System.DateTime]::UtcNow.AddHours(3).DayOfYear.ToString("000")).$([System.DateTime]::UtcNow.AddHours(3).ToString("HHmm"))</AssemblyVersion>
+  
+  <InformationalVersion>0.1 built on $([System.DateTime]::UtcNow.AddHours(3).ToString("yyyy-MM-dd HH:mm")) MSK</InformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -13,7 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\FrostWire.Core\FuzzCast.Core.csproj" />
+    <ProjectReference Include="..\FuzzCast.Core\FuzzCast.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

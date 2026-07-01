@@ -61,7 +61,7 @@ class Program
 
                 if (written)
                 {
-                    Logger.Ok($"{Path.GetFileName(file)} -> Gain: {result.TrackGain:0.00} dB, Peak: {result.TrackPeak:0.000000}");
+                    Logger.Ok($"{Path.GetFileName(file)} -> Gain: {result.TrackGain:0.00} dB, RMS: {result.RmsMaxDb:0.00} dB, Peak: {result.TrackPeak:0.000000}");
                     processed++;
                 }
                 else

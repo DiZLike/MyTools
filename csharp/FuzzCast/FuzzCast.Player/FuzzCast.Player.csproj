@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+	<Title>FuzzCast Player</Title>
+    <Version>0.1.$([System.DateTime]::UtcNow.AddHours(3).ToString("yy"))$([System.DateTime]::UtcNow.AddHours(3).DayOfYear.ToString("000")).$([System.DateTime]::UtcNow.AddHours(3).ToString("HHmm"))</Version>
+  
+  <AssemblyVersion>0.1.$([System.DateTime]::UtcNow.AddHours(3).ToString("yy"))$([System.DateTime]::UtcNow.AddHours(3).DayOfYear.ToString("000")).$([System.DateTime]::UtcNow.AddHours(3).ToString("HHmm"))</AssemblyVersion>
+  
+  <InformationalVersion>0.1 built on $([System.DateTime]::UtcNow.AddHours(3).ToString("yyyy-MM-dd HH:mm")) MSK</InformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Concentus" Version="2.2.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FuzzCast.Core\FuzzCast.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Bass.Net">
+      <HintPath>..\FuzzCast.Source\Bass.Net.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

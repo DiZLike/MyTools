@@ -6,5 +6,5 @@ public class ReplayGainConfig
     public double PreAmp { get; set; } = 0.0;
     public string DecodersPath { get; set; } = "decoders";
     public List<string> SupportedExtensions { get; set; } = new();
-    public string TagCommentFormat { get; set; } = "REPLAYGAIN_TRACK_GAIN={gain:0.00} dB\nREPLAYGAIN_TRACK_PEAK={peak:0.000000}";
+    public string TagCommentFormat { get; set; } = "REPLAYGAIN_TRACK_GAIN={gain:0.00} dB;\nREPLAYGAIN_TRACK_PEAK={peak:0.000000};\nREPLAYGAIN_TRACK_RMS={rms:0.000000} dB;";
 }

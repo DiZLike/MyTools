@@ -40,7 +40,6 @@ public class ReplayGainAnalyzer
                     BASSFlag.BASS_STREAM_DECODE | BASSFlag.BASS_SAMPLE_FLOAT,
                     BASSStreamProc.STREAMPROC_PUSH);
 
-                // Ресемплим через Bass.BASS_ChannelGetData вручную
                 Bass.BASS_ChannelSetPosition(stream, 0);
 
                 byte[] resampleBuffer = new byte[65536];
@@ -64,8 +63,11 @@ public class ReplayGainAnalyzer
 
                 double sumSqL = 0.0;
                 double sumSqR = 0.0;
+                double sumSqLFiltered = 0.0;
+                double sumSqRFiltered = 0.0;
                 long processedFrames = 0;
 
+                // Проход 1: считаем RMS с фильтром (для Gain) и без фильтра (для тегов)
                 while (true)
                 {
                     int bytesRead = Bass.BASS_ChannelGetData(processStream, buffer, bufferSize * sizeof(float));
@@ -80,17 +82,34 @@ public class ReplayGainAnalyzer
                         float sampleL = buffer[idx];
                         float sampleR = channels > 1 ? buffer[idx + 1] : sampleL;
 
+                        // RMS без фильтра (для компрессора)
+                        sumSqL += sampleL * sampleL;
+                        sumSqR += sampleR * sampleR;
+
+                        // RMS с фильтром (для ReplayGain)
                         double filteredL = kFilter.ProcessLeft(sampleL);
                         double filteredR = kFilter.ProcessRight(sampleR);
 
-                        sumSqL += filteredL * filteredL;
-                        sumSqR += filteredR * filteredR;
+                        sumSqLFiltered += filteredL * filteredL;
+                        sumSqRFiltered += filteredR * filteredR;
                     }
 
                     processedFrames += framesRead;
                 }
 
-                // Пики считаем по оригинальному сигналу
+                if (processedFrames == 0)
+                    return ReplayGainResult.Fail("Не удалось прочитать сэмплы");
+
+                // Вычисляем Gain по фильтрованному RMS
+                double rmsFiltered = Math.Sqrt((sumSqLFiltered + sumSqRFiltered) / (processedFrames * 2.0));
+
+                if (rmsFiltered < 1e-10)
+                    return ReplayGainResult.Fail("Сигнал слишком тихий");
+
+                double refRms = Math.Pow(10.0, _referenceLevel / 20.0);
+                double gain = 10.0 * Math.Log10((refRms * refRms) / (rmsFiltered * rmsFiltered)) + _preAmp;
+
+                // Проход 2: считаем пики по оригинальному сигналу
                 Bass.BASS_ChannelSetPosition(stream, 0);
                 double peakL = 0.0;
                 double peakR = 0.0;
@@ -117,16 +136,6 @@ public class ReplayGainAnalyzer
                     }
                 }
 
-                if (processedFrames == 0)
-                    return ReplayGainResult.Fail("Не удалось прочитать сэмплы");
-
-                double rmsTotal = Math.Sqrt((sumSqL + sumSqR) / (processedFrames * 2.0));
-
-                if (rmsTotal < 1e-10)
-                    return ReplayGainResult.Fail("Сигнал слишком тихий");
-
-                double refRms = Math.Pow(10.0, _referenceLevel / 20.0);
-                double gain = 10.0 * Math.Log10((refRms * refRms) / (rmsTotal * rmsTotal)) + _preAmp;
                 double peak = Math.Max(peakL, peakR);
 
                 return new ReplayGainResult
