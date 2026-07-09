@@ -7,6 +7,7 @@ public class AppConfig
     public PlayerConfig Player { get; set; } = new();
     public OpusConfig Opus { get; set; } = new();
     public CompressorConfig Compressor { get; set; } = new();
+    public CompressorPipelineConfig CompressorPipeline { get; set; } = new();
 }
 
 public class ServerConfig
@@ -27,6 +28,7 @@ public class SourceConfig
     public string Password { get; set; } = string.Empty;
     public string PlaylistPath { get; set; } = "playlist.m3u";
     public bool Shuffle { get; set; } = true;
+    public bool ReplayGainEnabled { get; set; } = true;
 }
 
 public class PlayerConfig

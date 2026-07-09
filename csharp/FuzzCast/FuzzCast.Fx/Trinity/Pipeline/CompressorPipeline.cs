@@ -15,9 +15,16 @@ namespace FuzzCast.Fx.Trinity.Pipeline
             ThreeBand = new ThreeBandCompressor(sampleRate);
         }
 
+        /// <summary>Моно-обработка</summary>
         public float Process(float input)
         {
             return ThreeBand.Process(input);
+        }
+
+        /// <summary>Стерео-обработка с linked-детектором</summary>
+        public void ProcessStereo(float left, float right, out float outLeft, out float outRight)
+        {
+            ThreeBand.ProcessStereo(left, right, out outLeft, out outRight);
         }
 
         public void UpdateMeters()

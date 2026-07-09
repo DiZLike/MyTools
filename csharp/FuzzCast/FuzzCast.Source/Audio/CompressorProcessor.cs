@@ -1,43 +1,80 @@
 ﻿using FuzzCast.Core.Configuration;
-using Un4seen.Bass;
-using Un4seen.Bass.AddOn.Fx;
+using FuzzCast.Fx.Trinity.Compressors;
+using FuzzCast.Fx.Trinity.Pipeline;
 
 namespace FuzzCast.Source.Audio;
 
 public class CompressorProcessor
 {
-    public int ApplyToStream(int stream, float thresholdDb, CompressorConfig config)
+    private CompressorPipeline? _pipeline;
+    private int _sampleRate;
+    private bool _initialized;
+
+    public void Initialize(int sampleRate, CompressorPipelineConfig config)
     {
-        int fxHandle = Bass.BASS_ChannelSetFX(stream, BASSFXType.BASS_FX_BFX_COMPRESSOR2, 0);
-        if (fxHandle == 0)
-        {
-            Console.WriteLine($"[ERROR] BASS_FX_BFX_COMPRESSOR2 failed: {Bass.BASS_ErrorGetCode()}");
-            return 0;
-        }
+        _sampleRate = sampleRate;
+        _pipeline = new CompressorPipeline(sampleRate);
 
-        var compParam = new BASS_BFX_COMPRESSOR2
-        {
-            fGain = 0f,
-            fThreshold = thresholdDb,
-            fRatio = (float)config.Ratio,
-            fAttack = (float)(config.AttackMs),
-            fRelease = (float)(config.ReleaseMs),
-        };
+        // Применяем лимитер
+        _pipeline.ThreeBand.Limiter.Ceiling = config.Limiter.Ceiling;
+        _pipeline.ThreeBand.Limiter.LookaheadMs = config.Limiter.LookaheadMs;
+        _pipeline.ThreeBand.Limiter.AttackMs = config.Limiter.AttackMs;
+        _pipeline.ThreeBand.Limiter.ReleaseMs = config.Limiter.ReleaseMs;
 
-        bool ok = Bass.BASS_FXSetParameters(fxHandle, compParam);
-        if (!ok)
-        {
-            Console.WriteLine($"[ERROR] Compressor BASS_FXSetParameters failed: {Bass.BASS_ErrorGetCode()}");
-            Bass.BASS_ChannelRemoveFX(stream, fxHandle);
-            return 0;
-        }
+        _initialized = true;
 
         Console.WriteLine(
-            $"[Compressor] Threshold: {thresholdDb:F1} dB, " +
-            $"Ratio: {config.Ratio}:1, " +
-            $"Attack: {config.AttackMs}ms, " +
-            $"Release: {config.ReleaseMs}ms");
+            $"[CompressorPipeline] Initialized | " +
+            $"Limiter ceiling: {config.Limiter.Ceiling:F1}dB");
+    }
 
-        return fxHandle;
+    /// <summary>
+    /// Обновление порогов и настроек без пересоздания фильтров.
+    /// Вызывается для каждого трека с адаптивными параметрами.
+    /// </summary>
+    public void UpdateSettings(
+        float lowThreshold, float lowRatio, float lowKnee, float lowMakeup,
+        float midThreshold, float midRatio, float midKnee, float midMakeup,
+        float highThreshold, float highRatio, float highKnee, float highMakeup)
+    {
+        if (_pipeline == null)
+            throw new InvalidOperationException("CompressorProcessor not initialized");
+
+        _pipeline.ThreeBand.LowCompressor.UpdateSettings(lowThreshold, lowRatio, lowKnee, lowMakeup);
+        _pipeline.ThreeBand.MidCompressor.UpdateSettings(midThreshold, midRatio, midKnee, midMakeup);
+        _pipeline.ThreeBand.HighCompressor.UpdateSettings(highThreshold, highRatio, highKnee, highMakeup);
+
+        Console.WriteLine(
+            $"[CompressorPipeline] Adaptive: " +
+            $"Low={lowThreshold:F1}dB {lowRatio:F0}:1 | " +
+            $"Mid={midThreshold:F1}dB {midRatio:F0}:1 | " +
+            $"High={highThreshold:F1}dB {highRatio:F0}:1 | " +
+            $"Makeup: L={lowMakeup:F1} M={midMakeup:F1} H={highMakeup:F1} dB");
+    }
+
+    /// <summary>
+    /// Установка attack/release для всех трёх компрессоров
+    /// </summary>
+    public void SetAttackRelease(float attackMs, float releaseMs)
+    {
+        if (_pipeline == null)
+            throw new InvalidOperationException("CompressorProcessor not initialized");
+
+        _pipeline.ThreeBand.LowCompressor.AttackMs = attackMs;
+        _pipeline.ThreeBand.LowCompressor.ReleaseMs = releaseMs;
+        _pipeline.ThreeBand.MidCompressor.AttackMs = attackMs;
+        _pipeline.ThreeBand.MidCompressor.ReleaseMs = releaseMs;
+        _pipeline.ThreeBand.HighCompressor.AttackMs = attackMs;
+        _pipeline.ThreeBand.HighCompressor.ReleaseMs = releaseMs;
+    }
+
+    public void ProcessStereo(float left, float right, out float outLeft, out float outRight)
+    {
+        _pipeline!.ProcessStereo(left, right, out outLeft, out outRight);
+    }
+
+    public void Reset()
+    {
+        _pipeline?.Reset();
     }
 }

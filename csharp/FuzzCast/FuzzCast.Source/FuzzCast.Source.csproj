@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\FuzzCast.Core\FuzzCast.Core.csproj" />
+    <ProjectReference Include="..\FuzzCast.Fx\FuzzCast.Fx.csproj" />
   </ItemGroup>
 
   <ItemGroup>

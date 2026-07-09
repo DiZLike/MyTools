@@ -1,6 +1,4 @@
 ﻿using System.Globalization;
-using Un4seen.Bass;
-using Un4seen.Bass.AddOn.Fx;
 
 namespace FuzzCast.Source.Audio;
 
@@ -14,6 +12,9 @@ public class ReplayGainProcessor
         float? gain = null;
         float? peak = null;
         float? rms = null;
+        float? rmsLow = null;
+        float? rmsMid = null;
+        float? rmsHigh = null;
 
         var lines = comment.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
@@ -37,53 +38,32 @@ public class ReplayGainProcessor
                 case "REPLAYGAIN_TRACK_RMS":
                     rms = ParseDbValue(value);
                     break;
+                case "REPLAYGAIN_TRACK_RMS_LOW":
+                    rmsLow = ParseDbValue(value);
+                    break;
+                case "REPLAYGAIN_TRACK_RMS_MID":
+                    rmsMid = ParseDbValue(value);
+                    break;
+                case "REPLAYGAIN_TRACK_RMS_HIGH":
+                    rmsHigh = ParseDbValue(value);
+                    break;
             }
         }
 
-        if (gain.HasValue)
+        if (gain.HasValue || rmsLow.HasValue || rmsMid.HasValue || rmsHigh.HasValue)
         {
             return new ReplayGainInfo
             {
-                TrackGainDb = gain.Value,
+                TrackGainDb = gain ?? 0f,
                 TrackPeak = peak ?? 1.0f,
-                RmsDb = rms
+                RmsDb = rms,
+                RmsLowDb = rmsLow,
+                RmsMidDb = rmsMid,
+                RmsHighDb = rmsHigh
             };
         }
 
         return null;
-    }
-
-    public int ApplyToStream(int stream, float gainLinear)
-    {
-        if (Math.Abs(gainLinear - 1.0f) < 0.001f)
-            return 0;
-
-        int fxHandle = Bass.BASS_ChannelSetFX(stream, BASSFXType.BASS_FX_BFX_VOLUME, 0);
-        if (fxHandle == 0)
-        {
-            Console.WriteLine($"[ERROR] BASS_BFX_VOLUME failed: {Bass.BASS_ErrorGetCode()}");
-            return 0;
-        }
-
-        var volParam = new BASS_BFX_VOLUME
-        {
-            lChannel = 0,
-            fVolume = gainLinear
-        };
-
-        bool ok = Bass.BASS_FXSetParameters(fxHandle, volParam);
-        if (!ok)
-        {
-            Console.WriteLine($"[ERROR] BASS_FXSetParameters failed: {Bass.BASS_ErrorGetCode()}");
-            Bass.BASS_ChannelRemoveFX(stream, fxHandle);
-            return 0;
-        }
-
-        Console.WriteLine(
-            $"[ReplayGain] Applied {(float)(20 * Math.Log10(gainLinear)):F2} dB " +
-            $"(linear: {gainLinear:F6})");
-
-        return fxHandle;
     }
 
     private float? ParseDbValue(string value)

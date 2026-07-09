@@ -23,12 +23,13 @@ public class TagWriter
             string rgComment = _commentFormat
                 .Replace("{gain:0.00}", result.TrackGain.ToString("0.00", CultureInfo.InvariantCulture))
                 .Replace("{peak:0.000000}", result.TrackPeak.ToString("0.000000", CultureInfo.InvariantCulture))
-                .Replace("{rms:0.00}", result.RmsMaxDb.ToString("0.00", CultureInfo.InvariantCulture));
+                .Replace("{rms:0.00}", result.RmsMaxDb.ToString("0.00", CultureInfo.InvariantCulture))
+                .Replace("{low_rms:0.00}", result.RmsLowDb.ToString("0.00", CultureInfo.InvariantCulture))
+                .Replace("{mid_rms:0.00}", result.RmsMidDb.ToString("0.00", CultureInfo.InvariantCulture))
+                .Replace("{high_rms:0.00}", result.RmsHighDb.ToString("0.00", CultureInfo.InvariantCulture));
 
-            // Получаем все типы тегов, присутствующие в файле
             TagTypes tagTypes = file.TagTypes;
 
-            // Если тегов нет — создаём дефолтный для формата
             if (tagTypes == TagTypes.None)
             {
                 tagTypes = GetDefaultTagType(filePath);
@@ -38,7 +39,6 @@ public class TagWriter
                 }
             }
 
-            // Проходим по каждому типу тегов и записываем RG
             foreach (TagTypes tagType in Enum.GetValues<TagTypes>())
             {
                 if (tagType == TagTypes.None || !tagTypes.HasFlag(tagType))
@@ -49,30 +49,13 @@ public class TagWriter
                     var tag = file.GetTag(tagType);
                     if (tag != null)
                     {
-                        string? oldComment = tag.Comment;
-
-                        if (string.IsNullOrEmpty(oldComment) || !oldComment.Contains("REPLAYGAIN_TRACK_GAIN"))
-                        {
-                            tag.Comment = string.IsNullOrEmpty(oldComment)
-                                ? rgComment
-                                : oldComment + "\n" + rgComment;
-                        }
-                        else
-                        {
-                            var lines = oldComment.Split('\n')
-                                .Where(l => !l.StartsWith("REPLAYGAIN_TRACK_GAIN")
-                                         && !l.StartsWith("REPLAYGAIN_TRACK_PEAK")
-                                         && !l.StartsWith("REPLAYGAIN_TRACK_RMS"))
-                                .ToList();
-
-                            lines.Add(rgComment);
-                            tag.Comment = string.Join("\n", lines);
-                        }
+                        // Полностью перезаписываем Comment
+                        tag.Comment = rgComment;
                     }
                 }
                 catch
                 {
-                    // Пропускаем типы тегов, которые не поддерживаются в этом формате
+                    // Пропускаем неподдерживаемые типы тегов
                 }
             }
 

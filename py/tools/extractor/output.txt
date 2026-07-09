@@ -287,8 +287,8 @@ namespace FuzzCast.Fx.Trinity.Compressors
         public MeterProcessor HighOutputMeter { get; }
         public MeterProcessor MasterOutputMeter { get; }
 
-        private float _crossoverLowFreq = 300f;
-        private float _crossoverHighFreq = 3000f;
+        private float _crossoverLowFreq = 200f;
+        private float _crossoverHighFreq = 2000f;
         private int _sampleRate;
 
         public float CrossoverLowFreq

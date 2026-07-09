@@ -75,6 +75,18 @@ namespace FuzzCast.Fx.Trinity.Compressors
             _envelope = 0f;
         }
 
+        /// <summary>
+        /// Установка порога и makeup gain без пересоздания фильтров
+        /// </summary>
+        public void UpdateSettings(float threshold, float ratio, float kneeWidth, float makeupGain)
+        {
+            Threshold = threshold;
+            Ratio = ratio;
+            KneeWidth = kneeWidth;
+            MakeupGain = makeupGain;
+        }
+
+        /// <summary>Моно-обработка (оставлена для обратной совместимости)</summary>
         public float Process(float input)
         {
             float inputLevel = MathF.Abs(input);
@@ -87,6 +99,25 @@ namespace FuzzCast.Fx.Trinity.Compressors
 
             float totalGain = AudioMath.DbToLinear(-gainReductionDb + _makeupGain);
             return input * totalGain;
+        }
+
+        /// <summary>
+        /// Стерео-обработка с linked-детектором.
+        /// Envelope считается по максимальному из L и R, гейн применяется одинаковый к обоим каналам.
+        /// </summary>
+        public void ProcessStereo(float left, float right, out float outLeft, out float outRight)
+        {
+            float inputLevel = MathF.Max(MathF.Abs(left), MathF.Abs(right));
+            bool isAttack = inputLevel > _envelope;
+            float coeff = isAttack ? _attackCoeff : _releaseCoeff;
+            _envelope = coeff * _envelope + (1f - coeff) * inputLevel;
+
+            float gainReductionDb = ComputeGainReduction(_envelope);
+            CurrentGainReduction = gainReductionDb;
+
+            float totalGain = AudioMath.DbToLinear(-gainReductionDb + _makeupGain);
+            outLeft = left * totalGain;
+            outRight = right * totalGain;
         }
 
         private float ComputeGainReduction(float envelopeLinear)

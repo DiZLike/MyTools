@@ -8,7 +8,6 @@ using FuzzCast.Source.Playlist;
 using System.Net;
 using System.Net.Sockets;
 using Un4seen.Bass;
-using Un4seen.Bass.AddOn.Fx;
 
 namespace FuzzCast.Source;
 
@@ -91,6 +90,16 @@ public class SourceEngine : IDisposable
 
         Console.WriteLine("BASS initialized");
 
+        // Инициализируем компрессор один раз при старте
+        if (_config.CompressorPipeline.Enabled)
+        {
+            _compressor.Initialize(_config.Opus.SampleRate, _config.CompressorPipeline);
+        }
+        else
+        {
+            Console.WriteLine("[CompressorPipeline] Disabled");
+        }
+
         using var statusCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var statusTask = Task.Run(() => StatusListenerLoop(statusCts.Token), ct);
 
@@ -162,13 +171,23 @@ public class SourceEngine : IDisposable
             Console.WriteLine($"[WARN] Failed to read ReplayGain tags: {ex.Message}");
         }
 
-        var rgLog = rgInfo != null
-            ? $" | RG: {rgInfo.TrackGainDb:F2} dB" + (rgInfo.RmsDb.HasValue ? $", RMS: {rgInfo.RmsDb:F2} dB" : "")
-            : "";
-
-        Console.WriteLine(
-            $"[NOW PLAYING] {_currentMetadata.Artist} - {_currentMetadata.Title} " +
-            $"[{_currentMetadata.Duration:F0}s]{rgLog}");
+        // Логирование RG-инфо
+        if (rgInfo != null)
+        {
+            var rgParts = new List<string>();
+            if (rgInfo.TrackGainDb != 0) rgParts.Add($"Gain: {rgInfo.TrackGainDb:F2} dB");
+            if (rgInfo.RmsLowDb.HasValue) rgParts.Add($"L:{rgInfo.RmsLowDb:F1} M:{rgInfo.RmsMidDb:F1} H:{rgInfo.RmsHighDb:F1} dB");
+            var rgLog = rgParts.Count > 0 ? " | RG: " + string.Join(", ", rgParts) : "";
+            Console.WriteLine(
+                $"[NOW PLAYING] {_currentMetadata.Artist} - {_currentMetadata.Title} " +
+                $"[{_currentMetadata.Duration:F0}s]{rgLog}");
+        }
+        else
+        {
+            Console.WriteLine(
+                $"[NOW PLAYING] {_currentMetadata.Artist} - {_currentMetadata.Title} " +
+                $"[{_currentMetadata.Duration:F0}s]");
+        }
 
         int stream = Bass.BASS_StreamCreateFile(filePath, 0, 0,
             BASSFlag.BASS_STREAM_DECODE | BASSFlag.BASS_SAMPLE_FLOAT);
@@ -179,25 +198,58 @@ public class SourceEngine : IDisposable
             return;
         }
 
-        float appliedGainDb = 0f;
-
-        // ReplayGain
-        if (_config.Compressor.ReplayGainEnabled && rgInfo != null)
+        // ReplayGain TrackGain (опционально)
+        float rgGainLinear = 1.0f;
+        if (_config.CompressorPipeline.ReplayGainEnabled && rgInfo != null && rgInfo.TrackGainDb != 0)
         {
-            float gainLinear = (float)Math.Pow(10, rgInfo.TrackGainDb / 20.0);
-            _replayGain.ApplyToStream(stream, gainLinear);
-            appliedGainDb = rgInfo.TrackGainDb;
+            rgGainLinear = (float)Math.Pow(10, rgInfo.TrackGainDb / 20.0);
+            Console.WriteLine($"[ReplayGain] Applied {rgInfo.TrackGainDb:F2} dB");
         }
 
-        // Компрессор
-        if (_config.Compressor.CompressorEnabled && rgInfo?.RmsDb.HasValue == true)
+        // Адаптивные настройки компрессора
+        if (_config.CompressorPipeline.Enabled)
         {
-            float rmsAfterRG = rgInfo.RmsDb.Value + appliedGainDb;
-            float threshold = rmsAfterRG + (float)_config.Compressor.HeadroomDb;
+            _compressor.Reset();
 
-            threshold = Math.Min(threshold, 0f);
+            // Получаем пресет
+            string presetName = _config.CompressorPipeline.Preset;
+            if (!_config.CompressorPipeline.Presets.TryGetValue(presetName, out var preset))
+            {
+                Console.WriteLine($"[WARN] Preset '{presetName}' not found, using Medium");
+                preset = _config.CompressorPipeline.Presets["Medium"];
+            }
 
-            _compressor.ApplyToStream(stream, threshold, _config.Compressor);
+            // Если есть RMS по полосам — адаптивные пороги, иначе — дефолтные из пресета
+            if (rgInfo?.RmsLowDb.HasValue == true && rgInfo.RmsMidDb.HasValue && rgInfo.RmsHighDb.HasValue)
+            {
+                float lowThreshold = rgInfo.RmsLowDb.Value + preset.HeadroomDb;
+                float midThreshold = rgInfo.RmsMidDb.Value + preset.HeadroomDb;
+                float highThreshold = rgInfo.RmsHighDb.Value + preset.HeadroomDb;
+
+                // Clamp: порог не выше 0 dB
+                lowThreshold = Math.Min(lowThreshold, -0.5f);
+                midThreshold = Math.Min(midThreshold, -0.5f);
+                highThreshold = Math.Min(highThreshold, -0.5f);
+
+                // Применяем также attack/release из пресета
+                _compressor.UpdateSettings(
+                    lowThreshold, preset.Ratio, preset.KneeWidth, preset.MakeupGain,
+                    midThreshold, preset.Ratio, preset.KneeWidth, preset.MakeupGain,
+                    highThreshold, preset.Ratio, preset.KneeWidth, preset.MakeupGain);
+
+                // Attack/Release тоже из пресета
+                _compressor.SetAttackRelease(preset.AttackMs, preset.ReleaseMs);
+
+                Console.WriteLine($"[CompressorPipeline] Preset: {presetName} | Headroom: {preset.HeadroomDb:F1}dB");
+            }
+            else
+            {
+                Console.WriteLine($"[CompressorPipeline] Preset: {presetName} | No per-band RMS, using preset defaults");
+                _compressor.UpdateSettings(
+                    preset.HeadroomDb, preset.Ratio, preset.KneeWidth, preset.MakeupGain,
+                    preset.HeadroomDb, preset.Ratio, preset.KneeWidth, preset.MakeupGain,
+                    preset.HeadroomDb, preset.Ratio, preset.KneeWidth, preset.MakeupGain);
+            }
         }
 
         try
@@ -235,6 +287,32 @@ public class SourceEngine : IDisposable
 
                 int samplesRead = read / 4;
 
+                // Применяем ReplayGain и компрессор
+                if (channels == 2)
+                {
+                    for (int i = 0; i < samplesRead; i += 2)
+                    {
+                        float left = pcmFloat[i] * rgGainLinear;
+                        float right = pcmFloat[i + 1] * rgGainLinear;
+
+                        if (_config.CompressorPipeline.Enabled)
+                        {
+                            _compressor.ProcessStereo(left, right, out left, out right);
+                        }
+
+                        pcmFloat[i] = left;
+                        pcmFloat[i + 1] = right;
+                    }
+                }
+                else
+                {
+                    for (int i = 0; i < samplesRead; i++)
+                    {
+                        pcmFloat[i] *= rgGainLinear;
+                    }
+                }
+
+                // Конвертация float -> short с хард-клиппингом
                 for (int i = 0; i < samplesRead; i++)
                 {
                     float s = pcmFloat[i];
@@ -342,8 +420,6 @@ public class SourceEngine : IDisposable
             Console.WriteLine($"BASS_Init error: {Bass.BASS_ErrorGetCode()}");
             return false;
         }
-        int fx_ver = BassFx.BASS_FX_GetVersion();
-        Console.WriteLine($"[Opus] Version: {OpusNative.opus_get_version_string()}");
 
         _opusEncoder = new OpusEncoder(
             _config.Opus.SampleRate,
