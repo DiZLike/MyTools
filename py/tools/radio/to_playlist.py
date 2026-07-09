@@ -76,8 +76,10 @@ def create_playlist(server_folder, local_folder, playlist_file):
                 f.write('#EXTM3U\n')
             
             for track_path in new_tracks:
-                f.write(f"{track_path}\n")
-                print(f"Добавлен: {track_path}")
+                # Преобразуем путь в строку с разделителями "/"
+                track_str = str(track_path).replace('\\', '/')
+                f.write(f"{track_str}\n")
+                print(f"Добавлен: {track_str}")
         
         print(f"\nДобавлено {len(new_tracks)} новых треков в плейлист '{playlist_file}'")
         return True

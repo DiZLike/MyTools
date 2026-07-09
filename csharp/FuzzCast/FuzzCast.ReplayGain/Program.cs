@@ -9,7 +9,7 @@ class Program
 {
     static int Main(string[] args)
     {
-        args = new string[] { "C:\\Users\\Evgeny\\Music\\GlitchVania" };
+        //args = new string[] { "C:\\Users\\Evgeny\\Music\\GlitchVania" };
         if (args.Length == 0)
         {
             Console.WriteLine("Использование: FuzzCast.ReplayGain <путь к файлу или папке>");

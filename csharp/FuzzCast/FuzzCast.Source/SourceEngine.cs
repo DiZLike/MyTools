@@ -415,11 +415,13 @@ public class SourceEngine : IDisposable
     {
         BassNet.Registration("email@example.com", "key");
 
-        if (!Bass.BASS_Init(-1, _config.Opus.SampleRate, BASSInit.BASS_DEVICE_DEFAULT, IntPtr.Zero))
+        if (!Bass.BASS_Init(0, _config.Opus.SampleRate, BASSInit.BASS_DEVICE_DEFAULT, IntPtr.Zero))
         {
             Console.WriteLine($"BASS_Init error: {Bass.BASS_ErrorGetCode()}");
             return false;
         }
+
+        LoadDecoders();
 
         _opusEncoder = new OpusEncoder(
             _config.Opus.SampleRate,
@@ -442,6 +444,72 @@ public class SourceEngine : IDisposable
             $"{_config.Opus.Channels}ch, {_config.Opus.FrameSize}ms");
 
         return true;
+    }
+
+    private void LoadDecoders()
+    {
+        string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+        string decodersDir = baseDir;
+
+        if (!Directory.Exists(decodersDir))
+        {
+            Console.WriteLine($"[WARN] Decoders directory not found: {decodersDir}");
+            return;
+        }
+
+        // Определяем расширение в зависимости от ОС
+        string extension = OperatingSystem.IsWindows() ? ".dll" :
+                           OperatingSystem.IsLinux() ? ".so" :
+                           OperatingSystem.IsMacOS() ? ".dylib" : "";
+
+        if (string.IsNullOrEmpty(extension))
+        {
+            Console.WriteLine("[WARN] Unsupported operating system for decoder loading");
+            return;
+        }
+
+        Console.WriteLine($"[INFO] Loading decoders from: {decodersDir}");
+
+        // Получаем все файлы с нужным расширением
+        string[] decoderFiles = Directory.GetFiles(decodersDir, $"*{extension}");
+
+        if (decoderFiles.Length == 0)
+        {
+            Console.WriteLine($"[WARN] No decoder files (*{extension}) found in {decodersDir}");
+            return;
+        }
+
+        int loadedCount = 0;
+        int failedCount = 0;
+
+        foreach (string decoderPath in decoderFiles)
+        {
+            try
+            {
+                Console.Write($"[DECODER] Loading: {Path.GetFileName(decoderPath)}... ");
+
+                int pluginHandle = Bass.BASS_PluginLoad(decoderPath);
+
+                if (pluginHandle != 0)
+                {
+                    Console.WriteLine("OK");
+                    loadedCount++;
+                }
+                else
+                {
+                    BASSError error = Bass.BASS_ErrorGetCode();
+                    Console.WriteLine($"FAILED (Error: {error})");
+                    failedCount++;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"ERROR: {ex.Message}");
+                failedCount++;
+            }
+        }
+
+        Console.WriteLine($"[INFO] Decoders loaded: {loadedCount} succeeded, {failedCount} failed");
     }
 
     public void Dispose()
