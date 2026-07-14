@@ -44,9 +44,9 @@ public class PlaylistManager : IDisposable
             return;
         }
 
-        var missing = _tracks.Where(t => !File.Exists(t)).ToList();
-        foreach (var m in missing)
-            Console.WriteLine($"[WARN] File not found: {m}");
+        //var missing = _tracks.Where(t => !File.Exists(t)).ToList();
+        //foreach (var m in missing)
+        //    Console.WriteLine($"[WARN] File not found: {m}");
 
         _tracks = _tracks.Where(File.Exists).ToList();
 

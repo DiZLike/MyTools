@@ -171,23 +171,29 @@ public class SourceEngine : IDisposable
             Console.WriteLine($"[WARN] Failed to read ReplayGain tags: {ex.Message}");
         }
 
-        // Логирование RG-инфо
+        // ReplayGain TrackGain (опционально)
+        float rgGainDb = 0f;
+        float rgGainLinear = 1.0f;
+
+        if (_config.CompressorPipeline.ReplayGainEnabled && rgInfo != null && rgInfo.TrackGainDb != 0)
+        {
+            rgGainDb = rgInfo.TrackGainDb;
+            rgGainLinear = (float)Math.Pow(10, rgGainDb / 20.0);
+        }
+
+        // Логирование
+        var logParts = new List<string>();
+        logParts.Add($"[NOW PLAYING] {_currentMetadata.Artist} - {_currentMetadata.Title} [{_currentMetadata.Duration:F0}s]");
+
         if (rgInfo != null)
         {
             var rgParts = new List<string>();
-            if (rgInfo.TrackGainDb != 0) rgParts.Add($"Gain: {rgInfo.TrackGainDb:F2} dB");
+            if (rgGainDb != 0) rgParts.Add($"Gain: {rgGainDb:F2} dB");
             if (rgInfo.RmsLowDb.HasValue) rgParts.Add($"L:{rgInfo.RmsLowDb:F1} M:{rgInfo.RmsMidDb:F1} H:{rgInfo.RmsHighDb:F1} dB");
-            var rgLog = rgParts.Count > 0 ? " | RG: " + string.Join(", ", rgParts) : "";
-            Console.WriteLine(
-                $"[NOW PLAYING] {_currentMetadata.Artist} - {_currentMetadata.Title} " +
-                $"[{_currentMetadata.Duration:F0}s]{rgLog}");
+            if (rgParts.Count > 0) logParts.Add($"RG: {string.Join(", ", rgParts)}");
         }
-        else
-        {
-            Console.WriteLine(
-                $"[NOW PLAYING] {_currentMetadata.Artist} - {_currentMetadata.Title} " +
-                $"[{_currentMetadata.Duration:F0}s]");
-        }
+
+        Console.WriteLine(string.Join(" | ", logParts));
 
         int stream = Bass.BASS_StreamCreateFile(filePath, 0, 0,
             BASSFlag.BASS_STREAM_DECODE | BASSFlag.BASS_SAMPLE_FLOAT);
@@ -196,14 +202,6 @@ public class SourceEngine : IDisposable
         {
             Console.WriteLine($"[ERROR] Cannot open file: {filePath} — {Bass.BASS_ErrorGetCode()}");
             return;
-        }
-
-        // ReplayGain TrackGain (опционально)
-        float rgGainLinear = 1.0f;
-        if (_config.CompressorPipeline.ReplayGainEnabled && rgInfo != null && rgInfo.TrackGainDb != 0)
-        {
-            rgGainLinear = (float)Math.Pow(10, rgInfo.TrackGainDb / 20.0);
-            Console.WriteLine($"[ReplayGain] Applied {rgInfo.TrackGainDb:F2} dB");
         }
 
         // Адаптивные настройки компрессора
@@ -222,33 +220,45 @@ public class SourceEngine : IDisposable
             // Если есть RMS по полосам — адаптивные пороги, иначе — дефолтные из пресета
             if (rgInfo?.RmsLowDb.HasValue == true && rgInfo.RmsMidDb.HasValue && rgInfo.RmsHighDb.HasValue)
             {
-                float lowThreshold = rgInfo.RmsLowDb.Value + preset.HeadroomDb;
-                float midThreshold = rgInfo.RmsMidDb.Value + preset.HeadroomDb;
-                float highThreshold = rgInfo.RmsHighDb.Value + preset.HeadroomDb;
+                // Корректируем RMS на величину применённого ReplayGain
+                float lowRmsCorrected = rgInfo.RmsLowDb.Value + rgGainDb;
+                float midRmsCorrected = rgInfo.RmsMidDb.Value + rgGainDb;
+                float highRmsCorrected = rgInfo.RmsHighDb.Value + rgGainDb;
 
-                // Clamp: порог не выше 0 dB
+                // Порог = скорректированный RMS + headroom из пресета
+                float lowThreshold = lowRmsCorrected + preset.HeadroomDb;
+                float midThreshold = midRmsCorrected + preset.HeadroomDb;
+                float highThreshold = highRmsCorrected + preset.HeadroomDb;
+
+                // Clamp: порог не выше -0.5 dB
                 lowThreshold = Math.Min(lowThreshold, -0.5f);
                 midThreshold = Math.Min(midThreshold, -0.5f);
                 highThreshold = Math.Min(highThreshold, -0.5f);
 
-                // Применяем также attack/release из пресета
                 _compressor.UpdateSettings(
                     lowThreshold, preset.Ratio, preset.KneeWidth, preset.MakeupGain,
                     midThreshold, preset.Ratio, preset.KneeWidth, preset.MakeupGain,
                     highThreshold, preset.Ratio, preset.KneeWidth, preset.MakeupGain);
 
-                // Attack/Release тоже из пресета
                 _compressor.SetAttackRelease(preset.AttackMs, preset.ReleaseMs);
 
-                Console.WriteLine($"[CompressorPipeline] Preset: {presetName} | Headroom: {preset.HeadroomDb:F1}dB");
+                Console.WriteLine(
+                    $"[CompressorPipeline] Preset: {presetName} | Headroom: {preset.HeadroomDb:F1}dB | " +
+                    $"Thresholds (RG-corrected): L={lowThreshold:F1} M={midThreshold:F1} H={highThreshold:F1} dB");
             }
             else
             {
-                Console.WriteLine($"[CompressorPipeline] Preset: {presetName} | No per-band RMS, using preset defaults");
+                // Нет per-band RMS — используем пороги из пресета как есть
                 _compressor.UpdateSettings(
                     preset.HeadroomDb, preset.Ratio, preset.KneeWidth, preset.MakeupGain,
                     preset.HeadroomDb, preset.Ratio, preset.KneeWidth, preset.MakeupGain,
                     preset.HeadroomDb, preset.Ratio, preset.KneeWidth, preset.MakeupGain);
+
+                _compressor.SetAttackRelease(preset.AttackMs, preset.ReleaseMs);
+
+                Console.WriteLine(
+                    $"[CompressorPipeline] Preset: {presetName} | No per-band RMS, using preset defaults | " +
+                    $"Headroom: {preset.HeadroomDb:F1}dB");
             }
         }
 

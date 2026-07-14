@@ -1,217 +1,216 @@
 ﻿namespace FuzzCast.Player;
 
+/// <summary>
+/// Jitter-буфер для компенсации нестабильности сети.
+/// Работает по принципу: накапливаем N кадров перед началом выдачи,
+/// затем выдаём строго по порядку sequence.
+/// При отсутствии кадра — отдаём Missing (для PLC/FEC).
+/// Никакой симуляции, только реальная работа.
+/// </summary>
 public class JitterBuffer
 {
     private readonly object _lock = new();
     private readonly SortedDictionary<uint, byte[]> _buffer = new();
+
     private uint _nextSequence;
     private bool _initialized;
-    private byte[]? _lastFrame;
+    private bool _prebuffering = true;
 
-    private const int MaxBufferSize = 10;
-    private const uint MaxSequenceGap = 100;
+    private byte[]? _lastFrame; // Последний успешно декодированный кадр (для FEC)
+    private byte[]? _nextFrameForFec; // Следующий кадр в буфере (для FEC)
 
-    // Симуляция нестабильной сети
-    private static readonly Random _rng = new();
-    private double _lossRate;
-    private double _burstProbability;
-    private int _burstLength;
-    private int _burstCounter;
-    private int _jitterMs;
-    private bool _simEnabled;
+    // Параметры буфера
+    private readonly int _targetBufferSize; // Целевой размер в кадрах (для предзаполнения)
+    private readonly int _maxBufferSize;    // Максимальный размер (старые кадры отбрасываются)
 
-    private readonly Queue<(DateTime time, uint sequence, byte[] data)> _delayQueue = new();
+    // Статистика
+    private uint _totalReceived;
+    private uint _totalPlayed;
+    private uint _totalMissing;
+    private uint _totalLate;
+    private DateTime _lastStatsReset = DateTime.UtcNow;
 
-    public void SetSimulation(double lossPercent, int jitterMs = 0, double burstProb = 0.3)
+    public JitterBuffer(int targetLatencyMs = 60, int maxLatencyMs = 200)
     {
-        _lossRate = Math.Clamp(lossPercent, 0, 100) / 100.0;
-        _jitterMs = Math.Max(0, jitterMs);
-        _burstProbability = Math.Clamp(burstProb, 0, 1);
-        _burstLength = 0;
-        _burstCounter = 0;
-        _simEnabled = _lossRate > 0 || _jitterMs > 0;
+        // Считаем количество кадров исходя из 20мс на кадр
+        _targetBufferSize = Math.Max(2, targetLatencyMs / 20);
+        _maxBufferSize = Math.Max(_targetBufferSize * 2, maxLatencyMs / 20);
 
-        Console.WriteLine($"[SIM] Loss:{lossPercent:F0}% Jitter:{jitterMs}ms Burst:{burstProb:F1}");
+        Console.WriteLine($"[JITTER] Buffer config: target={_targetBufferSize} frames ({targetLatencyMs}ms), max={_maxBufferSize} frames ({maxLatencyMs}ms)");
     }
 
+    /// <summary>
+    /// Добавить полученный аудио-кадр в буфер.
+    /// </summary>
     public void Add(uint sequence, byte[] opusFrame)
     {
-        if (_simEnabled)
+        lock (_lock)
         {
-            // Проверяем бёрст потерь
-            if (_burstCounter > 0)
+            _totalReceived++;
+
+            // Самый первый пакет — инициализируем буфер
+            if (!_initialized)
             {
-                _burstCounter--;
+                _nextSequence = sequence;
+                _initialized = true;
+                _prebuffering = true;
+                Console.WriteLine($"[JITTER] Initialized at sequence {sequence}, prebuffering {_targetBufferSize} frames");
+            }
+
+            // Отбрасываем слишком старые пакеты
+            if (sequence < _nextSequence)
+            {
+                _totalLate++;
                 return;
             }
 
-            // Случайная потеря
-            if (_rng.NextDouble() < _lossRate)
+            // Защита от безумных разрывов (переподключение итп)
+            if (_buffer.Count > 0)
             {
-                // С вероятностью burstProbability начинаем бёрст
-                if (_rng.NextDouble() < _burstProbability)
+                var lastKey = _buffer.Keys.Last();
+                if (sequence > lastKey && sequence - lastKey > 1000)
                 {
-                    _burstLength = 2 + _rng.Next(5);
-                    _burstCounter = _burstLength - 1;
+                    Console.WriteLine($"[JITTER] Huge gap detected ({lastKey} -> {sequence}), resetting buffer");
+                    ResetInternal();
+                    _nextSequence = sequence;
                 }
-                return;
             }
 
-            // Джиттер — добавляем задержку
-            if (_jitterMs > 0)
+            // Ограничиваем размер буфера — удаляем самый старый если переполнен
+            while (_buffer.Count >= _maxBufferSize)
             {
-                int delayMs = _rng.Next(_jitterMs);
-                var deliveryTime = DateTime.UtcNow.AddMilliseconds(delayMs);
-                lock (_delayQueue)
+                var oldestKey = _buffer.Keys.First();
+                _buffer.Remove(oldestKey);
+
+                // Если удалили кадр, который ещё не проиграли — обновляем _nextSequence
+                if (oldestKey >= _nextSequence)
                 {
-                    _delayQueue.Enqueue((deliveryTime, sequence, opusFrame));
+                    _nextSequence = oldestKey + 1;
                 }
-                return;
             }
+
+            _buffer[sequence] = opusFrame;
+            _nextFrameForFec = null; // Инвалидируем кеш
         }
-
-        AddToBuffer(sequence, opusFrame);
     }
 
+    /// <summary>
+    /// Получить следующий кадр для воспроизведения.
+    /// </summary>
     public Result GetNext()
     {
-        // Достаём просроченные пакеты из очереди задержек
-        ProcessDelayQueue();
-
         lock (_lock)
         {
             if (!_initialized)
                 return new Result { Type = ResultType.Empty };
 
+            // Предзаполнение: не выдаём кадры пока буфер не наполнится
+            if (_prebuffering)
+            {
+                if (_buffer.Count >= _targetBufferSize)
+                {
+                    _prebuffering = false;
+                    Console.WriteLine($"[JITTER] Prebuffering complete, {_buffer.Count} frames ready");
+                }
+                else
+                {
+                    return new Result { Type = ResultType.Empty };
+                }
+            }
+
+            // Ищем строго следующий по порядку кадр
             if (_buffer.TryGetValue(_nextSequence, out var frame))
             {
                 _buffer.Remove(_nextSequence);
+                _lastFrame = frame;
+                _nextFrameForFec = null; // Инвалидируем
                 _nextSequence++;
-                return new Result { Type = ResultType.Normal, Data = frame };
+                _totalPlayed++;
+
+                return new Result
+                {
+                    Type = ResultType.Normal,
+                    Data = frame
+                };
             }
 
+            // Кадра нет — пропуск
+            // Проверяем, не слишком ли много кадров пропущено подряд
             if (_buffer.Count > 0)
             {
-                var firstKey = _buffer.Keys.First();
+                var firstAvailable = _buffer.Keys.First();
 
-                if (firstKey < _nextSequence)
+                // Если пропущено больше maxBufferSize — догоняем (резкий скачок)
+                if (firstAvailable > _nextSequence + _maxBufferSize)
                 {
-                    _buffer.Remove(firstKey);
-                    return new Result { Type = ResultType.Empty };
-                }
+                    Console.WriteLine($"[JITTER] Too many missing frames ({firstAvailable - _nextSequence}), jumping to {firstAvailable}");
+                    _nextSequence = firstAvailable;
 
-                if (firstKey > _nextSequence)
-                {
-                    if (firstKey - _nextSequence > MaxBufferSize)
+                    if (_buffer.TryGetValue(firstAvailable, out var jumpFrame))
                     {
-                        _nextSequence = firstKey;
-                        if (_buffer.TryGetValue(firstKey, out var jumpFrame))
-                        {
-                            _buffer.Remove(firstKey);
-                            _nextSequence = firstKey + 1;
-                            return new Result { Type = ResultType.Normal, Data = jumpFrame };
-                        }
+                        _buffer.Remove(firstAvailable);
+                        _lastFrame = jumpFrame;
+                        _nextFrameForFec = null;
+                        _nextSequence = firstAvailable + 1;
+                        _totalPlayed++;
+                        return new Result { Type = ResultType.Normal, Data = jumpFrame };
                     }
-
-                    _nextSequence++;
-                    return new Result { Type = ResultType.Missing };
                 }
             }
 
-            return new Result { Type = ResultType.Empty };
+            // Обычный пропуск одного кадра
+            _totalMissing++;
+            _nextSequence++;
+            return new Result { Type = ResultType.Missing };
         }
     }
 
-    private void ProcessDelayQueue()
-    {
-        lock (_delayQueue)
-        {
-            var now = DateTime.UtcNow;
-            while (_delayQueue.Count > 0 && _delayQueue.Peek().time <= now)
-            {
-                var (_, sequence, data) = _delayQueue.Dequeue();
-                AddToBuffer(sequence, data);
-            }
-        }
-    }
-
-    private void AddToBuffer(uint sequence, byte[] opusFrame)
-    {
-        lock (_lock)
-        {
-            if (!_initialized)
-            {
-                _nextSequence = sequence;
-                _initialized = true;
-            }
-
-            if (sequence < _nextSequence)
-            {
-                if (_nextSequence - sequence > MaxBufferSize * 2)
-                    return;
-            }
-
-            if (_buffer.Count > 0)
-            {
-                var lastKey = _buffer.Keys.Last();
-                if (sequence > lastKey && sequence - lastKey > MaxSequenceGap)
-                {
-                    Console.WriteLine($"[JITTER] Large sequence gap detected ({lastKey} -> {sequence}), resetting buffer");
-                    ClearInternal();
-                    _nextSequence = sequence;
-                }
-            }
-
-            if (_buffer.Count >= MaxBufferSize)
-            {
-                var oldest = _buffer.Keys.First();
-                _buffer.Remove(oldest);
-                _nextSequence = Math.Max(_nextSequence, oldest + 1);
-            }
-
-            _buffer[sequence] = opusFrame;
-        }
-    }
-
-    public enum ResultType
-    {
-        Empty,
-        Normal,
-        Missing
-    }
-
-    public struct Result
-    {
-        public ResultType Type;
-        public byte[]? Data;
-    }
-
+    /// <summary>
+    /// Заглянуть на один кадр вперёд (для FEC).
+    /// Возвращает следующий кадр после _nextSequence, не удаляя его из буфера.
+    /// </summary>
     public byte[]? PeekNextAvailable()
     {
-        ProcessDelayQueue();
-
         lock (_lock)
         {
-            if (_buffer.Count == 0)
-                return null;
+            if (_nextFrameForFec != null)
+                return _nextFrameForFec;
 
-            if (_buffer.TryGetValue(_nextSequence, out var next))
-                return next;
+            if (_buffer.TryGetValue(_nextSequence, out var frame))
+            {
+                _nextFrameForFec = frame;
+                return frame;
+            }
 
             return null;
         }
     }
 
+    /// <summary>
+    /// Установить последний успешно декодированный кадр (используется PLC).
+    /// </summary>
     public void SetLastFrame(byte[] frame)
     {
-        _lastFrame = frame;
+        lock (_lock)
+        {
+            _lastFrame = frame;
+        }
     }
 
+    /// <summary>
+    /// Получить последний успешно декодированный кадр.
+    /// </summary>
     public byte[]? GetLastFrame()
     {
-        return _lastFrame;
+        lock (_lock)
+        {
+            return _lastFrame;
+        }
     }
 
+    /// <summary>
+    /// Количество кадров в буфере.
+    /// </summary>
     public int QueuedFrames
     {
         get
@@ -223,36 +222,94 @@ public class JitterBuffer
         }
     }
 
-    public int DelayedFrames
+    /// <summary>
+    /// Находится ли буфер в режиме предзаполнения.
+    /// </summary>
+    public bool IsPrebuffering
     {
         get
         {
-            lock (_delayQueue)
+            lock (_lock)
             {
-                return _delayQueue.Count;
+                return _prebuffering;
             }
         }
     }
 
+    /// <summary>
+    /// Статистика буфера.
+    /// </summary>
+    public JitterStats GetStats()
+    {
+        lock (_lock)
+        {
+            return new JitterStats
+            {
+                Received = _totalReceived,
+                Played = _totalPlayed,
+                Missing = _totalMissing,
+                Late = _totalLate,
+                BufferSize = _buffer.Count,
+                IsPrebuffering = _prebuffering,
+                NextSequence = _nextSequence,
+                TimeSinceReset = DateTime.UtcNow - _lastStatsReset
+            };
+        }
+    }
+
+    /// <summary>
+    /// Полностью очистить буфер.
+    /// </summary>
     public void Clear()
     {
         lock (_lock)
         {
-            ClearInternal();
-        }
-        lock (_delayQueue)
-        {
-            _delayQueue.Clear();
+            ResetInternal();
+            Console.WriteLine("[JITTER] Buffer cleared");
         }
     }
 
-    private void ClearInternal()
+    private void ResetInternal()
     {
         _buffer.Clear();
         _initialized = false;
+        _prebuffering = true;
         _nextSequence = 0;
         _lastFrame = null;
-        _burstCounter = 0;
-        _burstLength = 0;
+        _nextFrameForFec = null;
+        _totalReceived = 0;
+        _totalPlayed = 0;
+        _totalMissing = 0;
+        _totalLate = 0;
+        _lastStatsReset = DateTime.UtcNow;
+    }
+
+    public enum ResultType
+    {
+        Empty,   // Буфер пуст или в режиме предзаполнения
+        Normal,  // Нормальный кадр
+        Missing  // Кадр пропущен — нужно PLC/FEC
+    }
+
+    public struct Result
+    {
+        public ResultType Type;
+        public byte[]? Data;
+    }
+
+    public struct JitterStats
+    {
+        public uint Received;
+        public uint Played;
+        public uint Missing;
+        public uint Late;
+        public int BufferSize;
+        public bool IsPrebuffering;
+        public uint NextSequence;
+        public TimeSpan TimeSinceReset;
+
+        public double LossPercent => Received > 0
+            ? (double)(Missing + Late) / Received * 100
+            : 0;
     }
 }

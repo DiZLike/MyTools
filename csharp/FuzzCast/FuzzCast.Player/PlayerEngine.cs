@@ -37,10 +37,6 @@ public class PlayerEngine
     private int _plcCount;
     private int _fecCount;
     private int _silenceCount;
-    private double _simLossPercent;
-    private int _jitterMs;
-    private bool _plcEnabled = true;
-    private bool _fecEnabled = true;
 
     private int _receivedPackets;
     private int _lostPackets;
@@ -61,12 +57,23 @@ public class PlayerEngine
     private readonly Queue<string> _lastEvents = new();
     private const int MaxEvents = 5;
 
+    // PLC и FEC теперь хранятся в _stateLock
+    private bool _plcEnabled = true;
+    private bool _fecEnabled = true;
+
     public PlayerEngine(AppConfig config)
     {
         _config = config;
         _clientId = Guid.NewGuid();
-        _jitterBuffer = new JitterBuffer();
+
+        // Используем фиксированную задержку 60мс (3 кадра по 20мс)
+        // Можно вынести в конфиг позже
+        int targetLatencyMs = 60;
+
+        _jitterBuffer = new JitterBuffer(targetLatencyMs, targetLatencyMs * 3);
         _currentDecoderChannels = _config.Opus.Channels;
+
+        Console.WriteLine($"[PLAYER] Jitter buffer: {targetLatencyMs}ms target latency");
     }
 
     private static IPAddress ResolveAddress(string address)
@@ -105,17 +112,6 @@ public class PlayerEngine
         }
     }
 
-    public void SetSimulatedLoss(double percent)
-    {
-        _simLossPercent = Math.Clamp(percent, 0, 100);
-        _jitterBuffer.SetSimulation(_simLossPercent, _jitterMs, burstProb: 0.3);
-    }
-
-    private void UpdateSimulation()
-    {
-        _jitterBuffer.SetSimulation(_simLossPercent, _jitterMs, burstProb: 0.3);
-    }
-
     private void RecreateDecoder(int channels)
     {
         _opusDecoder?.Dispose();
@@ -145,6 +141,9 @@ public class PlayerEngine
             Console.WriteLine($"[ERROR] Cannot create BASS stream: {Bass.BASS_ErrorGetCode()}");
             return;
         }
+
+        // Устанавливаем буфер BASS в 200мс для сглаживания
+        Bass.BASS_ChannelSetAttribute(_outputStream, BASSAttribute.BASS_ATTRIB_BUFFER, 200);
 
         Bass.BASS_ChannelPlay(_outputStream, false);
         Console.WriteLine($"[BASS] Stream recreated: {_config.Opus.SampleRate}Hz, {channels}ch");
@@ -285,7 +284,7 @@ public class PlayerEngine
         {
             _udp?.Close();
             _udp = new UdpClient();
-            _serverEndpoint = new IPEndPoint(ResolveAddress(_config.Player.ServerAddress), newPort); // ← ИЗМЕНЕНО
+            _serverEndpoint = new IPEndPoint(ResolveAddress(_config.Player.ServerAddress), newPort);
 
             var subscribe = new SubscribePacket(_clientId);
             await _udp.SendAsync(PacketWriter.WriteSubscribe(subscribe), _serverEndpoint);
@@ -455,21 +454,15 @@ public class PlayerEngine
 
     private void CheckQuality()
     {
-        int totalPackets, lostPackets;
+        var stats = _jitterBuffer.GetStats();
 
-        lock (_stateLock)
-        {
-            totalPackets = _receivedPackets + _lostPackets;
-            lostPackets = _lostPackets;
-        }
-
-        if (totalPackets == 0)
+        if (stats.Received == 0)
         {
             UpdateSignalStrength(0);
             return;
         }
 
-        double lossPercent = (double)lostPackets / totalPackets * 100;
+        double lossPercent = stats.LossPercent;
 
         int newStrength = lossPercent switch
         {
@@ -487,16 +480,12 @@ public class PlayerEngine
             if (_isPrimaryStream && lossPercent > _config.Player.ToleranceSwitchToFallback)
             {
                 _ = SwitchStream(toPrimary: false);
-                lock (_stateLock) { _receivedPackets = 0; _lostPackets = 0; }
             }
             else if (!_isPrimaryStream && lossPercent < _config.Player.ToleranceSwitchToPrimary)
             {
                 _ = SwitchStream(toPrimary: true);
-                lock (_stateLock) { _receivedPackets = 0; _lostPackets = 0; }
             }
         }
-
-        lock (_stateLock) { _receivedPackets = 0; _lostPackets = 0; }
     }
 
     private void UpdateSignalStrength(int strength)
@@ -526,36 +515,16 @@ public class PlayerEngine
 
                 switch (key.Key)
                 {
-                    case ConsoleKey.Oem4:
-                        _simLossPercent = Math.Max(0, _simLossPercent - 5);
-                        UpdateSimulation();
-                        break;
-                    case ConsoleKey.Oem6:
-                        _simLossPercent = Math.Min(100, _simLossPercent + 5);
-                        UpdateSimulation();
-                        break;
-                    case ConsoleKey.L:
-                        _simLossPercent = _simLossPercent > 0 || _jitterMs > 0 ? 0 : 10;
-                        _jitterMs = 0;
-                        UpdateSimulation();
-                        break;
                     case ConsoleKey.P:
                         _plcEnabled = !_plcEnabled;
+                        AddEvent(_plcEnabled ? "PLC ON" : "PLC OFF");
                         break;
                     case ConsoleKey.F:
                         _fecEnabled = !_fecEnabled;
-                        break;
-                    case ConsoleKey.J:
-                        _jitterMs = Math.Min(500, _jitterMs + 20);
-                        UpdateSimulation();
-                        break;
-                    case ConsoleKey.K:
-                        _jitterMs = Math.Max(0, _jitterMs - 20);
-                        UpdateSimulation();
+                        AddEvent(_fecEnabled ? "FEC ON" : "FEC OFF");
                         break;
                     case ConsoleKey.S:
                         _ = SwitchStream(!_isPrimaryStream);
-                        lock (_stateLock) { _receivedPackets = 0; _lostPackets = 0; }
                         break;
                     case ConsoleKey.A:
                         _autoSwitchEnabled = !_autoSwitchEnabled;
@@ -589,43 +558,13 @@ public class PlayerEngine
                 continue;
             }
 
-            if (jitterResult.Type == JitterBuffer.ResultType.Missing)
-            {
-                lock (_stateLock) { _lostPackets++; }
-            }
-
             if (_outputStream != 0 && _opusDecoder != null)
             {
                 try
                 {
                     if (jitterResult.Type == JitterBuffer.ResultType.Missing)
                     {
-                        bool fecApplied = false;
-
-                        if (_fecEnabled)
-                        {
-                            var nextFrame = _jitterBuffer.PeekNextAvailable();
-                            if (nextFrame != null)
-                            {
-                                var fecResult = _opusDecoder.Decode(nextFrame, pcmBuffer, fec: true);
-                                if (fecResult != null)
-                                {
-                                    _fecCount++;
-                                    fecApplied = true;
-                                    AddEvent($"FEC {fecResult.Value.bandwidth}");
-                                    lock (_stateLock)
-                                    {
-                                        _lastFrameMs = fecResult.Value.frameMs;
-                                        _lastPacketSize = fecResult.Value.packetBytes;
-                                        _lastBandwidth = "FEC";
-                                    }
-                                    WriteToBass(fecResult.Value.decodedSamples, _currentDecoderChannels, pcmBuffer, byteBuffer);
-                                }
-                            }
-                        }
-
-                        if (!fecApplied)
-                            HandleMissingFrame(pcmBuffer, byteBuffer);
+                        HandleMissingFrame(pcmBuffer, byteBuffer);
                     }
                     else if (jitterResult.Data != null)
                     {
@@ -658,28 +597,53 @@ public class PlayerEngine
 
     private void HandleMissingFrame(short[] pcmBuffer, byte[] byteBuffer)
     {
-        if (_plcEnabled)
+        bool fecApplied = false;
+
+        // Пробуем FEC
+        if (_fecEnabled && _opusDecoder != null)
         {
-            var lastFrame = _jitterBuffer.GetLastFrame();
-            if (lastFrame != null && _opusDecoder != null)
+            var nextFrame = _jitterBuffer.PeekNextAvailable();
+            if (nextFrame != null)
             {
-                var plcResult = _opusDecoder.Decode(null, pcmBuffer, fec: false);
-                if (plcResult != null)
+                var fecResult = _opusDecoder.Decode(nextFrame, pcmBuffer, fec: true);
+                if (fecResult != null)
                 {
-                    _plcCount++;
-                    AddEvent("PLC");
+                    lock (_stateLock) { _fecCount++; }
+                    fecApplied = true;
+                    AddEvent($"FEC {fecResult.Value.bandwidth}");
                     lock (_stateLock)
                     {
-                        _lastFrameMs = plcResult.Value.frameMs;
-                        _lastPacketSize = 0;
-                        _lastBandwidth = "PLC";
+                        _lastFrameMs = fecResult.Value.frameMs;
+                        _lastPacketSize = fecResult.Value.packetBytes;
+                        _lastBandwidth = "FEC";
                     }
-                    WriteToBass(plcResult.Value.decodedSamples, _currentDecoderChannels, pcmBuffer, byteBuffer);
-                    return;
+                    WriteToBass(fecResult.Value.decodedSamples, _currentDecoderChannels, pcmBuffer, byteBuffer);
                 }
             }
         }
 
+        // Если FEC не сработал — пробуем PLC
+        if (!fecApplied && _plcEnabled && _opusDecoder != null)
+        {
+            // PLC работает на основе внутреннего состояния декодера
+            // Даже если lastFrame == null, Opus сгенерирует затухание
+            var plcResult = _opusDecoder.Decode(null, pcmBuffer, fec: false);
+            if (plcResult != null)
+            {
+                lock (_stateLock) { _plcCount++; }
+                AddEvent("PLC");
+                lock (_stateLock)
+                {
+                    _lastFrameMs = plcResult.Value.frameMs;
+                    _lastPacketSize = 0;
+                    _lastBandwidth = "PLC";
+                }
+                WriteToBass(plcResult.Value.decodedSamples, _currentDecoderChannels, pcmBuffer, byteBuffer);
+                return;
+            }
+        }
+
+        // Если ничего не сработало — тишина
         WriteSilence(pcmBuffer, byteBuffer);
     }
 
@@ -693,7 +657,7 @@ public class PlayerEngine
         int byteCount = samples * sizeof(short);
         Array.Clear(byteBuffer, 0, byteCount);
 
-        _silenceCount++;
+        lock (_stateLock) { _silenceCount++; }
         AddEvent("SILENCE");
         lock (_stateLock)
         {
@@ -711,17 +675,28 @@ public class PlayerEngine
         int byteCount = samplesToWrite * sizeof(short);
         Buffer.BlockCopy(pcmBuffer, 0, byteBuffer, 0, byteCount);
 
-        while (_running)
+        // Ждем пока буфер BASS освободится, но не более 200мс
+        int maxWaitMs = 200;
+        int waited = 0;
+        while (_running && waited < maxWaitMs)
         {
             int queued = Bass.BASS_StreamPutData(_outputStream, IntPtr.Zero, 0);
-            if (queued < byteCount * 20)
+            float queuedMs = (float)queued / (_config.Opus.SampleRate * channels * sizeof(short)) * 1000;
+
+            if (queuedMs < _config.Opus.FrameSize * 3) // буфер меньше 3 кадров
                 break;
-            Thread.Sleep(1);
+
+            Thread.Sleep(5);
+            waited += 5;
         }
 
         if (_running)
         {
-            Bass.BASS_StreamPutData(_outputStream, byteBuffer, byteCount);
+            int result = Bass.BASS_StreamPutData(_outputStream, byteBuffer, byteCount);
+            if (result == -1)
+            {
+                AddEvent($"BUF_ERR {Bass.BASS_ErrorGetCode()}");
+            }
         }
     }
 
@@ -742,8 +717,6 @@ public class PlayerEngine
         double duration;
         string codecInfo;
         int plcCount, fecCount, silenceCount;
-        double simLoss;
-        int jitterMs;
         bool plcEnabled, fecEnabled, isPrimary, autoSwitch;
         int signalStrength;
         List<string> events;
@@ -771,10 +744,6 @@ public class PlayerEngine
             plcCount = _plcCount;
             fecCount = _fecCount;
             silenceCount = _silenceCount;
-            simLoss = _simLossPercent;
-            jitterMs = _jitterMs;
-            plcEnabled = _plcEnabled;
-            fecEnabled = _fecEnabled;
             isPrimary = _isPrimaryStream;
             autoSwitch = _autoSwitchEnabled;
             signalStrength = _signalStrength;
@@ -795,14 +764,22 @@ public class PlayerEngine
                 : $"{_lastFrameMs}ms {_lastBandwidth}";
         }
 
+        plcEnabled = _plcEnabled;
+        fecEnabled = _fecEnabled;
+
         lock (_lastEvents) { events = _lastEvents.ToList(); }
 
-        string simStr = simLoss > 0 || jitterMs > 0 ? $"L:{simLoss:F0}% J:{jitterMs}ms" : "SIM: OFF";
+        var stats = _jitterBuffer.GetStats();
         string plcStr = plcEnabled ? "P:ON" : "P:OFF";
         string fecStr = fecEnabled ? "F:ON" : "F:OFF";
         string streamStr = isPrimary ? "PRI" : "FALL";
         string autoStr = autoSwitch ? "AUTO" : "MAN";
         string antenna = GetAntenna(signalStrength);
+
+        string bufferInfo = stats.IsPrebuffering
+            ? $"BUF:..."
+            : $"BUF:{stats.BufferSize}";
+        string lossInfo = $"L:{stats.LossPercent:F1}%";
 
         Console.SetCursorPosition(0, 0);
         Console.WriteLine("┌──────────────────────────────────────────────────┐");
@@ -814,7 +791,7 @@ public class PlayerEngine
         Console.WriteLine($"│ {Truncate(album, 48)} │");
         Console.WriteLine($"│ {trackPosStr,-48} │");
         Console.WriteLine($"│ {antenna} {streamStr} {autoStr} │ Opus: {codecInfo,-18} │");
-        Console.WriteLine($"│ {plcStr} {fecStr} FEC:{fecCount,-4} SIL:{silenceCount,-4} {simStr,-17} │");
+        Console.WriteLine($"│ {plcStr} {fecStr} FEC:{fecCount,-4} SIL:{silenceCount,-4} {bufferInfo,-10} {lossInfo,-10} │");
         Console.WriteLine("├──────────────────────────────────────────────────┤");
         for (int i = 0; i < MaxEvents; i++)
         {
@@ -822,8 +799,7 @@ public class PlayerEngine
             Console.WriteLine($"│ {evt} │");
         }
         Console.WriteLine("├──────────────────────────────────────────────────┤");
-        Console.WriteLine("│ [Q] [P]PLC [F]FEC [S]Stream [A]Auto [[]/[]]Loss  │");
-        Console.WriteLine("│ [J/K]Jitter [L]Off                               │");
+        Console.WriteLine("│ [Q] [P]PLC [F]FEC [S]Stream [A]Auto              │");
         Console.WriteLine("└──────────────────────────────────────────────────┘");
     }
 
@@ -858,6 +834,8 @@ public class PlayerEngine
             return false;
         }
 
+        // Устанавливаем буфер BASS в 200мс
+        Bass.BASS_ChannelSetAttribute(_outputStream, BASSAttribute.BASS_ATTRIB_BUFFER, 200);
         Bass.BASS_ChannelPlay(_outputStream, false);
         Console.WriteLine("BASS output started");
         return true;

@@ -5,21 +5,6 @@ output_file_base = "output"
 output_file_ext = ".txt"
 max_lines_per_file = 1000  # СТРОГИЙ лимит строк КОНТЕНТА
 
-def is_binary(filepath, chunk_size=1024):
-    """Проверяет, является ли файл бинарным"""
-    try:
-        with open(filepath, 'rb') as f:
-            chunk = f.read(chunk_size)
-            if b'\x00' in chunk:
-                return True
-            try:
-                chunk.decode('utf-8')
-                return False
-            except UnicodeDecodeError:
-                return True
-    except:
-        return True
-
 def get_output_filename(base, ext, counter):
     """Генерирует имя выходного файла"""
     if counter == 0:
@@ -30,7 +15,7 @@ def get_output_filename(base, ext, counter):
 def count_lines_in_file(filepath):
     """Подсчитывает количество строк в файле"""
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
             return sum(1 for _ in f)
     except:
         return 0
@@ -38,7 +23,7 @@ def count_lines_in_file(filepath):
 def read_file_lines(filepath):
     """Читает файл и возвращает список строк"""
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
             return f.readlines()
     except:
         return []
@@ -46,15 +31,13 @@ def read_file_lines(filepath):
 def process_path(path):
     """Обрабатывает файл или директорию"""
     if os.path.isfile(path):
-        if not is_binary(path):
-            return [path]
+        return [path]
     elif os.path.isdir(path):
         files = []
         for root, _, filenames in os.walk(path):
             for filename in filenames:
                 filepath = os.path.join(root, filename)
-                if not is_binary(filepath):
-                    files.append(filepath)
+                files.append(filepath)
         return files
     return []
 
@@ -127,7 +110,7 @@ for path in paths_to_process:
     all_files.extend(process_path(path))
 
 if not all_files:
-    print("Не найдено текстовых файлов для обработки")
+    print("Не найдено файлов для обработки")
     input("Нажмите Enter для выхода...")
     sys.exit(0)
 
@@ -140,7 +123,7 @@ processed_files = set()
 
 for out_file in output_files:
     try:
-        with open(out_file, 'r', encoding='utf-8') as f:
+        with open(out_file, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
             for filepath in all_files:
                 if f"Файл: {filepath}" in content:
@@ -181,7 +164,7 @@ for filepath in new_files:
     
     # Читаем содержимое входного файла
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
         input_lines = content.split('\n')
     except Exception as e:
